@@ -16,6 +16,7 @@
 # =============================================================================
 
 import os
+from pathlib import Path
 import uuid
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, List
@@ -57,7 +58,10 @@ st.markdown(COMMON_CSS, unsafe_allow_html=True)
 # =============================================================================
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
-LOCAL_BACKUP_ORDERS = "/mnt/data/orders_backup.csv"  # 시트 미사용시 임시 저장용
+# 로컬 백업 경로 (Streamlit Cloud 호환). 컨테이너가 재시작되면 삭제될 수 있으므로 임시 용도입니다.
+LOCAL_BACKUP_DIR = Path("local_backup")
+LOCAL_BACKUP_DIR.mkdir(exist_ok=True)
+LOCAL_BACKUP_ORDERS = str(LOCAL_BACKUP_DIR / "orders_backup.csv")
 
 # =============================================================================
 # 2) 인증/권한
@@ -183,7 +187,7 @@ def load_orders_df() -> pd.DataFrame:
     # 로컬 백업
     if os.path.exists(LOCAL_BACKUP_ORDERS):
         try:
-            return pd.read_csv(LOCAL_BACKUP_ORDERS)
+            return pd.read_csv(LOCAL_BACKUP_ORDERS, encoding="utf-8-sig")
         except Exception:
             pass
     # 빈 스키마 반환
@@ -238,7 +242,11 @@ def append_orders(rows: List[Dict[str, Any]]):
             df_old = pd.DataFrame()
     df_new = pd.DataFrame(rows)
     df_all = pd.concat([df_old, df_new], ignore_index=True)
-    df_all.to_csv(LOCAL_BACKUP_ORDERS, index=False)
+    # 백업 디렉토리 보장 후 저장
+parent = os.path.dirname(LOCAL_BACKUP_ORDERS)
+if parent and not os.path.exists(parent):
+    os.makedirs(parent, exist_ok=True)
+df_all.to_csv(LOCAL_BACKUP_ORDERS, index=False, encoding="utf-8-sig")
     load_orders_df.clear()
     return True
 
@@ -273,12 +281,12 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str):
     # 로컬 백업에서 변경
     if os.path.exists(LOCAL_BACKUP_ORDERS):
         try:
-            df = pd.read_csv(LOCAL_BACKUP_ORDERS)
+            df = pd.read_csv(LOCAL_BACKUP_ORDERS, encoding="utf-8-sig")
             mask = df["발주번호"].astype(str).isin([str(x) for x in selected_ids])
             df.loc[mask, "상태"] = new_status
             df.loc[mask, "처리일시"] = now
             df.loc[mask, "처리자"] = handler
-            df.to_csv(LOCAL_BACKUP_ORDERS, index=False)
+            df.to_csv(LOCAL_BACKUP_ORDERS, index=False, encoding="utf-8-sig")
             load_orders_df.clear()
             return True
         except Exception as e:
