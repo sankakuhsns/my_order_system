@@ -441,15 +441,22 @@ def require_login():
     if st.session_state["auth"].get("login", False):
         return True
 
+    # 상단 제목 (로그인 전에는 타이틀만)
     st.markdown('<div class="login-title">식자재 발주 시스템</div>', unsafe_allow_html=True)
-    with st.container():
-        st.markdown('<div class="login-wrap"><div class="login-card">', unsafe_allow_html=True)
-        uid = st.text_input("아이디 또는 지점명", key="login_uid")
-        pwd = st.text_input("비밀번호", type="password", key="login_pw")
-        if st.button("로그인", key="btn_login"):
+
+    # 가운데 좁은 컬럼에 폼 배치 → 입력/버튼이 과하게 넓어지는 현상 방지
+    left, mid, right = st.columns([3, 2, 3], vertical_alignment="center")
+    with mid:
+        with st.form("login_form", clear_on_submit=False):
+            uid = st.text_input("아이디 또는 지점명", key="login_uid", placeholder="예: jeondae / 전대점")
+            pwd = st.text_input("비밀번호", type="password", key="login_pw")
+            submitted = st.form_submit_button("로그인", use_container_width=True)  # 버튼 가로 정렬 깔끔
+
+        if submitted:
             _do_login(uid, pwd)
-        st.markdown("</div></div>", unsafe_allow_html=True)
+
     return False
+
 
 # =============================================================================
 # 6) 유틸
