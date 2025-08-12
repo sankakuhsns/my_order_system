@@ -71,7 +71,8 @@ st.markdown(f"""
 # 1) Users 로더 (여러 시크릿 포맷 지원)
 # =============================================================================
 
-def _normalize_account(uid: str, payload: Mapping) -> dict:\n    pwd_plain = payload.get("password")
+def _normalize_account(uid: str, payload: Mapping) -> dict:
+    pwd_plain = payload.get("password")
     pwd_hash  = payload.get("password_hash")
     name = str(payload.get("name", uid)).strip()
     role = str(payload.get("role", "store")).strip().lower()
