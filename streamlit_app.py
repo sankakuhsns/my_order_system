@@ -4,16 +4,14 @@
 # - 역할: 지점(발주), 본사/공장(조회·출고처리)
 # - 저장: Google Sheets (미연결 시 로컬 CSV 백업)
 # - 인증: st.secrets["users"] (테스트용 간단 비번)
-# - 상품마스터: "상품마스터" 시트 (선택 컬럼 지원: 단가/최소수량/최대수량/묶음단위/활성)
+# - 상품마스터: "상품마스터" 시트 (선택 컬럼 지원: 단가/최소수량/최대수량/묶음단위/활성/분류)
 # - 발주기록:  "발주" 시트
 # =============================================================================
 
 import os
 from pathlib import Path
-import uuid
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, List
-
 import pandas as pd
 import streamlit as st
 
@@ -33,6 +31,7 @@ st.set_page_config(page_title="발주 시스템", page_icon="📦", layout="wide
 THEME = {
     "BORDER": "#e8e8e8",
     "CARD": "background-color:#ffffff;border:1px solid #e8e8e8;border-radius:12px;padding:16px;",
+    "PRIMARY": "#1C6758",
 }
 COMMON_CSS = f"""
 <style>
@@ -42,6 +41,22 @@ COMMON_CSS = f"""
     .warn {{background:#fff7e6; border-color:#ffe1a8}}
     .danger {{background:#fff0f0; border-color:#ffd6d6}}
     .card {{ {THEME["CARD"]} }}
+    /* 합계 고정 바 */
+    .sticky-total {{
+        position: sticky;
+        bottom: 0;
+        z-index: 999;
+        {THEME["CARD"]}
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }}
+    .total-amount {{
+        font-weight: 800;
+        font-size: 18px;
+        color: {THEME["PRIMARY"]};
+    }}
 </style>
 """
 st.markdown(COMMON_CSS, unsafe_allow_html=True)
@@ -57,8 +72,14 @@ LOCAL_BACKUP_DIR = Path("local_backup")
 LOCAL_BACKUP_DIR.mkdir(exist_ok=True)
 LOCAL_BACKUP_ORDERS = str(LOCAL_BACKUP_DIR / "orders_backup.csv")
 
+# (NEW) 발주 시트 표준 컬럼 (납품요청일 추가)
+ORDERS_COLUMNS = [
+    "주문일시","발주번호","지점ID","지점명","납품요청일",
+    "품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"
+]
+
 # =============================================================================
-# 2) 사용자 로드 (st.secrets["users"])
+# 2) 사용자 로드
 # =============================================================================
 def load_users_from_secrets() -> pd.DataFrame:
     rows = []
@@ -128,7 +149,7 @@ def load_master_df() -> pd.DataFrame:
     """
     상품마스터 로드
     필수: 품목코드, 품목명, 단위
-    선택: 단가, 최소수량, 최대수량, 묶음단위, 활성, 기본리드타임, 안전재고
+    선택: 단가, 최소수량, 최대수량, 묶음단위, 활성, 분류, 기본리드타임, 안전재고
     """
     sh = open_spreadsheet()
     if sh:
@@ -144,20 +165,19 @@ def load_master_df() -> pd.DataFrame:
     if df.empty:
         # 샘플
         df = pd.DataFrame([
-            {"품목코드":"P001","품목명":"오이","단위":"EA","단가":800,"최소수량":1,"최대수량":50,"묶음단위":1,"활성":True},
-            {"품목코드":"P002","품목명":"대파","단위":"KG","단가":15600,"최소수량":1,"최대수량":30,"묶음단위":1,"활성":True},
-            {"품목코드":"P003","품목명":"간장","단위":"L","단가":3500,"최소수량":1,"최대수량":100,"묶음단위":1,"활성":True},
+            {"품목코드":"P001","품목명":"오이","단위":"EA","단가":800,"최소수량":1,"최대수량":50,"묶음단위":1,"활성":True,"분류":"채소"},
+            {"품목코드":"P002","품목명":"대파","단위":"KG","단가":15600,"최소수량":1,"최대수량":30,"묶음단위":1,"활성":True,"분류":"채소"},
+            {"품목코드":"P003","품목명":"간장","단위":"L","단가":3500,"최소수량":1,"최대수량":100,"묶음단위":1,"활성":True,"분류":"조미료"},
         ])
 
-    # 컬럼 보정/기본값
-    for c in ["단가","최소수량","최대수량","묶음단위"]:
+    # 기본 컬럼 보정
+    for c in ["단가","최소수량","최대수량","묶음단위","분류"]:
         if c not in df.columns: df[c] = None
     if "활성" not in df.columns: df["활성"] = True
 
     # 활성 필터
     df["활성_norm"] = df["활성"].astype(str).str.lower().isin(["1","true","y","yes"])
     df = df[df["활성_norm"] | df["활성"].isna()].drop(columns=["활성_norm"], errors="ignore")
-
     return df
 
 @st.cache_data(ttl=60)
@@ -178,17 +198,12 @@ def load_orders_df() -> pd.DataFrame:
         except Exception:
             pass
 
-    return pd.DataFrame(columns=[
-        "주문일시","발주번호","지점ID","지점명","품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"
-    ])
+    return pd.DataFrame(columns=ORDERS_COLUMNS)
 
 def _ensure_orders_sheet_columns(ws):
     records = ws.get_all_values()
     if len(records) == 0:
-        header = [
-            "주문일시","발주번호","지점ID","지점명","품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"
-        ]
-        ws.append_row(header)
+        ws.append_row(ORDERS_COLUMNS)
 
 def append_orders(rows: List[Dict[str, Any]]):
     sh = open_spreadsheet()
@@ -197,11 +212,12 @@ def append_orders(rows: List[Dict[str, Any]]):
             try:
                 ws = sh.worksheet(SHEET_NAME_ORDERS)
             except Exception:
-                ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=1000, cols=20)
+                ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=1000, cols=25)
             _ensure_orders_sheet_columns(ws)
             for r in rows:
                 ws.append_row([
                     r.get("주문일시",""), r.get("발주번호",""), r.get("지점ID",""), r.get("지점명",""),
+                    r.get("납품요청일",""),
                     r.get("품목코드",""), r.get("품목명",""), r.get("단위",""), r.get("수량",0),
                     r.get("비고",""), r.get("상태","접수"), r.get("처리일시",""), r.get("처리자","")
                 ])
@@ -217,7 +233,7 @@ def append_orders(rows: List[Dict[str, Any]]):
             df_old = pd.read_csv(LOCAL_BACKUP_ORDERS, encoding="utf-8-sig")
         except Exception:
             df_old = pd.DataFrame()
-    df_new = pd.DataFrame(rows)
+    df_new = pd.DataFrame(rows)[ORDERS_COLUMNS]
     df_all = pd.concat([df_old, df_new], ignore_index=True)
     os.makedirs(os.path.dirname(LOCAL_BACKUP_ORDERS), exist_ok=True)
     df_all.to_csv(LOCAL_BACKUP_ORDERS, index=False, encoding="utf-8-sig")
@@ -306,20 +322,36 @@ def require_login():
     return False
 
 # =============================================================================
-# 6) 지점(발주) 화면
+# 6) 지점(발주) 화면 — 개선판
 # =============================================================================
 def page_store(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록")
+
+    # ---- 상단: 납품 요청일 (NEW)
+    left, mid, right = st.columns([1,1,2])
+    with left:
+        quick = st.radio("납품 선택", ["오늘", "내일", "직접선택"], horizontal=True)
+    with mid:
+        if quick == "오늘":
+            납품요청일 = date.today()
+        elif quick == "내일":
+            납품요청일 = date.today() + timedelta(days=1)
+        else:
+            납품요청일 = st.date_input("납품 요청일", value=date.today())
+    with right:
+        memo = st.text_input("요청 사항(선택)")
 
     # ---- 검색/필터
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         keyword = st.text_input("품목 검색(이름/코드)")
     with col2:
-        분류값 = st.selectbox("분류(선택)", ["(전체)"] + sorted(master_df.get("분류", pd.Series([])).dropna().unique().tolist())) \
-            if "분류" in master_df.columns else "(전체)"
+        분류값 = st.selectbox(
+            "분류(선택)",
+            ["(전체)"] + sorted(master_df.get("분류", pd.Series([], dtype="object")).dropna().unique().tolist())
+        ) if "분류" in master_df.columns else "(전체)"
     with col3:
-        pass
+        금액표시 = st.toggle("금액/합계 표시", value=True, help="매장 직원에게 금액을 숨기려면 끄세요.")
 
     df_view = master_df.copy()
     if keyword:
@@ -329,40 +361,55 @@ def page_store(master_df: pd.DataFrame):
     if "분류" in master_df.columns and 분류값 != "(전체)":
         df_view = df_view[df_view["분류"] == 분류값]
 
-    preview_cols = [c for c in ["품목코드","품목명","단위","단가","최소수량","최대수량","묶음단위"] if c in df_view.columns]
-    st.dataframe(df_view[preview_cols].reset_index(drop=True), use_container_width=True, height=240)
+    preview_cols = [c for c in ["품목코드","품목명","분류","단위","단가","최소수량","최대수량","묶음단위"] if c in df_view.columns]
+    st.dataframe(df_view[preview_cols].reset_index(drop=True), use_container_width=True, height=220)
 
     st.markdown("---")
     st.markdown("**발주 수량 입력(표 일괄 편집)**")
 
     # 발주 편집용 테이블
     edit_cols = ["품목코드","품목명","단위"]
-    if "단가" in master_df.columns: edit_cols += ["단가"]
+    if "단가" in master_df.columns and 금액표시:
+        edit_cols += ["단가"]
     df_edit = df_view[edit_cols].copy()
     df_edit["수량"] = 0
+
+    # 도움말(검증 규칙) 제공
+    qty_help = "최소/최대/묶음단위가 설정된 품목은 해당 규칙을 따릅니다."
     edited = st.data_editor(
         df_edit,
-        column_config={"수량": st.column_config.NumberColumn(min_value=0, step=1)},
+        column_config={
+            "수량": st.column_config.NumberColumn(min_value=0, step=1, help=qty_help)
+        },
         use_container_width=True,
         num_rows="dynamic",
         key="order_editor_table",
     )
 
     # 합계/검증
-    if "단가" in edited.columns:
-        edited["금액"] = (pd.to_numeric(edited["단가"], errors="coerce").fillna(0) *
-                         pd.to_numeric(edited["수량"], errors="coerce").fillna(0))
+    total = 0
+    if 금액표시 and "단가" in edited.columns:
+        edited["금액"] = (pd.to_numeric(edited.get("단가", 0), errors="coerce").fillna(0) *
+                         pd.to_numeric(edited.get("수량", 0), errors="coerce").fillna(0))
         total = int(edited["금액"].sum())
-        st.markdown(f"<div class='card' style='margin-top:8px'>예상 합계: <b>{total:,} 원</b></div>", unsafe_allow_html=True)
 
-    memo = st.text_input("요청 사항(선택)")
+    # (NEW) 분류별 합계 표시
+    if "분류" in df_view.columns and 금액표시:
+        temp = edited.merge(df_view[["품목코드","분류"]], on="품목코드", how="left")
+        temp["금액"] = (pd.to_numeric(temp.get("단가", 0), errors="coerce").fillna(0) *
+                       pd.to_numeric(temp.get("수량", 0), errors="coerce").fillna(0))
+        grp = temp.groupby("분류", dropna=False).agg(품목수=("품목코드","nunique"),
+                                                    총수량=("수량","sum"),
+                                                    합계=("금액","sum")).reset_index()
+        with st.expander("카테고리(분류) 합계 보기", expanded=False):
+            st.dataframe(grp, use_container_width=True, height=200)
+
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False)
 
     def _validate_qty(row) -> List[str]:
         errs = []
         code = row.get("품목코드")
         qty = float(row.get("수량", 0) or 0)
-        # 메타 조회
         meta = master_df.loc[master_df["품목코드"] == code]
         if meta.empty:
             return errs
@@ -370,19 +417,39 @@ def page_store(master_df: pd.DataFrame):
         mn = meta.get("최소수량")
         mx = meta.get("최대수량")
         pack = meta.get("묶음단위")
+        name = row.get("품목명")
         if pd.notna(mn) and qty > 0 and qty < float(mn):
-            errs.append(f"[{row.get('품목명')}] 최소수량 {int(mn)} 이상")
+            errs.append(f"[{name}] 최소수량 {int(mn)} 이상")
         if pd.notna(mx) and qty > float(mx):
-            errs.append(f"[{row.get('품목명')}] 최대수량 {int(mx)} 이하")
-        if pd.notna(pack) and qty > 0 and (qty % float(pack) != 0):
-            errs.append(f"[{row.get('품목명')}] {int(pack)} 단위 묶음만 허용")
+            errs.append(f"[{name}] 최대수량 {int(mx)} 이하")
+        if pd.notna(pack):
+            try:
+                if qty > 0 and (qty % float(pack) != 0):
+                    errs.append(f"[{name}] {int(pack)} 단위 묶음만 허용")
+            except Exception:
+                pass
         return errs
 
+    # (NEW) 하단 고정 합계/제출 바
+    st.markdown(
+        f"""
+        <div class="sticky-total">
+            <div>납품 요청일: <b>{납품요청일.strftime('%Y-%m-%d')}</b></div>
+            <div class="total-amount">합계: <span>{total:,}</span> 원</div>
+        </div>
+        """, unsafe_allow_html=True
+    )
+
     if st.button("📦 발주 제출", type="primary", use_container_width=True):
+        if not 납품요청일:
+            st.warning("납품 요청일을 선택해 주세요.")
+            st.stop()
+
         pick = edited[edited["수량"].fillna(0).astype(float) > 0].copy()
         if pick.empty:
             st.warning("수량이 0보다 큰 품목이 없습니다.")
             st.stop()
+
         # 검증
         all_errs = []
         for _, r in pick.iterrows():
@@ -407,6 +474,7 @@ def page_store(master_df: pd.DataFrame):
                 "발주번호": order_id,
                 "지점ID": user.get("user_id"),
                 "지점명": user.get("name"),
+                "납품요청일": str(납품요청일),
                 "품목코드": r.get("품목코드"),
                 "품목명": r.get("품목명"),
                 "단위": r.get("단위"),
@@ -478,7 +546,6 @@ def page_admin_orders():
 def page_admin_items(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목/가격")
     st.caption("※ ‘상품마스터’ 시트를 직접 수정하면 이 화면에 즉시 반영됩니다. (여기서는 조회 전용)")
-
     view_cols = [c for c in ["품목코드","품목명","분류","단위","단가","최소수량","최대수량","묶음단위","활성","기본리드타임","안전재고"] if c in master_df.columns]
     st.dataframe(master_df[view_cols], use_container_width=True, height=480)
 
