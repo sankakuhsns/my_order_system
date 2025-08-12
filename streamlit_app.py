@@ -1,10 +1,27 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# Streamlit 식자재 발주 시스템 (Cloud Secrets 전용 · 최종본)
-# - 발주(지점): 발주 등록,확인 / 발주 조회,변경 / 발주서 조회,다운로드 / 발주 품목 가격 조회
-# - 관리자   : 주문 관리,출고확인 / 출고내역 조회,상태변경 / 출고 내역서 조회, 다운로드 / 납품 품목 가격 설정
-# - 저장: Google Sheets (Streamlit Cloud Secrets 필수, 로컬 백업/게스트 진입 없음)
-# - 로그인: [users] 시크릿 자동 인식 (inline-table, dotted-table), password / password_hash(SHA-256+pepper) 지원
+# Streamlit 식자재 발주 시스템 (Secrets 포맷 고정 · 안정화 버전)
+# 시크릿 예시 (변경 금지):
+# [users.jeondae]
+# password = "jd"
+# name = "전대점"
+# role = "store"
+#
+# [users.hq]
+# password = "dj"
+# name = "대전공장"
+# role = "admin"
+#
+# [google]
+# type="service_account"
+# project_id="..."
+# private_key_id="..."
+# private_key="""-----BEGIN PRIVATE KEY-----\n....\n-----END PRIVATE KEY-----\n"""
+# client_email="..."
+# client_id="..."
+# token_uri="https://oauth2.googleapis.com/token"
+#
+# SPREADSHEET_KEY="스프레드시트키"
 # =============================================================================
 
 from io import BytesIO
@@ -18,6 +35,10 @@ import streamlit as st
 # Google Sheets
 import gspread
 from google.oauth2 import service_account
+
+# Excel export
+# (requirements: streamlit, pandas, gspread, google-auth, gspread-dataframe, openpyxl, xlrd, xlsxwriter)
+import xlsxwriter  # noqa: F401 (엔진 로딩용)
 
 # -----------------------------------------------------------------------------
 # 페이지/테마
@@ -41,7 +62,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 1) Secrets: users 로더 (inline-table / dotted-table 모두 지원) + 해시 로그인
+# 1) Secrets: users 로더 (지금 포맷 고정 지원) + 해시/평문 로그인 호환
 # -----------------------------------------------------------------------------
 def _get_pepper() -> str:
     """선택: [auth].PEPPER 보강 문자열(없어도 동작)."""
@@ -60,68 +81,36 @@ def verify_password(uid: str, input_pw: str,
 
 def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
     """
-    지원 형식 1) inline-table:
-      [users]
-      jeondae = { password="jd", name="전대점", role="store" }
-    지원 형식 2) dotted tables:
+    지원 형식(그대로 사용):
       [users.jeondae]
-      password="jd"; name="전대점"; role="store"
-    (보너스) 3) list of tables:
-      [[users]]
-      user_id="jeondae"; password="jd"; name="전대점"; role="store"
+      password="jd"
+      name="전대점"
+      role="store"
     """
-    users_obj = st.secrets.get("users", None)
-    cleaned: Dict[str, Dict[str, str]] = {}
-
-    if users_obj is None:
-        st.error("로그인 계정이 없습니다. Streamlit Cloud → Settings → Secrets 의 [users] 섹션을 등록하세요.")
+    users_root = st.secrets.get("users", None)
+    if users_root is None or not isinstance(users_root, dict):
+        st.error("로그인 계정이 없습니다. Secrets 의 [users.xxx] 섹션을 확인하세요.")
         st.stop()
 
-    # dict-of-dicts (inline-table도, dotted-table도 보통 이 형태)
-    if isinstance(users_obj, dict):
-        if all(isinstance(v, dict) for v in users_obj.values()):
-            for uid, payload in users_obj.items():
-                pwd_plain = payload.get("password")
-                pwd_hash = payload.get("password_hash")
-                name = str(payload.get("name", uid)).strip()
-                role = str(payload.get("role", "store")).strip().lower()
-                if not (pwd_plain or pwd_hash):
-                    st.error(f"[users.{uid}]에 password 또는 password_hash가 필요합니다."); st.stop()
-                if role not in {"store", "admin"}:
-                    st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
-                cleaned[str(uid)] = {
-                    "password": (str(pwd_plain) if pwd_plain is not None else None),
-                    "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
-                    "name": name,
-                    "role": role,
-                }
-        else:
-            st.error("[users] 형식을 인식할 수 없습니다. inline-table 또는 [users.xxx] 구조를 사용하세요.")
+    cleaned: Dict[str, Dict[str, str]] = {}
+    for uid, payload in users_root.items():
+        if not isinstance(payload, dict):
+            st.error("[users] 구조가 올바르지 않습니다. [users.xxx] 형태로 계정을 정의하세요.")
             st.stop()
-
-    # list-of-dicts (호환)
-    elif isinstance(users_obj, list):
-        for row in users_obj:
-            if not isinstance(row, dict): continue
-            uid = row.get("user_id") or row.get("uid") or row.get("id")
-            if not uid: continue
-            pwd_plain = row.get("password")
-            pwd_hash = row.get("password_hash")
-            name = str(row.get("name", uid)).strip()
-            role = str(row.get("role", "store")).strip().lower()
-            if not (pwd_plain or pwd_hash):
-                st.error(f"[[users]] 항목(user_id={uid})에 password 또는 password_hash가 필요합니다."); st.stop()
-            if role not in {"store","admin"}:
-                st.error(f"[[users]] 항목(user_id={uid})의 role 은 'store' 또는 'admin' 이어야 합니다."); st.stop()
-            cleaned[str(uid)] = {
-                "password": (str(pwd_plain) if pwd_plain is not None else None),
-                "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
-                "name": name,
-                "role": role,
-            }
-    else:
-        st.error("[users] TOML 구조가 올바르지 않습니다."); st.stop()
-
+        pwd_plain = payload.get("password")
+        pwd_hash = payload.get("password_hash")  # 선택
+        name = str(payload.get("name", uid)).strip()
+        role = str(payload.get("role", "store")).strip().lower()
+        if not (pwd_plain or pwd_hash):
+            st.error(f"[users.{uid}]에 password 또는 password_hash가 필요합니다."); st.stop()
+        if role not in {"store", "admin"}:
+            st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
+        cleaned[str(uid)] = {
+            "password": (str(pwd_plain) if pwd_plain is not None else None),
+            "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
+            "name": name,
+            "role": role,
+        }
     if not cleaned:
         st.error("[users]에 유효한 계정이 없습니다."); st.stop()
     return cleaned
@@ -140,18 +129,14 @@ ORDERS_COLUMNS = [
 ]
 
 # -----------------------------------------------------------------------------
-# 3) Google Sheets (실제 접근 시에만 검증)
+# 3) Google Sheets (실제 접근 시에만 검증) — 개행/반환 버그 수정
 # -----------------------------------------------------------------------------
-
 def _require_google_secrets():
     google = st.secrets.get("google", {})
-    # SPREADSHEET_KEY는 [google] 또는 루트 모두 허용 → 여기서는 필수 목록에서 제외
-    required = [
-        "type","project_id","private_key_id","private_key","client_email","client_id"
-    ]
+    required = ["type","project_id","private_key_id","private_key","client_email","client_id"]
     missing = [k for k in required if not str(google.get(k, "")).strip()]
     if missing:
-        st.error("Google 연동 설정이 부족합니다. Streamlit Cloud → Settings → Secrets 의 [google] 섹션을 확인하세요.")
+        st.error("Google 연동 설정이 부족합니다. Secrets 의 [google] 섹션을 확인하세요.")
         st.write("누락 항목:", ", ".join(missing))
         st.stop()
     return google
@@ -159,13 +144,13 @@ def _require_google_secrets():
 @st.cache_resource(show_spinner=False)
 def get_gs_client():
     google = _require_google_secrets()
-    # private_key 문자열에 literal "\n"이 들어온 경우 실제 개행으로 치환
+    google = dict(google)  # Credentials에서 dict 형태가 안전
+
+    # private_key: "\\n" 리터럴이면 실제 개행으로 교체, 이미 개행이면 그대로 유지
     pk = str(google.get("private_key", ""))
     if "\\n" in pk:
-    google = dict(google)
-    # "\\n" 문자열을 실제 개행 문자("\n")로 변환
-    google["private_key"] = pk.replace("\\n", "\n")
-    
+        google["private_key"] = pk.replace("\\n", "\n")
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -175,11 +160,11 @@ def get_gs_client():
 
 @st.cache_resource(show_spinner=False)
 def open_spreadsheet():
-    # SPREADSHEET_KEY는 [google] 또는 루트 둘 중 어디에 있어도 허용
+    # SPREADSHEET_KEY는 [google] 또는 루트 모두 허용
     g = st.secrets.get("google", {})
     key = str(g.get("SPREADSHEET_KEY") or st.secrets.get("SPREADSHEET_KEY", "")).strip()
     if not key:
-        st.error("시크릿에 SPREADSHEET_KEY가 없습니다. [google].SPREADSHEET_KEY 또는 루트 SPREADSHEET_KEY 중 하나를 설정하세요.")
+        st.error("Secrets 에 SPREADSHEET_KEY가 없습니다. [google].SPREADSHEET_KEY 또는 루트 SPREADSHEET_KEY 중 하나를 설정하세요.")
         st.stop()
     try:
         return get_gs_client().open_by_key(key)
@@ -262,7 +247,6 @@ def append_orders(rows: List[Dict[str, Any]]) -> bool:
     df_new = pd.DataFrame(rows)[ORDERS_COLUMNS]
     return write_orders_df(pd.concat([base, df_new], ignore_index=True))
 
-
 def update_order_status(selected_ids: List[str], new_status: str, handler: str) -> bool:
     df = load_orders_df().copy()
     if df.empty:
@@ -275,34 +259,65 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     return write_orders_df(df)
 
 # -----------------------------------------------------------------------------
-# 5) 로그인
+# 5) 로그인 (아이디 또는 지점명으로 매칭)
 # -----------------------------------------------------------------------------
+def _find_account(uid_or_name: str):
+    """
+    입력값이 'jeondae' 같은 아이디든, '전대점' 같은 지점명이든 모두 찾아줌.
+    반환: (실제_uid, account_dict) or (None, None)
+    """
+    s = str(uid_or_name or "").strip()
+    if not s:
+        return None, None
 
-def _do_login(uid: str, pwd: str) -> bool:
-    acct = USERS.get(uid)
+    # 1) uid 직접 매칭 (대소문자 무시)
+    lower_map = {k.lower(): k for k in USERS.keys()}
+    if s in USERS:
+        return s, USERS[s]
+    if s.lower() in lower_map:
+        real_uid = lower_map[s.lower()]
+        return real_uid, USERS[real_uid]
+
+    # 2) name(지점명) 매칭 (대소문자/공백 무시)
+    for uid, acct in USERS.items():
+        nm = str(acct.get("name", "")).strip()
+        if s == nm or s.lower() == nm.lower():
+            return uid, acct
+
+    return None, None
+
+def _do_login(uid_input: str, pwd: str) -> bool:
+    real_uid, acct = _find_account(uid_input)
     if not acct:
-        st.error("아이디 또는 비밀번호가 올바르지 않습니다."); return False
+        st.error("아이디(또는 지점명) 또는 비밀번호가 올바르지 않습니다.")
+        return False
+
     ok = verify_password(
-        uid=uid, input_pw=pwd,
+        uid=real_uid,
+        input_pw=pwd,
         stored_hash=acct.get("password_hash"),
-        fallback_plain=acct.get("password")  # 과도기용: 평문 지원(최종 제거 권장)
+        fallback_plain=acct.get("password")  # 현재 시크릿은 평문 password 사용
     )
     if not ok:
-        st.error("아이디 또는 비밀번호가 올바르지 않습니다."); return False
+        st.error("아이디(또는 지점명) 또는 비밀번호가 올바르지 않습니다.")
+        return False
+
     st.session_state["auth"] = {
-        "login": True, "user_id": uid, "name": acct["name"], "role": acct["role"]
+        "login": True,
+        "user_id": real_uid,
+        "name": acct["name"],
+        "role": acct["role"],
     }
     st.success(f"{acct['name']}님 환영합니다!")
     st.rerun()
     return True
-
 
 def require_login():
     st.session_state.setdefault("auth", {})
     if st.session_state["auth"].get("login", False):
         return True
     st.header("🔐 로그인")
-    uid = st.text_input("아이디", key="login_uid")
+    uid = st.text_input("아이디 또는 지점명", key="login_uid")
     pwd = st.text_input("비밀번호", type="password", key="login_pw")
     if st.button("로그인", use_container_width=True):
         _do_login(uid, pwd)
@@ -311,10 +326,8 @@ def require_login():
 # -----------------------------------------------------------------------------
 # 6) 유틸
 # -----------------------------------------------------------------------------
-
 def make_order_id(store_id: str, seq: int) -> str:
     return f"{datetime.now():%Y%m%d-%H%M}-{store_id}-{seq:03d}"
-
 
 def merge_price(df_orders: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     if df_orders.empty: return df_orders.copy()
@@ -324,7 +337,6 @@ def merge_price(df_orders: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     out["단가"] = pd.to_numeric(out["단가"], errors="coerce").fillna(0).astype(int)
     out["금액"] = (out["수량"] * out["단가"]).astype(int)
     return out
-
 
 def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesIO:
     """발주/납품 내역 엑셀 생성 공용"""
@@ -349,7 +361,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesI
 # -----------------------------------------------------------------------------
 # 7) 발주(지점) 화면
 # -----------------------------------------------------------------------------
-
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록,확인")
     l, m, r = st.columns([1,1,2])
@@ -420,7 +431,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if ok: st.success(f"발주가 접수되었습니다. 발주번호: {order_id}")
         else: st.error("발주 저장에 실패했습니다.")
 
-
 def page_store_orders_change():
     st.subheader("🧾 발주 조회,변경")
     df = load_orders_df().copy()
@@ -461,7 +471,6 @@ def page_store_orders_change():
         if ok: st.success("변경사항을 저장했습니다."); st.rerun()
         else: st.error("저장 실패")
 
-
 def page_store_order_form_download(master_df: pd.DataFrame):
     st.subheader("📑 발주서 조회,다운로드")
     df = load_orders_df().copy()
@@ -489,7 +498,6 @@ def page_store_order_form_download(master_df: pd.DataFrame):
                        file_name="발주서.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 발주 품목 가격 조회")
     cols = [c for c in ["품목코드","품목명","분류","단위","단가"] if c in master_df.columns]
@@ -498,7 +506,6 @@ def page_store_master_view(master_df: pd.DataFrame):
 # -----------------------------------------------------------------------------
 # 8) 관리자 화면
 # -----------------------------------------------------------------------------
-
 def page_admin_orders_manage(master_df: pd.DataFrame):
     st.subheader("🗂️ 주문 관리,출고확인")
     df = load_orders_df().copy()
@@ -539,7 +546,6 @@ def page_admin_orders_manage(master_df: pd.DataFrame):
             else:
                 st.warning("발주번호를 선택하세요.")
 
-
 def page_admin_shipments_change():
     st.subheader("🚚 출고내역 조회,상태변경")
     df = load_orders_df().copy()
@@ -568,7 +574,6 @@ def page_admin_shipments_change():
         if ok: st.success("상태 변경 완료"); st.rerun()
         else: st.error("상태 변경 실패")
 
-
 def page_admin_delivery_note(master_df: pd.DataFrame):
     st.subheader("📑 출고 내역서 조회, 다운로드")
     df = load_orders_df().copy()
@@ -594,7 +599,6 @@ def page_admin_delivery_note(master_df: pd.DataFrame):
     st.download_button("출고 내역서 엑셀 다운로드", data=buf.getvalue(),
                        file_name="출고내역서.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
 
 def page_admin_items_price(master_df: pd.DataFrame):
     st.subheader("🏷️ 납품 품목 가격 설정")
@@ -624,7 +628,7 @@ def page_admin_items_price(master_df: pd.DataFrame):
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     st.title("📦 식자재 발주 시스템")
-    st.caption("Streamlit Cloud Secrets 전용 · 탭 기반 네비게이션")
+    st.caption("Secrets 포맷 고정 · 오류 제거 버전")
 
     if not require_login():
         st.stop()
