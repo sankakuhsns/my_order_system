@@ -1,26 +1,28 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# Streamlit 식자재 발주 시스템 (Cloud Secrets 전용 · 탭 네비게이션)
-# - 발주자(지점): 발주 등록·확인 / 발주 조회·변경 / 발주서 조회·다운로드 / 발주 품목 가격 조회(조회 전용)
-# - 관리자: 주문관리·출고 / 출고 조회·변경 / 납품내역서 / 납품 품목 및 가격(편집 저장)
+# Streamlit 식자재 발주 시스템 (Cloud Secrets 전용 · 최종본)
+# - 발주(지점): 발주 등록,확인 / 발주 조회,변경 / 발주서 조회,다운로드 / 발주 품목 가격 조회
+# - 관리자   : 주문 관리,출고확인 / 출고내역 조회,상태변경 / 출고 내역서 조회, 다운로드 / 납품 품목 가격 설정
 # - 저장: Google Sheets (Streamlit Cloud Secrets 필수, 로컬 백업/게스트 진입 없음)
+# - 로그인: [users] 시크릿 자동 인식 (inline-table, dotted-table), password / password_hash(SHA-256+pepper) 지원
 # =============================================================================
 
 from io import BytesIO
 from datetime import datetime, date, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+import hashlib
 import pandas as pd
 import streamlit as st
 
-# ---- Google Sheets
+# Google Sheets
 import gspread
 from google.oauth2 import service_account
 
-# =============================================================================
-# 0) 페이지/테마
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 페이지/테마
+# -----------------------------------------------------------------------------
 st.set_page_config(page_title="발주 시스템", page_icon="📦", layout="wide")
-
 THEME = {
     "BORDER": "#e8e8e8",
     "CARD": "background-color:#ffffff;border:1px solid #e8e8e8;border-radius:12px;padding:16px;",
@@ -31,55 +33,115 @@ st.markdown(f"""
 .small {{font-size: 12px; color: #777;}}
 .card {{ {THEME["CARD"]} }}
 .sticky-bottom {{
-    position: sticky; bottom: 0; z-index: 999; {THEME["CARD"]} margin-top: 8px;
-    display: flex; align-items:center; justify-content: space-between; gap: 16px;
+  position: sticky; bottom: 0; z-index: 999; {THEME["CARD"]} margin-top: 8px;
+  display: flex; align-items:center; justify-content: space-between; gap: 16px;
 }}
 .metric {{font-weight:700; color:{THEME["PRIMARY"]};}}
 </style>
 """, unsafe_allow_html=True)
 
-# =============================================================================
-# 1) Secrets: users (로그인) 선검증
-# 요구 스키마(권장): [users] 아래 JSON 중첩
-# [users]
-# jeondae = { password="jd", name="전대점", role="store" }
-# hq      = { password="dj", name="대전공장", role="admin" }
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 1) Secrets: users 로더 (inline-table / dotted-table 모두 지원) + 해시 로그인
+# -----------------------------------------------------------------------------
+def _get_pepper() -> str:
+    """선택: [auth].PEPPER 보강 문자열(없어도 동작)."""
+    return str(st.secrets.get("auth", {}).get("PEPPER", ""))
+
+def hash_password(uid: str, password: str) -> str:
+    raw = (_get_pepper() + uid + ":" + password).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+def verify_password(uid: str, input_pw: str,
+                    stored_hash: Optional[str], fallback_plain: Optional[str]) -> bool:
+    """hash 우선, 없으면 평문 호환."""
+    if stored_hash:
+        return hash_password(uid, input_pw) == str(stored_hash).lower()
+    return fallback_plain is not None and str(input_pw) == str(fallback_plain)
+
 def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
-    users = st.secrets.get("users", None)
-    if not isinstance(users, dict) or len(users) == 0:
+    """
+    지원 형식 1) inline-table:
+      [users]
+      jeondae = { password="jd", name="전대점", role="store" }
+    지원 형식 2) dotted tables:
+      [users.jeondae]
+      password="jd"; name="전대점"; role="store"
+    (보너스) 3) list of tables:
+      [[users]]
+      user_id="jeondae"; password="jd"; name="전대점"; role="store"
+    """
+    users_obj = st.secrets.get("users", None)
+    cleaned: Dict[str, Dict[str, str]] = {}
+
+    if users_obj is None:
         st.error("로그인 계정이 없습니다. Streamlit Cloud → Settings → Secrets 의 [users] 섹션을 등록하세요.")
         st.stop()
 
-    cleaned: Dict[str, Dict[str, str]] = {}
-    for uid, payload in users.items():
-        if not isinstance(payload, dict):
-            st.error(f"[users.{uid}] 값이 객체(dict)가 아닙니다. 예: users.{uid} = {{ password=\"..\", name=\"..\", role=\"store\" }}")
+    # dict-of-dicts (inline-table도, dotted-table도 보통 이 형태)
+    if isinstance(users_obj, dict):
+        if all(isinstance(v, dict) for v in users_obj.values()):
+            for uid, payload in users_obj.items():
+                pwd_plain = payload.get("password")
+                pwd_hash = payload.get("password_hash")
+                name = str(payload.get("name", uid)).strip()
+                role = str(payload.get("role", "store")).strip().lower()
+                if not (pwd_plain or pwd_hash):
+                    st.error(f"[users.{uid}]에 password 또는 password_hash가 필요합니다."); st.stop()
+                if role not in {"store", "admin"}:
+                    st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
+                cleaned[str(uid)] = {
+                    "password": (str(pwd_plain) if pwd_plain is not None else None),
+                    "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
+                    "name": name,
+                    "role": role,
+                }
+        else:
+            st.error("[users] 형식을 인식할 수 없습니다. inline-table 또는 [users.xxx] 구조를 사용하세요.")
             st.stop()
-        pwd = str(payload.get("password", "")).strip()
-        name = str(payload.get("name", uid)).strip()
-        role = str(payload.get("role", "store")).strip().lower()
-        if not pwd:
-            st.error(f"[users.{uid}].password 가 비어있습니다."); st.stop()
-        if role not in {"store", "admin"}:
-            st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
-        cleaned[str(uid)] = {"password": pwd, "name": name, "role": role}
+
+    # list-of-dicts (호환)
+    elif isinstance(users_obj, list):
+        for row in users_obj:
+            if not isinstance(row, dict): continue
+            uid = row.get("user_id") or row.get("uid") or row.get("id")
+            if not uid: continue
+            pwd_plain = row.get("password")
+            pwd_hash = row.get("password_hash")
+            name = str(row.get("name", uid)).strip()
+            role = str(row.get("role", "store")).strip().lower()
+            if not (pwd_plain or pwd_hash):
+                st.error(f"[[users]] 항목(user_id={uid})에 password 또는 password_hash가 필요합니다."); st.stop()
+            if role not in {"store","admin"}:
+                st.error(f"[[users]] 항목(user_id={uid})의 role 은 'store' 또는 'admin' 이어야 합니다."); st.stop()
+            cleaned[str(uid)] = {
+                "password": (str(pwd_plain) if pwd_plain is not None else None),
+                "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
+                "name": name,
+                "role": role,
+            }
+    else:
+        st.error("[users] TOML 구조가 올바르지 않습니다."); st.stop()
+
+    if not cleaned:
+        st.error("[users]에 유효한 계정이 없습니다."); st.stop()
     return cleaned
 
 USERS = load_users_from_secrets()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 2) 상수/컬럼
-# =============================================================================
+# -----------------------------------------------------------------------------
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
 ORDER_STATUSES = ["접수", "출고완료"]
-ORDERS_COLUMNS = ["주문일시","발주번호","지점ID","지점명","납품요청일",
-                  "품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"]
+ORDERS_COLUMNS = [
+    "주문일시","발주번호","지점ID","지점명","납품요청일",
+    "품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"
+]
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 3) Google Sheets (실제 접근 시에만 검증)
-# =============================================================================
+# -----------------------------------------------------------------------------
 def _require_google_secrets():
     google = st.secrets.get("google", {})
     required = ["type","project_id","private_key_id","private_key","client_email","client_id","SPREADSHEET_KEY"]
@@ -108,11 +170,12 @@ def open_spreadsheet():
         st.error(f"스프레드시트 열기 실패: {e}")
         st.stop()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 4) 데이터 I/O
-# =============================================================================
+# -----------------------------------------------------------------------------
 @st.cache_data(ttl=180)
 def load_master_df() -> pd.DataFrame:
+    """상품마스터 로드 (없으면 샘플로 표시만)."""
     try:
         ws = open_spreadsheet().worksheet(SHEET_NAME_MASTER)
         df = pd.DataFrame(ws.get_all_records())
@@ -127,13 +190,13 @@ def load_master_df() -> pd.DataFrame:
     for c in ["품목코드","품목명","단위","분류","단가","활성"]:
         if c not in df.columns:
             df[c] = (0 if c=="단가" else (True if c=="활성" else ""))
-    # 활성 필터(있을 때만)
     if "활성" in df.columns:
         mask = df["활성"].astype(str).str.lower().isin(["1","true","y","yes"])
         df = df[mask | df["활성"].isna()]
     return df
 
 def write_master_df(df: pd.DataFrame) -> bool:
+    """상품마스터 저장(덮어쓰기)."""
     cols = [c for c in ["품목코드","품목명","분류","단위","단가","활성"] if c in df.columns]
     df = df[cols].copy()
     try:
@@ -160,6 +223,7 @@ def load_orders_df() -> pd.DataFrame:
         return pd.DataFrame(columns=ORDERS_COLUMNS)
 
 def write_orders_df(df: pd.DataFrame) -> bool:
+    """발주 시트 저장(덮어쓰기)."""
     df = df[ORDERS_COLUMNS].copy()
     try:
         sh = open_spreadsheet()
@@ -192,33 +256,41 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     df.loc[mask, "처리자"] = handler
     return write_orders_df(df)
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 5) 로그인
-# =============================================================================
+# -----------------------------------------------------------------------------
+def _do_login(uid: str, pwd: str) -> bool:
+    acct = USERS.get(uid)
+    if not acct:
+        st.error("아이디 또는 비밀번호가 올바르지 않습니다."); return False
+    ok = verify_password(
+        uid=uid, input_pw=pwd,
+        stored_hash=acct.get("password_hash"),
+        fallback_plain=acct.get("password")  # 과도기용: 평문 지원(최종 제거 권장)
+    )
+    if not ok:
+        st.error("아이디 또는 비밀번호가 올바르지 않습니다."); return False
+    st.session_state["auth"] = {
+        "login": True, "user_id": uid, "name": acct["name"], "role": acct["role"]
+    }
+    st.success(f"{acct['name']}님 환영합니다!")
+    st.rerun()
+    return True
+
 def require_login():
     st.session_state.setdefault("auth", {})
     if st.session_state["auth"].get("login", False):
         return True
-
     st.header("🔐 로그인")
     uid = st.text_input("아이디", key="login_uid")
     pwd = st.text_input("비밀번호", type="password", key="login_pw")
-
     if st.button("로그인", use_container_width=True):
-        account = USERS.get(uid)
-        if not account or str(pwd) != str(account["password"]):
-            st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
-        else:
-            st.session_state["auth"] = {
-                "login": True, "user_id": uid, "name": account["name"], "role": account["role"]
-            }
-            st.success(f"{account['name']}님 환영합니다!")
-            st.rerun()
+        _do_login(uid, pwd)
     return False
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 6) 유틸
-# =============================================================================
+# -----------------------------------------------------------------------------
 def make_order_id(store_id: str, seq: int) -> str:
     return f"{datetime.now():%Y%m%d-%H%M}-{store_id}-{seq:03d}"
 
@@ -232,7 +304,7 @@ def merge_price(df_orders: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesIO:
-    """발주서/납품내역서 공용 엑셀 생성"""
+    """발주/납품 내역 엑셀 생성 공용"""
     buf = BytesIO()
     cols = ["발주번호","주문일시","납품요청일","지점명","품목코드","품목명","단위","수량","비고","상태"]
     if include_price:
@@ -241,9 +313,9 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesI
         cols += ["단가","금액"]
     export = df_note[cols].copy().sort_values(["발주번호","품목코드"])
     with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        export.to_excel(w, index=False, sheet_name="발주내역")
+        export.to_excel(w, index=False, sheet_name="내역")
         if include_price and "금액" in export.columns:
-            ws = w.sheets["발주내역"]
+            ws = w.sheets["내역"]
             last = len(export) + 1
             ws.write(last, export.columns.get_loc("수량"), "총 수량")
             ws.write(last, export.columns.get_loc("수량")+1, int(export["수량"].sum()))
@@ -251,11 +323,11 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesI
             ws.write(last, export.columns.get_loc("금액"), int(export["금액"].sum()))
     buf.seek(0); return buf
 
-# =============================================================================
-# 7) 발주자(지점) 화면
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 7) 발주(지점) 화면
+# -----------------------------------------------------------------------------
 def page_store_register_confirm(master_df: pd.DataFrame):
-    st.subheader("🛒 발주 등록·확인")
+    st.subheader("🛒 발주 등록,확인")
     l, m, r = st.columns([1,1,2])
     with l:
         quick = st.radio("납품 선택", ["오늘","내일","직접선택"], horizontal=True, key="rq_radio")
@@ -299,9 +371,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     total_items = len(sel_df); total_qty = int(sel_df["수량"].sum()) if total_items>0 else 0
     st.markdown(f"""
     <div class="sticky-bottom">
-        <div>납품 요청일: <b>{납품요청일.strftime('%Y-%m-%d')}</b></div>
-        <div>선택 품목수: <span class="metric">{total_items:,}</span> 개</div>
-        <div>총 수량: <span class="metric">{total_qty:,}</span></div>
+      <div>납품 요청일: <b>{납품요청일.strftime('%Y-%m-%d')}</b></div>
+      <div>선택 품목수: <span class="metric">{total_items:,}</span> 개</div>
+      <div>총 수량: <span class="metric">{total_qty:,}</span></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -325,7 +397,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         else: st.error("발주 저장에 실패했습니다.")
 
 def page_store_orders_change():
-    st.subheader("🧾 발주 조회·변경")
+    st.subheader("🧾 발주 조회,변경")
     df = load_orders_df().copy()
     user = st.session_state["auth"]
     if df.empty:
@@ -365,7 +437,7 @@ def page_store_orders_change():
         else: st.error("저장 실패")
 
 def page_store_order_form_download(master_df: pd.DataFrame):
-    st.subheader("📑 발주서 조회·다운로드")
+    st.subheader("📑 발주서 조회,다운로드")
     df = load_orders_df().copy()
     if df.empty:
         st.info("발주 데이터가 없습니다."); return
@@ -382,11 +454,11 @@ def page_store_order_form_download(master_df: pd.DataFrame):
         except: return pd.NaT
     df["주문일시_dt"] = df["주문일시"].apply(_to_dt)
     mask = (df["주문일시_dt"].dt.date>=dt_from)&(df["주문일시_dt"].dt.date<=dt_to)
-    if target_order != "(전체)": mask &= (df["발주번호"]==target_order)
+    if target_order != "(전체)":
+        mask &= (df["발주번호"]==target_order)
     dfv = df[mask].copy().sort_values(["발주번호","품목코드"])
     st.dataframe(dfv, use_container_width=True, height=420)
-    # 발주서는 금액 없음
-    buf = make_order_sheet_excel(dfv, include_price=False)
+    buf = make_order_sheet_excel(dfv, include_price=False)  # 발주서는 금액 없음
     st.download_button("발주서 엑셀 다운로드", data=buf.getvalue(),
                        file_name="발주서.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -396,11 +468,11 @@ def page_store_master_view(master_df: pd.DataFrame):
     cols = [c for c in ["품목코드","품목명","분류","단위","단가"] if c in master_df.columns]
     st.dataframe(master_df[cols], use_container_width=True, height=480)
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 8) 관리자 화면
-# =============================================================================
+# -----------------------------------------------------------------------------
 def page_admin_orders_manage(master_df: pd.DataFrame):
-    st.subheader("🗂️ 주문관리·출고")
+    st.subheader("🗂️ 주문 관리,출고확인")
     df = load_orders_df().copy()
     if df.empty:
         st.info("발주 데이터가 없습니다."); return
@@ -440,7 +512,7 @@ def page_admin_orders_manage(master_df: pd.DataFrame):
                 st.warning("발주번호를 선택하세요.")
 
 def page_admin_shipments_change():
-    st.subheader("🚚 출고 조회·변경")
+    st.subheader("🚚 출고내역 조회,상태변경")
     df = load_orders_df().copy()
     if df.empty:
         st.info("발주 데이터가 없습니다."); return
@@ -468,7 +540,7 @@ def page_admin_shipments_change():
         else: st.error("상태 변경 실패")
 
 def page_admin_delivery_note(master_df: pd.DataFrame):
-    st.subheader("📑 납품내역서")
+    st.subheader("📑 출고 내역서 조회, 다운로드")
     df = load_orders_df().copy()
     if df.empty:
         st.info("발주 데이터가 없습니다."); return
@@ -483,24 +555,27 @@ def page_admin_delivery_note(master_df: pd.DataFrame):
         except: return pd.NaT
     df["주문일시_dt"] = df["주문일시"].apply(_to_dt)
     mask = (df["주문일시_dt"].dt.date>=dt_from)&(df["주문일시_dt"].dt.date<=dt_to)
-    if target_order != "(전체)": mask &= (df["발주번호"]==target_order)
+    if target_order != "(전체)":
+        mask &= (df["발주번호"]==target_order)
     dfv = df[mask].copy().sort_values(["발주번호","품목코드"])
-    df_note = merge_price(dfv, master_df)  # 관리자는 금액 포함
+    df_note = merge_price(dfv, master_df)  # 관리자: 금액 포함
     st.dataframe(df_note, use_container_width=True, height=420)
     buf = make_order_sheet_excel(df_note, include_price=True)
-    st.download_button("납품내역서 엑셀 다운로드", data=buf.getvalue(),
-                       file_name="납품내역서.xlsx",
+    st.download_button("출고 내역서 엑셀 다운로드", data=buf.getvalue(),
+                       file_name="출고내역서.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 def page_admin_items_price(master_df: pd.DataFrame):
-    st.subheader("🏷️ 납품 품목 및 가격 (시트 반영)")
+    st.subheader("🏷️ 납품 품목 가격 설정")
     cols = [c for c in ["품목코드","품목명","분류","단위","단가","활성"] if c in master_df.columns]
     view = master_df[cols].copy()
     st.caption("단가·활성(선택)을 수정 후 [변경사항 저장]을 누르면 상품마스터 시트에 반영됩니다.")
     edited = st.data_editor(
         view, use_container_width=True, hide_index=True, num_rows="dynamic",
-        column_config={"단가": st.column_config.NumberColumn(min_value=0, step=1),
-                       "활성": st.column_config.CheckboxColumn()},
+        column_config={
+            "단가": st.column_config.NumberColumn(min_value=0, step=1),
+            "활성": st.column_config.CheckboxColumn()
+        },
         key="master_editor"
     )
     if st.button("변경사항 저장", type="primary"):
@@ -513,9 +588,9 @@ def page_admin_items_price(master_df: pd.DataFrame):
         else:
             st.error("저장 실패")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # 9) 라우팅 (탭 네비게이션)
-# =============================================================================
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
     st.title("📦 식자재 발주 시스템")
     st.caption("Streamlit Cloud Secrets 전용 · 탭 기반 네비게이션")
@@ -528,13 +603,13 @@ if __name__ == "__main__":
     master = load_master_df()
 
     if role == "admin":
-        t1, t2, t3, t4 = st.tabs(["주문관리·출고", "출고 조회·변경", "납품내역서", "납품 품목 및 가격"])
+        t1, t2, t3, t4 = st.tabs(["주문 관리,출고확인", "출고내역 조회,상태변경", "출고 내역서 조회, 다운로드", "납품 품목 가격 설정"])
         with t1: page_admin_orders_manage(master)
         with t2: page_admin_shipments_change()
         with t3: page_admin_delivery_note(master)
         with t4: page_admin_items_price(master)
     else:
-        t1, t2, t3, t4 = st.tabs(["발주 등록·확인", "발주 조회·변경", "발주서 조회·다운로드", "발주 품목 가격 조회"])
+        t1, t2, t3, t4 = st.tabs(["발주 등록,확인", "발주 조회,변경", "발주서 조회,다운로드", "발주 품목 가격 조회"])
         with t1: page_store_register_confirm(master)
         with t2: page_store_orders_change()
         with t3: page_store_order_form_download(master)
