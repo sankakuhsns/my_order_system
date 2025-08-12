@@ -22,34 +22,226 @@ from google.oauth2 import service_account
 import xlsxwriter  # noqa: F401 (엔진 로딩용)
 
 # -----------------------------------------------------------------------------
-# 페이지/테마
+# 페이지/테마/스타일 + 공용 UI 헬퍼 (복붙용)
 # -----------------------------------------------------------------------------
+import streamlit as st
+
+# 1) 페이지 전역 설정
 st.set_page_config(page_title="발주 시스템", page_icon="📦", layout="wide")
+
+# 2) 테마 팔레트
 THEME = {
-    "BORDER": "#e8e8e8",
-    "CARD": "background-color:#ffffff;border:1px solid #e8e8e8;border-radius:12px;padding:16px;",
-    "PRIMARY": "#1C6758",
+    "BORDER":   "#e8e8e8",
+    "PRIMARY":  "#1C6758",   # 메인 포인트 컬러
+    "BG":       "#f7f8fa",   # 페이지 배경
+    "CARD_BG":  "#ffffff",
+    "TEXT":     "#222",
+    "MUTED":    "#777",
 }
+
+# 3) 공용 카드 인라인 스타일(HTML에서 class=card 로도 사용)
+CARD_STYLE = f"background-color:{THEME['CARD_BG']};border:1px solid {THEME['BORDER']};border-radius:12px;padding:16px;"
+
+# 4) 전역 CSS 주입
 st.markdown(f"""
 <style>
-.small {{font-size: 12px; color: #777;}}
-.card {{ {THEME["CARD"]} }}
-.sticky-bottom {{
-  position: sticky; bottom: 0; z-index: 999; {THEME["CARD"]} margin-top: 8px;
-  display: flex; align-items:center; justify-content: space-between; gap: 16px;
+/* 4-1. 전체 배경/텍스트 */
+html, body, [data-testid="stAppViewContainer"] {{
+  background: {THEME['BG']};
+  color: {THEME['TEXT']};
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "Helvetica Neue", Arial, sans-serif;
 }}
-.metric {{font-weight:700; color:{THEME["PRIMARY"]};}}
-/* 로그인 카드/버튼 크기, 중앙 정렬 */
+
+.small {{ font-size:12px; color:{THEME['MUTED']}; }}
+
+.card {{ {CARD_STYLE} }}
+.card-tight {{ background:{THEME['CARD_BG']}; border:1px solid {THEME['BORDER']}; border-radius:12px; padding:12px; }}
+
+.metric {{ font-weight:700; color:{THEME['PRIMARY']}; }}
+
+/* 4-2. 컨테이너 간격 정돈 */
+.block-container {{ padding-top: 1.5rem; padding-bottom: 2rem; }}
+
+/* 4-3. 버튼/입력 공통 스타일 */
+.stButton>button {{
+  background:{THEME['PRIMARY']};
+  color:#fff;
+  border:1px solid {THEME['PRIMARY']};
+  border-radius:10px;
+  height:38px;
+}}
+.stButton>button:hover {{
+  filter: brightness(0.95);
+}}
+.stTextInput>div>div>input,
+.stNumberInput input,
+.stSelectbox [data-baseweb="select"] input,
+.stDateInput input {{
+  border:1px solid {THEME['BORDER']} !important;
+  border-radius:10px !important;
+}}
+/* 체크박스 라벨 색감 */
+[data-testid="stCheckbox"] label {{ color:{THEME['TEXT']}; }}
+
+/* 4-4. 테이블/데이터프레임 */
+.dataframe, .stDataFrame, .stTable {{
+  background:{THEME['CARD_BG']};
+  border-radius:12px;
+  border:1px solid {THEME['BORDER']};
+}}
+/* 숫자 오른쪽 정렬 (표 안) */
+.dataframe td, .dataframe th {{ vertical-align: middle; }}
+.dataframe td.num, .dataframe th.num {{ text-align:right; }}
+
+/* 4-5. 탭 가독성 향상 */
+div[data-baseweb="tab-list"] {{ gap:8px; }}
+div[data-baseweb="tab"] {{
+  border:1px solid {THEME['BORDER']};
+  border-radius:10px; padding:6px 10px; background:#fff;
+}}
+div[data-baseweb="tab-highlight"] {{ display:none; }}
+
+/* 4-6. 하단 고정 합계 바 */
+.sticky-bottom {{
+  position: sticky; bottom: 0; z-index: 999;
+  {CARD_STYLE}
+  margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:16px;
+}}
+
+/* 4-7. 로그인 화면 정돈(중앙정렬 + 크기) */
 .login-wrap {{ display:flex; justify-content:center; }}
-.login-card {{ width: 320px; margin-top: 28px; padding: 18px; border:1px solid #e8e8e8; border-radius:12px; background:#fff; }}
+.login-title {{ text-align:center; font-size:28px; font-weight:800; margin-top: 8px; }}
+.login-card {{
+  width: 320px; margin-top: 16px; padding: 18px; border:1px solid {THEME['BORDER']};
+  border-radius:12px; background:#fff; box-shadow: 0 4px 12px rgba(0,0,0,.04);
+}}
 .login-card .stTextInput>div>div>input {{ width: 260px; }}
 .login-card .stButton>button {{ width: 260px; height: 36px; }}
-.login-title {{ text-align:center; font-size: 28px; font-weight: 800; margin-top: 36px; }}
-/* 탭 간격 가독성 */
-div[data-baseweb="tab-list"] {{ gap: 8px; }}
-div[data-baseweb="tab"] {{ border:1px solid #e8e8e8; border-radius:10px; padding: 6px 10px; }}
+
+/* 4-8. (선택) 로그인 백그라운드 이미지
+   --login-bg-url 만 바꾸면 적용됩니다. 필요 없으면 주석 처리하세요. */
+:root {{ --login-bg-url: url('https://images.unsplash.com/photo-1542838686-73ae2c1c5c53?q=80&w=1920&auto=format'); }}
+.login-bg {{
+  min-height: 60vh;
+  background-image: var(--login-bg-url);
+  background-size: cover;
+  background-position: center;
+  border-radius: 12px;
+  border: 1px solid {THEME['BORDER']};
+}}
 </style>
 """, unsafe_allow_html=True)
+
+# 5) 공용 함수 (카드/제목/칩/숫자포맷/합계바)
+def fmt_num(x, decimals=0):
+    """숫자 콤마 포맷(원/수량 등). None/NaN 안전."""
+    try:
+        if decimals == 0:
+            return f"{float(x):,.0f}"
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return "-"
+
+def section_title(title: str, subtitle: str = ""):
+    st.markdown(
+        f"""
+        <div class="card" style="padding:14px 16px;">
+          <div style="font-size:22px; font-weight:800; color:{THEME['TEXT']};">{title}</div>
+          {'<div class="small" style="margin-top:4px;">'+subtitle+'</div>' if subtitle else ''}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def info_chip(label: str, value: str):
+    st.markdown(
+        f"""<div class="card-tight" style="display:inline-flex; gap:8px; align-items:center; margin-right:8px;">
+                <span class="small" style="color:{THEME['MUTED']};">{label}</span>
+                <span class="metric">{value}</span>
+            </div>""",
+        unsafe_allow_html=True
+    )
+
+def card(html: str):
+    st.markdown(f"""<div class="card">{html}</div>""", unsafe_allow_html=True)
+
+def sticky_summary(left_html: str, right_html: str):
+    st.markdown(
+        f"""
+        <div class="sticky-bottom">
+            <div>{left_html}</div>
+            <div style="font-weight:700; color:{THEME['PRIMARY']};">{right_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# -----------------------------------------------------------------------------
+# 아래는 사용 예시 (필요한 섹션만 남기고 나머지는 지워 쓰세요)
+# -----------------------------------------------------------------------------
+
+# (A) 로그인 섹션 예시
+def login_ui():
+    col_bg, col_form = st.columns([2, 1], gap="large")
+    with col_bg:
+        # 배경 이미지 카드(선택) — 이미지 바꾸려면 CSS의 --login-bg-url 변경
+        st.markdown('<div class="login-bg"></div>', unsafe_allow_html=True)
+
+    with col_form:
+        st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.markdown('<div class="login-title">식자재 발주 시스템</div>', unsafe_allow_html=True)
+
+        user = st.text_input("아이디", key="login_id", placeholder="your_id")
+        pw   = st.text_input("비밀번호", key="login_pw", type="password", placeholder="••••••")
+        ok = st.button("로그인", use_container_width=False)
+
+        st.markdown('</div></div>', unsafe_allow_html=True)  # .login-card / .login-wrap
+        return ok, user, pw
+
+# (B) 발주 섹션 예시 (하단 고정 합계바)
+def order_ui_example():
+    section_title("발주 입력", "품목을 선택하고 수량만 입력하세요. 단가/단위 수정 불가.")
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        st.text_input("품목 검색", placeholder="예: 오이, 어묵...")
+        st.dataframe(
+            {"품목": ["오이", "어묵"], "단위": ["EA", "EA"], "단가(원)": ["1,200", "2,900"]},
+            use_container_width=True
+        )
+    with c2:
+        st.number_input("오이 수량", min_value=0, step=1, key="qty1")
+        st.number_input("어묵 수량", min_value=0, step=1, key="qty2")
+    with c3:
+        st.button("발주 담기", type="primary")
+
+    # 합계/버튼 영역 하단 고정
+    total_qty = (st.session_state.get("qty1", 0) or 0) + (st.session_state.get("qty2", 0) or 0)
+    total_price = (st.session_state.get("qty1", 0) or 0) * 1200 + (st.session_state.get("qty2", 0) or 0) * 2900
+    left = f'<span class="small">현재 담긴 수량</span><div class="metric">{fmt_num(total_qty)} EA</div>'
+    right = f'합계 {fmt_num(total_price)} 원'
+    sticky_summary(left, right)
+
+# (C) 관리자 섹션 예시 (메트릭 칩)
+def admin_ui_example():
+    section_title("관리자 대시보드", "발주/출고 현황 요약")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        info_chip("오늘 발주", "23건")
+    with col2:
+        info_chip("출고 완료", "21건")
+    with col3:
+        info_chip("미처리", "2건")
+
+# --- 데모 실행 (실서비스에서는 권한/라우팅에 맞춰 호출) ---
+tab = st.tabs(["로그인", "발주", "관리자"])
+with tab[0]:
+    login_ui()
+with tab[1]:
+    order_ui_example()
+with tab[2]:
+    admin_ui_example()
+
 
 # -----------------------------------------------------------------------------
 # 시간/파일명 유틸(KST)
