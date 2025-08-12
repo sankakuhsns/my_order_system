@@ -61,9 +61,11 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------
-# 강력 버전: users 로더 교체
-# -------------------------
+# ---------------------------------------------------------
+# 교체: users 로더 (시크릿 변경 없이 모든 케이스 강제 지원)
+# ---------------------------------------------------------
+from typing import Dict
+
 def _normalize_account(uid: str, payload: dict) -> dict:
     pwd_plain = payload.get("password")
     pwd_hash  = payload.get("password_hash")
@@ -81,22 +83,30 @@ def _normalize_account(uid: str, payload: dict) -> dict:
 
 def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
     """
-    시크릿 변경 없이 다음 케이스 모두 지원:
-      1) [users.jeondae], [users.hq] (너의 현재 구조)
-      2) [users] 아래에 { jeondae = {...}, hq = {...} }
-      3) [[users]] 리스트
-      4) (환경에 따라) 최상위에 'users.jeondae', 'users.hq' 키만 있는 경우
+    시크릿은 그대로 유지.
+    다음 모든 형태를 자동 인식:
+      1) [users.jeondae], [users.hq]  (dotted table)
+      2) [users] 아래 inline-table (jeondae = {...})
+      3) [[users]] list-of-tables
+      4) 최상위에 'users.jeondae' 키만 존재(일부 환경)
     """
     cleaned: Dict[str, Dict[str, str]] = {}
 
-    # (A) 표준 경로: [users] 가 dict인 경우
+    # 0) 가능한 한 dict로 강제 캐스팅 (열거 가능한 환경 우선)
+    secrets_map = None
+    try:
+        secrets_map = dict(st.secrets)  # 가능하면 전체 키 열거
+    except Exception:
+        secrets_map = None
+
+    # A) 표준 경로: [users] 가 dict
     users_root = st.secrets.get("users", None)
     if isinstance(users_root, dict) and users_root:
         for uid, payload in users_root.items():
             if isinstance(payload, dict):
                 cleaned[str(uid)] = _normalize_account(uid, payload)
 
-    # (B) 리스트 경로: [[users]]
+    # B) 리스트 경로: [[users]]
     elif isinstance(users_root, list) and users_root:
         for row in users_root:
             if not isinstance(row, dict):
@@ -106,32 +116,39 @@ def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
                 continue
             cleaned[str(uid)] = _normalize_account(uid, row)
 
-    # (C) 플랫 경로: 최상위에 'users.xxx' 키들만 존재하는 경우
+    # C) 플랫 경로: 최상위에 'users.xxx' 키들만 존재
     if not cleaned:
-        # 1) 네가 실제로 쓰는 계정 키를 우선 직접 조회 (시크릿 변경 없이 확실하게)
+        # 1) 네가 실제 쓰는 키 2개를 직접 조회 (시크릿 변경 없이 확실히 잡기)
         for uid in ("jeondae", "hq"):
             dotted_key = f"users.{uid}"
             payload = st.secrets.get(dotted_key, None)
             if isinstance(payload, dict):
                 cleaned[str(uid)] = _normalize_account(uid, payload)
 
-        # 2) 혹시 더 있는 경우를 위해, 가능한 한 폭넓게 수집 (keys()가 막혀있을 수 있어 try)
-        if not cleaned:
-            try:
-                # 일부 환경에서 st.secrets는 dict-like로 keys() 제공
-                for k in list(st.secrets.keys()):
-                    if isinstance(k, str) and k.startswith("users."):
-                        uid = k.split(".", 1)[1].strip()
-                        payload = st.secrets.get(k, None)
-                        if isinstance(payload, dict) and uid:
-                            cleaned[str(uid)] = _normalize_account(uid, payload)
-            except Exception:
-                # keys() 자체가 안 되면 위의 직접 조회로 충분 (현재 너의 케이스 커버)
-                pass
+        # 2) 혹시 더 있는 경우: 전체 키 열거 가능하면 prefix 스캔
+        if not cleaned and isinstance(secrets_map, dict):
+            for k, v in secrets_map.items():
+                if isinstance(k, str) and k.startswith("users.") and isinstance(v, dict):
+                    uid = k.split(".", 1)[1].strip()
+                    if uid:
+                        cleaned[str(uid)] = _normalize_account(uid, v)
 
     if not cleaned:
-        st.error("로그인 계정을 찾을 수 없습니다. Secrets 의 [users.jeondae], [users.hq] 구조를 확인하세요.")
+        # 디버그 보조: 민감값 없이 키만 보여주기
+        with st.expander("🔍 Secrets 진단 (민감값 비노출)"):
+            try:
+                keys_preview = list(secrets_map.keys()) if isinstance(secrets_map, dict) else []
+            except Exception:
+                keys_preview = []
+            st.write({
+                "has_users_section": isinstance(users_root, dict),
+                "users_section_type": type(users_root).__name__,
+                "top_level_keys": keys_preview[:50],  # 너무 길면 잘라서
+                "hint": "keys에 'users.jeondae' / 'users.hq' 가 보이면 플랫 경로 케이스입니다."
+            })
+        st.error("로그인 계정을 찾을 수 없습니다. Secrets 의 [users.jeondae], [users.hq] 구조는 유지한 채, 위 진단 정보를 확인하세요.")
         st.stop()
+
     return cleaned
 
 # 전역 초기화
