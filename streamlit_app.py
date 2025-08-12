@@ -22,76 +22,153 @@ from google.oauth2 import service_account
 import xlsxwriter  # noqa: F401 (엔진 로딩용)
 
 # -----------------------------------------------------------------------------
-# 페이지/테마 (원본 유지, 색만 살짝 단정하게)
+# 페이지/테마/스타일 (최소 수정판)
 # -----------------------------------------------------------------------------
+# NOTE: 여기서는 import streamlit as st 를 다시 하지 않습니다. (상단 import 사용)
 st.set_page_config(page_title="발주 시스템", page_icon="📦", layout="wide")
+
 THEME = {
     "BORDER": "#e8e8e8",
-    "CARD": "background-color:#ffffff;border:1px solid #e8e8e8;border-radius:12px;padding:16px;",
     "PRIMARY": "#1C6758",
+    "BG": "#f7f8fa",
+    "CARD_BG": "#ffffff",
+    "TEXT": "#222",
+    "MUTED": "#777",
 }
 
-# -----------------------------------------------------------------------------
-# 최소 CSS 다듬기 (버튼/입력/탭/카드만 가볍게)
-# -----------------------------------------------------------------------------
+CARD_STYLE = (
+    f"background-color:{THEME['CARD_BG']};"
+    f"border:1px solid {THEME['BORDER']};"
+    f"border-radius:12px;padding:16px;"
+)
+
 st.markdown(f"""
 <style>
-/* 기본 타이포 살짝 선명하게 */
+/* 전체 배경/텍스트 */
 html, body, [data-testid="stAppViewContainer"] {{
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif;
-  color: #222;
+  background: {THEME['BG']};
+  color: {THEME['TEXT']};
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR",
+               "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "Helvetica Neue", Arial, sans-serif;
 }}
 
-.small {{font-size: 12px; color: #777;}}
+.small {{ font-size:12px; color:{THEME['MUTED']}; }}
 
-/* 카드: 그림자 아주 약하게 */
-.card {{ {THEME["CARD"]} box-shadow: 0 2px 8px rgba(0,0,0,0.03); }}
+.card {{ {CARD_STYLE} box-shadow: 0 2px 8px rgba(0,0,0,0.03); }}
+.card-tight {{ background:{THEME['CARD_BG']}; border:1px solid {THEME['BORDER']}; border-radius:12px; padding:12px; }}
 
-/* 하단 요약 바: 여백 살짝 줄임 */
-.sticky-bottom {{
-  position: sticky; bottom: 0; z-index: 999; {THEME["CARD"]} margin-top: 8px;
-  display: flex; align-items:center; justify-content: space-between; gap: 16px;
-}}
+.metric {{ font-weight:700; color:{THEME['PRIMARY']}; }}
 
-/* 메트릭 컬러 */
-.metric {{font-weight:700; color:{THEME["PRIMARY"]};}}
+.block-container {{ padding-top: 1.2rem; padding-bottom: 1.6rem; }}
 
-/* 로그인 중앙 정렬/크기 (원본 유지, 패딩/그림자만 미세 보정) */
-.login-wrap {{ display:flex; justify-content:center; }}
-.login-card {{ width: 320px; margin-top: 28px; padding: 18px; border:1px solid #e8e8e8; border-radius:12px; background:#fff; box-shadow: 0 2px 12px rgba(0,0,0,0.04); }}
-.login-card .stTextInput>div>div>input {{ width: 260px; height: 36px; }}
-.login-card .stButton>button {{ width: 260px; height: 36px; }}
-
-/* 로그인 타이틀 간격만 살짝 줄임 */
-.login-title {{ text-align:center; font-size: 26px; font-weight: 800; margin-top: 28px; }}
-
-/* 입력/버튼 공통: 테두리/라운드 정돈 */
-.stTextInput>div>div>input,
-.stNumberInput input,
-.stDateInput input {{
-  border:1px solid {THEME["BORDER"]} !important;
-  border-radius: 10px !important;
-}}
-
+/* 버튼/입력 공통 */
 .stButton>button {{
-  background: {THEME["PRIMARY"]};
+  background:{THEME['PRIMARY']};
   color:#fff;
-  border: 1px solid {THEME["PRIMARY"]};
-  border-radius: 10px;
+  border:1px solid {THEME['PRIMARY']};
+  border-radius:10px;
+  height:34px;   /* 버튼 살짝 줄임 */
 }}
 .stButton>button:hover {{ filter: brightness(0.95); }}
 
-/* 탭 간격 가독성 (원본 유지) */
+.stTextInput>div>div>input,
+.stNumberInput input,
+.stDateInput input {{
+  border:1px solid {THEME['BORDER']} !important;
+  border-radius:10px !important;
+  height:34px;   /* 입력박스 높이 축소 */
+}}
+
+/* 테이블 */
+.dataframe, .stDataFrame, .stTable {{
+  background:{THEME['CARD_BG']};
+  border-radius:12px;
+  border:1px solid {THEME['BORDER']};
+}}
+.dataframe td, .dataframe th {{ vertical-align: middle; }}
+
+/* 탭 간격/하이라이트 */
 div[data-baseweb="tab-list"] {{ gap: 8px; }}
-div[data-baseweb="tab"] {{ border:1px solid #e8e8e8; border-radius:10px; padding: 6px 10px; background:#fff; }}
-/* 기본 하이라이트 바 제거 → 탭이 이중표시되지 않게 */
+div[data-baseweb="tab"] {{
+  border:1px solid {THEME['BORDER']};
+  border-radius:10px; padding:6px 10px; background:#fff;
+}}
 div[data-baseweb="tab-highlight"] {{ display:none; }}
 
-/* 테이블 셀 간격/정렬 약간 정리 (숫자 우측정렬 느낌) */
-table td, table th {{ vertical-align: middle; }}
+/* 하단 고정 합계 바 */
+.sticky-bottom {{
+  position: sticky; bottom: 0; z-index: 999;
+  {CARD_STYLE}
+  margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:16px;
+}}
+
+/* 로그인 화면 (입력/버튼 크기 절반 수준으로 축소) */
+.login-wrap {{ display:flex; justify-content:center; }}
+.login-title {{ text-align:center; font-size:24px; font-weight:800; margin-top: 8px; }}
+.login-card {{
+  width: 300px;                 /* 320 → 300 */
+  margin-top: 16px; padding: 16px;
+  border:1px solid {THEME['BORDER']};
+  border-radius:12px; background:#fff; box-shadow: 0 4px 12px rgba(0,0,0,.04);
+}}
+.login-card .stTextInput>div>div>input {{ width: 220px; height: 32px; }}  /* 입력 폭/높이 축소 */
+.login-card .stButton>button {{ width: 220px; height: 32px; }}             /* 버튼 폭/높이 축소 */
+
+/* (선택) 로그인 백그라운드 이미지 — 필요 없으면 아래 두 블록 삭제 */
+:root {{ --login-bg-url: url('https://images.unsplash.com/photo-1542838686-73ae2c1c5c53?q=80&w=1920&auto=format'); }}
+.login-bg {{
+  min-height: 50vh;
+  background-image: var(--login-bg-url);
+  background-size: cover;
+  background-position: center;
+  border-radius: 12px;
+  border: 1px solid {THEME['BORDER']};
+}}
 </style>
 """, unsafe_allow_html=True)
 
+# --- 공용 작은 UI 유틸(그대로 유지) ---
+def fmt_num(x, decimals=0):
+    try:
+        if decimals == 0:
+            return f"{float(x):,.0f}"
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return "-"
+
+def section_title(title: str, subtitle: str = ""):
+    st.markdown(
+        f"""
+        <div class="card" style="padding:14px 16px;">
+          <div style="font-size:22px; font-weight:800; color:{THEME['TEXT']};">{title}</div>
+          {'<div class="small" style="margin-top:4px;">'+subtitle+'</div>' if subtitle else ''}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def info_chip(label: str, value: str):
+    st.markdown(
+        f"""<div class="card-tight" style="display:inline-flex; gap:8px; align-items:center; margin-right:8px;">
+                <span class="small" style="color:{THEME['MUTED']};">{label}</span>
+                <span class="metric">{value}</span>
+            </div>""",
+        unsafe_allow_html=True
+    )
+
+def card(html: str):
+    st.markdown(f"""<div class="card">{html}</div>""", unsafe_allow_html=True)
+
+def sticky_summary(left_html: str, right_html: str):
+    st.markdown(
+        f"""
+        <div class="sticky-bottom">
+            <div>{left_html}</div>
+            <div style="font-weight:700; color:{THEME['PRIMARY']};">{right_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # -----------------------------------------------------------------------------
