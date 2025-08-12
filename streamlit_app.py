@@ -79,98 +79,82 @@ def verify_password(uid: str, input_pw: str,
         return hash_password(uid, input_pw) == str(stored_hash).lower()
     return fallback_plain is not None and str(input_pw) == str(fallback_plain)
 
+# -------------------------
+# 강력 버전: users 로더 교체
+# -------------------------
+def _normalize_account(uid: str, payload: dict) -> dict:
+    pwd_plain = payload.get("password")
+    pwd_hash  = payload.get("password_hash")
+    name = str(payload.get("name", uid)).strip()
+    role = str(payload.get("role", "store")).strip().lower()
+    if not (pwd_plain or pwd_hash):
+        st.error(f"[users.{uid}]에 password 또는 password_hash가 필요합니다."); st.stop()
+    if role not in {"store", "admin"}:
+        st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
+    return {
+        "password": (str(pwd_plain) if pwd_plain is not None else None),
+        "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
+        "name": name, "role": role,
+    }
+
 def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
     """
-    users 섹션을 다음 모든 형태에서 안전하게 수집:
-      A) [users.jeondae] / [users.hq]  (dotted tables)
-      B) [users] 아래 inline-table   (jeondae={...} 형태)
-      C) [[users]]                    (list-of-tables)
-      D) (환경 이슈) 최상위에 'users.jeondae' 키들이 직접 존재하는 경우
+    시크릿 변경 없이 다음 케이스 모두 지원:
+      1) [users.jeondae], [users.hq] (너의 현재 구조)
+      2) [users] 아래에 { jeondae = {...}, hq = {...} }
+      3) [[users]] 리스트
+      4) (환경에 따라) 최상위에 'users.jeondae', 'users.hq' 키만 있는 경우
     """
     cleaned: Dict[str, Dict[str, str]] = {}
 
-    # 1) 기본 경로: st.secrets["users"] 가 dict라면 그 밑에서 수집
+    # (A) 표준 경로: [users] 가 dict인 경우
     users_root = st.secrets.get("users", None)
-    if isinstance(users_root, dict):
-        # A/B 모두 커버
+    if isinstance(users_root, dict) and users_root:
         for uid, payload in users_root.items():
-            if not isinstance(payload, dict):
-                continue
-            pwd_plain = payload.get("password")
-            pwd_hash  = payload.get("password_hash")
-            name = str(payload.get("name", uid)).strip()
-            role = str(payload.get("role", "store")).strip().lower()
-            if not (pwd_plain or pwd_hash):
-                st.error(f"[users.{uid}]에 password 또는 password_hash가 필요합니다."); st.stop()
-            if role not in {"store", "admin"}:
-                st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
-            cleaned[str(uid)] = {
-                "password": (str(pwd_plain) if pwd_plain is not None else None),
-                "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
-                "name": name, "role": role,
-            }
+            if isinstance(payload, dict):
+                cleaned[str(uid)] = _normalize_account(uid, payload)
 
-    # 2) 리스트 형태([[users]])
-    elif isinstance(st.secrets.get("users", None), list):
-        for row in st.secrets["users"]:
-            if not isinstance(row, dict): 
+    # (B) 리스트 경로: [[users]]
+    elif isinstance(users_root, list) and users_root:
+        for row in users_root:
+            if not isinstance(row, dict):
                 continue
             uid = row.get("user_id") or row.get("uid") or row.get("id")
-            if not uid: 
+            if not uid:
                 continue
-            pwd_plain = row.get("password")
-            pwd_hash  = row.get("password_hash")
-            name = str(row.get("name", uid)).strip()
-            role = str(row.get("role", "store")).strip().lower()
-            if not (pwd_plain or pwd_hash):
-                st.error(f"[[users]] 항목(user_id={uid})에 password 또는 password_hash가 필요합니다."); st.stop()
-            if role not in {"store","admin"}:
-                st.error(f"[[users]] 항목(user_id={uid})의 role 은 'store' 또는 'admin' 이어야 합니다."); st.stop()
-            cleaned[str(uid)] = {
-                "password": (str(pwd_plain) if pwd_plain is not None else None),
-                "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
-                "name": name, "role": role,
-            }
+            cleaned[str(uid)] = _normalize_account(uid, row)
 
-    # 3) 환경 이슈 대응: 최상위에 'users.jeondae' 키들이 직접 존재하는 경우
-    #    예) st.secrets contains keys: "users.jeondae", "users.hq"
-    else:
-        # st.secrets는 Mapping처럼 동작. 키를 훑어서 prefix 매칭
-        found_any = False
-        for k in list(st.secrets.keys()):
-            if not isinstance(k, str):
-                continue
-            if not k.startswith("users."):
-                continue
-            uid = k.split(".", 1)[1].strip()
-            payload = st.secrets.get(k, None)
-            if not uid or not isinstance(payload, dict):
-                continue
-            found_any = True
-            pwd_plain = payload.get("password")
-            pwd_hash  = payload.get("password_hash")
-            name = str(payload.get("name", uid)).strip()
-            role = str(payload.get("role", "store")).strip().lower()
-            if not (pwd_plain or pwd_hash):
-                st.error(f"[{k}]에 password 또는 password_hash가 필요합니다."); st.stop()
-            if role not in {"store","admin"}:
-                st.error(f"[{k}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})"); st.stop()
-            cleaned[str(uid)] = {
-                "password": (str(pwd_plain) if pwd_plain is not None else None),
-                "password_hash": (str(pwd_hash).lower() if pwd_hash is not None else None),
-                "name": name, "role": role,
-            }
-        if not found_any:
-            # 정말 아무 것도 못 찾은 경우만 에러
-            st.error("로그인 계정을 찾을 수 없습니다. Secrets 의 [users.jeondae], [users.hq] 구조를 확인하세요.")
-            st.stop()
+    # (C) 플랫 경로: 최상위에 'users.xxx' 키들만 존재하는 경우
+    if not cleaned:
+        # 1) 네가 실제로 쓰는 계정 키를 우선 직접 조회 (시크릿 변경 없이 확실하게)
+        for uid in ("jeondae", "hq"):
+            dotted_key = f"users.{uid}"
+            payload = st.secrets.get(dotted_key, None)
+            if isinstance(payload, dict):
+                cleaned[str(uid)] = _normalize_account(uid, payload)
+
+        # 2) 혹시 더 있는 경우를 위해, 가능한 한 폭넓게 수집 (keys()가 막혀있을 수 있어 try)
+        if not cleaned:
+            try:
+                # 일부 환경에서 st.secrets는 dict-like로 keys() 제공
+                for k in list(st.secrets.keys()):
+                    if isinstance(k, str) and k.startswith("users."):
+                        uid = k.split(".", 1)[1].strip()
+                        payload = st.secrets.get(k, None)
+                        if isinstance(payload, dict) and uid:
+                            cleaned[str(uid)] = _normalize_account(uid, payload)
+            except Exception:
+                # keys() 자체가 안 되면 위의 직접 조회로 충분 (현재 너의 케이스 커버)
+                pass
 
     if not cleaned:
-        st.error("[users]에 유효한 계정이 없습니다."); st.stop()
+        st.error("로그인 계정을 찾을 수 없습니다. Secrets 의 [users.jeondae], [users.hq] 구조를 확인하세요.")
+        st.stop()
     return cleaned
 
 # 전역 초기화
 USERS = load_users_from_secrets()
+
 
 # -----------------------------------------------------------------------------
 # 2) 상수/컬럼
