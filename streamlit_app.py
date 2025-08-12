@@ -132,16 +132,23 @@ def get_gs_client():
         st.warning(f"Google 인증 실패: {e}")
         return None
 
-# 스프레드시트 열기 (문서 키 또는 URL 필요)
-SPREADSHEET_KEY = st.secrets.get("SPREADSHEET_KEY", "")  # st.secrets에 키 저장
+# 스프레드시트 키 읽기 (최상위 또는 [google] 섹션 모두 지원)
+@st.cache_resource(show_spinner=False)
+def get_spreadsheet_key() -> str:
+    key = st.secrets.get("SPREADSHEET_KEY", "") or st.secrets.get("google", {}).get("SPREADSHEET_KEY", "")
+    if isinstance(key, str):
+        return key.strip()
+    return str(key).strip()
 
+# 스프레드시트 열기 (문서 키 필요)
 @st.cache_resource(show_spinner=False)
 def open_spreadsheet():
     gc = get_gs_client()
-    if not gc or not SPREADSHEET_KEY:
+    key = get_spreadsheet_key()
+    if not gc or not key:
         return None
     try:
-        sh = gc.open_by_key(SPREADSHEET_KEY)
+        sh = gc.open_by_key(key)
         return sh
     except Exception as e:
         st.error(f"스프레드시트 열기 실패: {e}")
@@ -455,7 +462,7 @@ def page_diagnostics():
 
     # 1) Secrets 존재 여부 표시
     secrets_google = st.secrets.get("google", {})
-    spreadsheet_key = st.secrets.get("SPREADSHEET_KEY", "")
+    spreadsheet_key = get_spreadsheet_key()
 
     with st.expander("Secrets 점검", expanded=True):
         col1, col2 = st.columns(2)
@@ -482,12 +489,14 @@ def page_diagnostics():
             st.error(f"인증 오류: {e}")
 
         try:
-            if auth_ok and spreadsheet_key:
+            if not spreadsheet_key:
+                st.warning("SPREADSHEET_KEY 미설정: Secrets에 최상위 또는 [google] 섹션에 SPREADSHEET_KEY를 넣어주세요.")
+            elif not auth_ok:
+                st.warning("인증 실패: 서비스계정 키(private_key) 포맷 또는 권한 문제")
+            else:
                 sh = open_spreadsheet()
                 open_ok = sh is not None
                 st.write("**스프레드시트 열기**:", "✅ 성공" if open_ok else "❌ 실패")
-            else:
-                st.warning("인증 실패 또는 SPREADSHEET_KEY 미설정")
         except Exception as e:
             st.error(f"문서 열기 오류: {e}")
 
