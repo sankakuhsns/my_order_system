@@ -447,6 +447,101 @@ def page_store(master_df: pd.DataFrame):
 
 
 # =============================================================================
+# 6.5) 연결 진단 패널 (Google Sheets)
+# =============================================================================
+
+def page_diagnostics():
+    st.subheader("🧪 연결 진단 (Google Sheets)")
+
+    # 1) Secrets 존재 여부 표시
+    secrets_google = st.secrets.get("google", {})
+    spreadsheet_key = st.secrets.get("SPREADSHEET_KEY", "")
+
+    with st.expander("Secrets 점검", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**SPREADSHEET_KEY**")
+            st.code(spreadsheet_key or "(비어 있음)")
+        with col2:
+            st.write("**client_email (서비스계정)**")
+            st.code(secrets_google.get("client_email", "(비어 있음)"))
+        st.caption("※ client_email이 스프레드시트 '공유'에 '편집자'로 추가되어 있어야 합니다. 일반 액세스는 '제한됨' 유지")
+
+    # 2) 인증 / 스프레드시트 열기 테스트
+    auth_ok = False
+    open_ok = False
+    gc = None
+    sh = None
+
+    with st.expander("인증 및 문서 열기 테스트", expanded=True):
+        try:
+            gc = get_gs_client()
+            auth_ok = gc is not None
+            st.write("**인증(gspread authorize)**:", "✅ 성공" if auth_ok else "❌ 실패")
+        except Exception as e:
+            st.error(f"인증 오류: {e}")
+
+        try:
+            if auth_ok and spreadsheet_key:
+                sh = open_spreadsheet()
+                open_ok = sh is not None
+                st.write("**스프레드시트 열기**:", "✅ 성공" if open_ok else "❌ 실패")
+            else:
+                st.warning("인증 실패 또는 SPREADSHEET_KEY 미설정")
+        except Exception as e:
+            st.error(f"문서 열기 오류: {e}")
+
+        if open_ok:
+            try:
+                worksheets = [ws.title for ws in sh.worksheets()]
+                st.write("**워크시트 목록**:", worksheets)
+                if SHEET_NAME_MASTER not in worksheets:
+                    st.warning(f"워크시트 '{SHEET_NAME_MASTER}' 가 없습니다.")
+                if SHEET_NAME_ORDERS not in worksheets:
+                    st.warning(f"워크시트 '{SHEET_NAME_ORDERS}' 가 없습니다.")
+            except Exception as e:
+                st.error(f"워크시트 조회 오류: {e}")
+
+    # 3) 읽기/쓰기 간단 테스트
+    with st.expander("읽기/쓰기 테스트", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("상품마스터 읽기 테스트"):
+                try:
+                    df = load_master_df()
+                    st.success(f"상품마스터 행수: {len(df)}")
+                    st.dataframe(df.head(10), use_container_width=True)
+                except Exception as e:
+                    st.error(f"상품마스터 로드 실패: {e}")
+        with c2:
+            if st.button("발주 시트에 테스트 행 쓰기"):
+                try:
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    test_row = [{
+                        "주문일시": now,
+                        "발주번호": "TEST-" + uuid.uuid4().hex[:6].upper(),
+                        "지점ID": "diagnostic",
+                        "지점명": "진단",
+                        "품목코드": "TEST",
+                        "품목명": "연결진단",
+                        "단위": "EA",
+                        "수량": 1,
+                        "비고": "진단패널에서 작성",
+                        "상태": "접수",
+                        "처리일시": "",
+                        "처리자": ""
+                    }]
+                    ok = append_orders(test_row)
+                    if ok:
+                        st.success("테스트 행 쓰기 성공 (발주 시트 확인하세요)")
+                    else:
+                        st.error("테스트 행 쓰기 실패: append_orders가 False를 반환")
+                except Exception as e:
+                    st.error(f"테스트 쓰기 오류: {e}")
+
+    st.caption("※ 테스트 행은 '발주' 시트에 기록됩니다. 필요 시 스프레드시트에서 삭제하세요.")
+
+# =============================================================================
 # 7) 본사/공장(관리) 화면
 # =============================================================================
 
@@ -537,12 +632,18 @@ if __name__ == "__main__":
     </div>
     """, unsafe_allow_html=True)
 
-    tabs = st.tabs(["발주", "관리자"])
+    tabs = st.tabs(["발주", "관리자", "진단"])
 
     with tabs[0]:
         page_store(master)
     with tabs[1]:
         if role == "admin":
             page_admin(master)
+        else:
+            st.info("관리자 권한이 필요합니다.")
+
+    with tabs[2]:
+        if role == "admin":
+            page_diagnostics()
         else:
             st.info("관리자 권한이 필요합니다.")
