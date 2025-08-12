@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# Streamlit 식자재 발주 시스템 (권한별 기능 분리)
-# - 지점(발주자): 발주 등록 / 발주 조회·변경 / 납품내역서 조회·다운로드(금액 숨김)
-# - 관리자: 주문관리·출고 / 출고 조회·변경 / 납품내역서 조회·다운로드(금액 표시) / 납품 품목 및 가격
+# Streamlit 식자재 발주 시스템 (권한·로그인 강화, 시트 편집 반영)
+# - 지점(발주자): 발주 등록 / 발주 조회·변경 / 납품내역서(금액 숨김)
+# - 관리자: 주문관리·출고 / 출고 조회·변경 / 납품내역서(금액 포함) / 납품 품목 및 가격(편집 저장)
 # - 저장: Google Sheets (미연결 시 로컬 CSV 백업)
 # =============================================================================
 
@@ -50,8 +50,11 @@ st.markdown(f"""
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
 ORDER_STATUSES = ["접수", "출고완료"]
+
 LOCAL_BACKUP_DIR = Path("local_backup"); LOCAL_BACKUP_DIR.mkdir(exist_ok=True)
 LOCAL_BACKUP_ORDERS = str(LOCAL_BACKUP_DIR / "orders_backup.csv")
+LOCAL_BACKUP_MASTER = str(LOCAL_BACKUP_DIR / "master_backup.csv")
+
 ORDERS_COLUMNS = ["주문일시","발주번호","지점ID","지점명","납품요청일",
                   "품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"]
 
@@ -131,12 +134,46 @@ def load_master_df() -> pd.DataFrame:
             {"품목코드":"P002","품목명":"대파","단위":"KG","분류":"채소","단가":15600},
             {"품목코드":"P003","품목명":"간장","단위":"L","분류":"조미료","단가":3500},
         ])
-    for c in ["품목코드","품목명","단위","분류","단가"]:
-        if c not in df.columns: df[c] = "" if c != "단가" else 0
+    for c in ["품목코드","품목명","단위","분류","단가","활성"]:
+        if c not in df.columns:
+            df[c] = (0 if c=="단가" else "")
+    # 활성 컬럼이 있으면 필터
     if "활성" in df.columns:
         act = df["활성"].astype(str).str.lower().isin(["1","true","y","yes"])
         df = df[act | df["활성"].isna()]
     return df
+
+def write_master_df(df: pd.DataFrame) -> bool:
+    """상품마스터를 시트에 저장(덮어쓰기)."""
+    sh = open_spreadsheet()
+    # 저장할 컬럼 순서(있으면 사용)
+    cols = [c for c in ["품목코드","품목명","분류","단위","단가","활성"] if c in df.columns]
+    if not cols:
+        st.error("저장할 컬럼을 찾을 수 없습니다.")
+        return False
+    df = df[cols].copy()
+
+    if sh:
+        try:
+            try: ws = sh.worksheet(SHEET_NAME_MASTER)
+            except Exception: ws = sh.add_worksheet(title=SHEET_NAME_MASTER, rows=1000, cols=25)
+            ws.clear()
+            # 헤더 + 데이터 한 번에 업데이트(성능 개선)
+            values = [cols] + df.fillna("").values.tolist()
+            ws.update("A1", values)
+            load_master_df.clear()
+            return True
+        except Exception as e:
+            st.warning(f"상품마스터 저장 실패(시트): {e}")
+
+    # 로컬 백업
+    try:
+        df.to_csv(LOCAL_BACKUP_MASTER, index=False, encoding="utf-8-sig")
+        load_master_df.clear()
+        return True
+    except Exception as e:
+        st.error(f"마스터 백업 저장 실패: {e}")
+        return False
 
 @st.cache_data(ttl=90)
 def load_orders_df() -> pd.DataFrame:
@@ -166,42 +203,24 @@ def write_orders_df(df: pd.DataFrame) -> bool:
     if sh:
         try:
             try: ws = sh.worksheet(SHEET_NAME_ORDERS)
-            except Exception: ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=1000, cols=25)
-            ws.clear(); ws.append_row(ORDERS_COLUMNS)
-            for _, row in df.iterrows():
-                ws.append_row([row.get(c,"") for c in ORDERS_COLUMNS])
+            except Exception: ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=2000, cols=25)
+            ws.clear()
+            values = [ORDERS_COLUMNS] + df.fillna("").values.tolist()
+            ws.update("A1", values)
             load_orders_df.clear()
             return True
         except Exception as e:
-            st.warning(f"시트 덮어쓰기 실패: {e}")
+            st.warning(f"발주 시트 저장 실패(시트): {e}")
     # 로컬 백업
     try:
         df.to_csv(LOCAL_BACKUP_ORDERS, index=False, encoding="utf-8-sig")
         load_orders_df.clear()
         return True
     except Exception as e:
-        st.error(f"백업 저장 실패: {e}")
+        st.error(f"발주 백업 저장 실패: {e}")
         return False
 
 def append_orders(rows: List[Dict[str, Any]]) -> bool:
-    sh = open_spreadsheet()
-    if sh:
-        try:
-            try: ws = sh.worksheet(SHEET_NAME_ORDERS)
-            except Exception: ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=1000, cols=25)
-            _ensure_orders_sheet_columns(ws)
-            for r in rows:
-                ws.append_row([
-                    r.get("주문일시",""), r.get("발주번호",""), r.get("지점ID",""), r.get("지점명",""),
-                    r.get("납품요청일",""),
-                    r.get("품목코드",""), r.get("품목명",""), r.get("단위",""), r.get("수량",0),
-                    r.get("비고",""), r.get("상태","접수"), r.get("처리일시",""), r.get("처리자","")
-                ])
-            load_orders_df.clear()
-            return True
-        except Exception as e:
-            st.warning(f"시트 기록 실패: {e}")
-    # 로컬 백업
     df_old = load_orders_df()
     df_new = pd.DataFrame(rows)[ORDERS_COLUMNS]
     df_all = pd.concat([df_old, df_new], ignore_index=True)
@@ -219,7 +238,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     return write_orders_df(df)
 
 # =============================================================================
-# 5) 인증/유틸
+# 5) 인증/유틸 (정식 로그인만 허용)
 # =============================================================================
 def make_order_id(store_id: str, seq: int) -> str:
     return f"{datetime.now():%Y%m%d-%H%M}-{store_id}-{seq:03d}"
@@ -228,22 +247,23 @@ def require_login():
     st.session_state.setdefault("auth", {})
     if st.session_state["auth"].get("login", False):
         return True
+
     st.header("🔐 로그인")
     if USERS_DF.empty:
-        st.info("secrets에 사용자 등록 시 로그인 활성화 (지금은 게스트 접근)")
-        if st.button("게스트로 계속"):
-            st.session_state["auth"] = {"login": True, "user_id": "guest", "name": "게스트", "role": "admin"}
-            st.rerun()
-        return False
+        st.error("로그인 계정이 없습니다. `secrets.toml`에 users 섹션을 등록하세요.")
+        st.stop()
+
     user_ids = USERS_DF["user_id"].tolist()
     c1,c2 = st.columns([2,1])
     with c1: uid = st.selectbox("아이디", user_ids, key="login_uid")
     with c2: pwd = st.text_input("비밀번호", type="password", key="login_pw")
+
     if st.button("로그인", use_container_width=True):
         row = USERS_DF[USERS_DF["user_id"] == uid].iloc[0]
         if str(pwd) == str(row["password"]):
             st.session_state["auth"] = {"login": True, "user_id": uid, "name": row["name"], "role": row["role"]}
-            st.success(f"{row['name']}님 환영합니다!"); st.rerun()
+            st.success(f"{row['name']}님 환영합니다!")
+            st.rerun()
         else:
             st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
     return False
@@ -263,15 +283,12 @@ def make_delivery_note_excel(df_note: pd.DataFrame, include_price: bool, title: 
     buf = BytesIO()
     cols = ["발주번호","주문일시","납품요청일","지점명","품목코드","품목명","단위","수량","비고","상태"]
     if include_price:
-        # 금액 포함 컬럼 추가
-        extra = [c for c in ["단가","금액"] if c in df_note.columns]
-        cols = cols + extra
-    export = df_note[cols].copy()
-    # 정렬
-    export = export.sort_values(["발주번호","품목코드"])
+        for c in ["단가","금액"]:
+            if c not in df_note.columns: df_note[c] = 0
+        cols += ["단가","금액"]
+    export = df_note[cols].copy().sort_values(["발주번호","품목코드"])
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         export.to_excel(writer, index=False, sheet_name="납품내역")
-        # 합계(행 하단)
         if include_price and "금액" in export.columns:
             ws = writer.sheets["납품내역"]
             last_row = len(export) + 1
@@ -360,7 +377,6 @@ def page_store_orders_change():
     user = st.session_state["auth"]
     if df.empty:
         st.info("발주 데이터가 없습니다."); return
-    # 본인 매장만
     df = df[df["지점ID"].astype(str) == user.get("user_id")]
     c1, c2 = st.columns(2)
     with c1:
@@ -381,7 +397,6 @@ def page_store_orders_change():
     editable = dfv[dfv["상태"]!="출고완료"].copy()
     if editable.empty:
         st.info("출고 전 상태의 발주가 없습니다."); return
-    # 수량/비고만 변경
     show_cols = ["발주번호","품목코드","품목명","단위","수량","비고"]
     edited = st.data_editor(
         editable[show_cols],
@@ -390,7 +405,6 @@ def page_store_orders_change():
     )
     if st.button("변경 내용 저장", type="primary"):
         base = df.copy()
-        # 발주번호 & 품목코드 기준으로 수량/비고 반영
         key_cols = ["발주번호","품목코드"]
         merged = base.merge(edited[key_cols+["수량","비고"]], on=key_cols, how="left", suffixes=("","_new"))
         base["수량"] = merged["수량_new"].combine_first(base["수량"])
@@ -405,7 +419,6 @@ def page_delivery_notes(master_df: pd.DataFrame, role: str):
     if df.empty:
         st.info("발주 데이터가 없습니다."); return
     user = st.session_state["auth"]
-    # 권한에 따른 범위
     if role != "admin":
         df = df[df["지점ID"].astype(str) == user.get("user_id")]
 
@@ -427,7 +440,6 @@ def page_delivery_notes(master_df: pd.DataFrame, role: str):
         mask &= (df["발주번호"]==target_order)
     dfv = df[mask].copy().sort_values(["발주번호","품목코드"])
 
-    # 관리자는 단가/금액 포함
     include_price = (role=="admin")
     df_note = merge_price(dfv, master_df) if include_price else dfv.copy()
     st.dataframe(df_note, use_container_width=True, height=420)
@@ -462,7 +474,7 @@ def page_admin_orders_manage(master_df: pd.DataFrame):
     if status: mask &= df["상태"].isin(status)
     dfv = df[mask].copy().sort_values(["주문일시","발주번호"])
 
-    # 관리자에겐 금액 포함 미리보기
+    # 금액 포함 미리보기
     dfv_price = merge_price(dfv, master_df)
     st.caption(f"조회 건수: {len(dfv):,}건")
     st.dataframe(dfv_price, use_container_width=True, height=420)
@@ -471,10 +483,12 @@ def page_admin_orders_manage(master_df: pd.DataFrame):
     st.download_button("CSV 다운로드", data=csv, file_name="orders_admin.csv", mime="text/csv")
 
     st.markdown("---")
-    st.markdown("**출고 처리**")
+    st.markdown("**출고 처리 (이미 출고완료된 발주번호는 목록에서 제외)**")
     if not dfv.empty:
-        order_ids = sorted(dfv["발주번호"].unique().tolist())
-        sel_ids = st.multiselect("발주번호 선택", order_ids, key="adm_pick_ids")
+        # ✅ 출고 대상: 현재 '접수' 상태인 발주번호만
+        candidates = dfv[dfv["상태"]=="접수"]["발주번호"].dropna().unique().tolist()
+        candidates = sorted(candidates)
+        sel_ids = st.multiselect("발주번호 선택", candidates, key="adm_pick_ids")
         if st.button("선택 발주 출고완료 처리", type="primary"):
             if sel_ids:
                 ok = update_order_status(sel_ids, new_status="출고완료",
@@ -504,7 +518,8 @@ def page_admin_shipments_change():
 
     st.markdown("---")
     st.markdown("**출고 상태 일괄 변경**")
-    order_ids = sorted(dfv["발주번호"].unique().tolist())
+    # 여기서는 전체 발주번호 선택 가능(필요 시 접수만으로 제한 가능)
+    order_ids = sorted(dfv["발주번호"].dropna().unique().tolist())
     target = st.multiselect("발주번호", order_ids, key="ship_change_ids")
     new_status = st.selectbox("새 상태", ORDER_STATUSES, index=0)
     if st.button("상태 변경 저장", type="primary"):
@@ -515,21 +530,45 @@ def page_admin_shipments_change():
         else: st.error("상태 변경 실패")
 
 def page_admin_items_price(master_df: pd.DataFrame):
-    st.subheader("🏷️ 납품 품목 및 가격 (마스터 조회)")
-    cols = [c for c in ["품목코드","품목명","분류","단위","단가"] if c in master_df.columns]
-    st.dataframe(master_df[cols], use_container_width=True, height=480)
-    st.download_button(
-        "마스터 CSV 다운로드",
-        data=master_df[cols].to_csv(index=False).encode("utf-8-sig"),
-        file_name="상품마스터.csv", mime="text/csv"
+    st.subheader("🏷️ 납품 품목 및 가격 설정 (시트 반영)")
+    # 편집 가능한 컬럼만 구성
+    base_cols = [c for c in ["품목코드","품목명","분류","단위","단가","활성"] if c in master_df.columns]
+    view = master_df[base_cols].copy()
+    st.caption("단가·활성(선택)을 수정 후 [변경사항 저장]을 누르면 상품마스터 시트에 반영됩니다.")
+    edited = st.data_editor(
+        view,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "단가": st.column_config.NumberColumn(min_value=0, step=1),
+            "활성": st.column_config.CheckboxColumn(),
+        },
+        key="master_editor"
     )
+    col_l, col_r = st.columns([1,3])
+    with col_l:
+        if st.button("변경사항 저장", type="primary"):
+            # 단가 정수 보정, 활성 값 정규화
+            if "단가" in edited.columns:
+                edited["단가"] = pd.to_numeric(edited["단가"], errors="coerce").fillna(0).astype(int)
+            if "활성" in edited.columns:
+                # True/False → 'TRUE'/'FALSE'로 저장해도 무방, 여기서는 그대로 저장
+                pass
+            ok = write_master_df(edited)
+            if ok:
+                st.success("상품마스터에 저장되었습니다.")
+                st.cache_data.clear()  # 캐시 전역 무효화(신속 반영)
+                st.rerun()
+            else:
+                st.error("저장 실패")
 
 # =============================================================================
 # 8) 라우팅
 # =============================================================================
 if __name__ == "__main__":
     st.title("📦 식자재 발주 시스템")
-    st.caption("권한별 메뉴 구성 · Google Sheets 연동 샘플")
+    st.caption("권한별 메뉴 구성 · 정식 로그인 · Google Sheets 연동")
 
     if not require_login():
         st.stop()
@@ -540,7 +579,7 @@ if __name__ == "__main__":
     st.markdown("""
     <div class="small">
     ※ 운영 전 <b>SPREADSHEET_KEY</b>, <b>secrets.users</b>, <b>secrets.google</b> 설정 필수.<br/>
-    ※ 지점은 금액이 보이지 않으며, 관리자는 단가/금액이 포함됩니다.
+    ※ 지점은 금액이 보이지 않으며, 관리자는 단가/금액을 볼 수 있고 ‘상품마스터’ 가격을 수정·저장할 수 있습니다.
     </div>
     """, unsafe_allow_html=True)
 
