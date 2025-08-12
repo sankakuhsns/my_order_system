@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# Streamlit 식자재 발주 시스템 (Cloud Secrets 전용)
+# Streamlit 식자재 발주 시스템 (Cloud Secrets 전용·로그인/시크릿 근본 정리)
 # - 지점(발주자): 발주 등록 / 발주 조회·변경 / 납품내역서(금액 숨김)
 # - 관리자: 주문관리·출고 / 출고 조회·변경 / 납품내역서(금액 포함) / 납품 품목 및 가격(편집 저장)
 # - 저장: Google Sheets (Streamlit Cloud Secrets 필수, 로컬 백업/게스트 진입 없음)
@@ -34,50 +34,43 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 1) 필수 Secrets 검증 (Cloud 전용)
+# 1) 시크릿 검증 (users만 선검증)
+#    요구 스키마: [users] 아래에 JSON 스타일 중첩
+#    예)
+#    [users]
+#    jeondae = { password = "jd", name = "전대점", role = "store" }
+#    hq      = { password = "dj", name = "본사(공장)", role = "admin" }
 # =============================================================================
-REQUIRED_GOOGLE_FIELDS = [
-    "type","project_id","private_key_id","private_key","client_email","client_id","SPREADSHEET_KEY"
-]
-
-def require_cloud_secrets() -> None:
-    """Streamlit Cloud의 Secrets 필수값을 검사하고, 없으면 중단한다."""
-    # users
-    users = st.secrets.get("users", {})
-    if not users or not isinstance(users, dict):
-        st.error("로그인 계정이 없습니다. Streamlit Cloud > **Settings → Secrets** 에 `[users]` 섹션을 등록하세요.")
+def _validate_users_secrets() -> Dict[str, Dict[str, str]]:
+    users = st.secrets.get("users", None)
+    if not isinstance(users, dict) or len(users) == 0:
+        st.error("로그인 계정이 없습니다. Streamlit Cloud → Settings → Secrets 에 [users] 섹션을 추가하세요.")
         st.caption("""예시:
-[users.jeondae]
-password = "store_pw"
-name = "전대점"
-role = "store"
-
-[users.hq]
-password = "admin_pw"
-name = "본사(공장)"
-role = "admin"
+[users]
+jeondae = { password = "jd", name = "전대점", role = "store" }
+hq      = { password = "dj", name = "본사(공장)", role = "admin" }
 """)
         st.stop()
 
-    # google
-    google = st.secrets.get("google", {})
-    missing = [k for k in REQUIRED_GOOGLE_FIELDS if k not in google or not str(google.get(k)).strip()]
-    if missing:
-        st.error("Google 연동 설정이 부족합니다. Streamlit Cloud > **Settings → Secrets** 의 `[google]` 섹션을 확인하세요.")
-        st.write("누락 항목:", ", ".join(missing))
-        st.caption("""핵심:
-[google]
-type = "service_account"
-project_id = "..."
-private_key_id = "..."
-private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-client_email = "...@....iam.gserviceaccount.com"
-client_id = "..."
-SPREADSHEET_KEY = "스프레드시트_키"
-""")
-        st.stop()
+    # 각 사용자 엔트리 기본 필드 검증
+    cleaned: Dict[str, Dict[str, str]] = {}
+    for uid, payload in users.items():
+        if not isinstance(payload, dict):
+            st.error(f"[users]의 '{uid}' 값이 객체가 아닙니다. JSON 스타일로 입력해야 합니다.")
+            st.stop()
+        pwd = str(payload.get("password", "")).strip()
+        name = str(payload.get("name", uid)).strip()
+        role = str(payload.get("role", "store")).strip().lower()
+        if not pwd:
+            st.error(f"[users.{uid}].password 가 비어있습니다.")
+            st.stop()
+        if role not in {"store","admin"}:
+            st.error(f"[users.{uid}].role 은 'store' 또는 'admin' 이어야 합니다. (현재: {role})")
+            st.stop()
+        cleaned[str(uid)] = {"password": pwd, "name": name, "role": role}
+    return cleaned
 
-require_cloud_secrets()
+USERS = _validate_users_secrets()
 
 # =============================================================================
 # 2) 상수/컬럼
@@ -89,19 +82,31 @@ ORDERS_COLUMNS = ["주문일시","발주번호","지점ID","지점명","납품�
                   "품목코드","품목명","단위","수량","비고","상태","처리일시","처리자"]
 
 # =============================================================================
-# 3) Google Sheets 클라이언트
+# 3) Google Sheets (지연 검증: 실제 접근 시에만 체크)
 # =============================================================================
+def _require_google_secrets():
+    google = st.secrets.get("google", {})
+    required = ["type","project_id","private_key_id","private_key","client_email","client_id","SPREADSHEET_KEY"]
+    missing = [k for k in required if not str(google.get(k, "")).strip()]
+    if missing:
+        st.error("Google 연동 설정이 부족합니다. Streamlit Cloud → Settings → Secrets 의 [google] 섹션을 확인하세요.")
+        st.write("누락 항목:", ", ".join(missing))
+        st.stop()
+    return google
+
 @st.cache_resource(show_spinner=False)
 def get_gs_client():
+    google = _require_google_secrets()
     creds = service_account.Credentials.from_service_account_info(
-        st.secrets["google"], scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+        google, scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
     )
     return gspread.authorize(creds)
 
 @st.cache_resource(show_spinner=False)
 def open_spreadsheet():
+    google = _require_google_secrets()
+    key = str(google["SPREADSHEET_KEY"]).strip()
     try:
-        key = str(st.secrets["google"]["SPREADSHEET_KEY"]).strip()
         return get_gs_client().open_by_key(key)
     except Exception as e:
         st.error(f"스프레드시트 열기 실패: {e}")
@@ -112,7 +117,7 @@ def open_spreadsheet():
 # =============================================================================
 @st.cache_data(ttl=180)
 def load_master_df() -> pd.DataFrame:
-    """상품마스터 로드 (없으면 샘플 표시)."""
+    """상품마스터 로드 (없으면 샘플로 표시만)."""
     try:
         ws = open_spreadsheet().worksheet(SHEET_NAME_MASTER)
         df = pd.DataFrame(ws.get_all_records())
@@ -127,22 +132,20 @@ def load_master_df() -> pd.DataFrame:
     for c in ["품목코드","품목명","단위","분류","단가","활성"]:
         if c not in df.columns:
             df[c] = (0 if c=="단가" else (True if c=="활성" else ""))
-    # 활성 필터
+    # 활성 필터(있을 때만)
     if "활성" in df.columns:
         mask = df["활성"].astype(str).str.lower().isin(["1","true","y","yes"])
         df = df[mask | df["활성"].isna()]
     return df
 
 def write_master_df(df: pd.DataFrame) -> bool:
-    """상품마스터 저장(덮어쓰기). 로컬 백업 없음."""
+    """상품마스터 저장(덮어쓰기)."""
     cols = [c for c in ["품목코드","품목명","분류","단위","단가","활성"] if c in df.columns]
     df = df[cols].copy()
     try:
         sh = open_spreadsheet()
-        try:
-            ws = sh.worksheet(SHEET_NAME_MASTER)
-        except Exception:
-            ws = sh.add_worksheet(title=SHEET_NAME_MASTER, rows=2000, cols=25)
+        try: ws = sh.worksheet(SHEET_NAME_MASTER)
+        except Exception: ws = sh.add_worksheet(title=SHEET_NAME_MASTER, rows=2000, cols=25)
         ws.clear()
         values = [cols] + df.fillna("").values.tolist()
         ws.update("A1", values)
@@ -165,10 +168,8 @@ def write_orders_df(df: pd.DataFrame) -> bool:
     df = df[ORDERS_COLUMNS].copy()
     try:
         sh = open_spreadsheet()
-        try:
-            ws = sh.worksheet(SHEET_NAME_ORDERS)
-        except Exception:
-            ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=5000, cols=25)
+        try: ws = sh.worksheet(SHEET_NAME_ORDERS)
+        except Exception: ws = sh.add_worksheet(title=SHEET_NAME_ORDERS, rows=5000, cols=25)
         ws.clear()
         values = [ORDERS_COLUMNS] + df.fillna("").values.tolist()
         ws.update("A1", values)
@@ -195,65 +196,28 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     return write_orders_df(df)
 
 # =============================================================================
-# 5) 로그인 (Cloud Secrets의 [users]만 허용)
+# 5) 로그인 (아이디 직접 입력 / [users] JSON만 지원)
 # =============================================================================
-def load_users_from_secrets() -> pd.DataFrame:
-    """
-    Streamlit Secrets의 [users]를 탄탄하게 로드:
-    - 도트 테이블: [users.jeondae] ... / [users.hq] ...
-    - 배열 테이블: [[users]] user_id="...", password="..." ...
-    """
-    rows = []
-    users_obj = st.secrets.get("users", None)
-
-    # 1) [users.jeondae] 같은 도트 테이블들 -> dict of dicts
-    if isinstance(users_obj, dict):
-        for user_id, payload in users_obj.items():
-            if isinstance(payload, dict):
-                rows.append({
-                    "user_id": str(user_id),
-                    "password": str(payload.get("password", "")),
-                    "name": payload.get("name", str(user_id)),
-                    "role": payload.get("role", "store"),
-                })
-
-    # 2) [[users]] 배열 테이블 -> list of dicts (fallback)
-    elif isinstance(users_obj, list):
-        for payload in users_obj:
-            if isinstance(payload, dict):
-                uid = payload.get("user_id") or payload.get("id") or payload.get("uid")
-                if not uid:
-                    continue
-                rows.append({
-                    "user_id": str(uid),
-                    "password": str(payload.get("password","")),
-                    "name": payload.get("name", str(uid)),
-                    "role": payload.get("role","store"),
-                })
-
-    return pd.DataFrame(rows)
-
-
-USERS_DF = load_users_from_secrets()
-
 def require_login():
     st.session_state.setdefault("auth", {})
     if st.session_state["auth"].get("login", False):
         return True
 
     st.header("🔐 로그인")
-    user_ids = USERS_DF["user_id"].tolist()
-    c1,c2 = st.columns([2,1])
-    with c1: uid = st.selectbox("아이디", user_ids, key="login_uid")
-    with c2: pwd = st.text_input("비밀번호", type="password", key="login_pw")
+    uid = st.text_input("아이디", key="login_uid")
+    pwd = st.text_input("비밀번호", type="password", key="login_pw")
 
     if st.button("로그인", use_container_width=True):
-        row = USERS_DF[USERS_DF["user_id"] == uid].iloc[0]
-        if str(pwd) == str(row["password"]):
-            st.session_state["auth"] = {"login": True, "user_id": uid, "name": row["name"], "role": row["role"]}
-            st.success(f"{row['name']}님 환영합니다!"); st.rerun()
-        else:
+        account = USERS.get(uid)
+        if not account:
             st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+            return False
+        if str(pwd) != str(account["password"]):
+            st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+            return False
+        st.session_state["auth"] = {"login": True, "user_id": uid, "name": account["name"], "role": account["role"]}
+        st.success(f"{account['name']}님 환영합니다!")
+        st.rerun()
     return False
 
 # =============================================================================
@@ -455,8 +419,7 @@ def page_admin_orders_manage(master_df: pd.DataFrame):
     if store != "(전체)": mask &= (df["지점명"]==store)
     if status: mask &= df["상태"].isin(status)
     dfv = df[mask].copy().sort_values(["주문일시","발주번호"])
-    # 금액 포함
-    dfv_price = merge_price(dfv, master_df)
+    dfv_price = merge_price(dfv, master_df)  # 금액 포함
     st.caption(f"조회 건수: {len(dfv):,}건")
     st.dataframe(dfv_price, use_container_width=True, height=420)
     st.download_button("CSV 다운로드", data=dfv_price.to_csv(index=False).encode("utf-8-sig"),
@@ -489,7 +452,7 @@ def page_admin_shipments_change():
     df["주문일시_dt"] = df["주문일시"].apply(_to_dt)
     mask = (df["주문일시_dt"].dt.date>=dt_from)&(df["주문일시_dt"].dt.date<=dt_to)
     dfv = df[mask].copy()
-    st.caption(f"조회 건수: {len(dfv):,}건")
+    st.caption(f"조회 건수: {len[dfv]:,}건")  # <- 오타 방지: len(dfv)
     st.dataframe(dfv.sort_values(["주문일시","발주번호"]), use_container_width=True, height=360)
     st.markdown("---")
     st.markdown("**출고 상태 일괄 변경**")
@@ -529,18 +492,6 @@ def page_admin_items_price(master_df: pd.DataFrame):
 # =============================================================================
 if __name__ == "__main__":
     st.title("📦 식자재 발주 시스템")
-
-    # ==================== [ 디버그 코드 1 ] ====================
-    # st.secrets의 전체 내용을 화면에 출력합니다.
-    # 앱을 배포한 후 이 부분을 가장 먼저 확인하세요.
-    with st.expander("🐞 st.secrets 내용 확인 (디버그용)"):
-        try:
-            st.json(st.secrets.to_dict())
-        except Exception as e:
-            st.error(f"st.secrets 내용을 표시하는 데 실패했습니다: {e}")
-            st.info("st.secrets가 비어있거나 형식이 잘못되었을 수 있습니다.")
-    # ==========================================================
-
     st.caption("Streamlit Cloud Secrets 전용 · Google Sheets 연동")
 
     if not require_login():
@@ -551,7 +502,7 @@ if __name__ == "__main__":
 
     st.markdown("""
     <div class="small">
-    ※ 이 앱은 <b>Streamlit Cloud Secrets</b>만 사용합니다. 로컬 secrets.toml/백업 기능은 포함되어 있지 않습니다.<br/>
+    ※ 이 앱은 <b>Streamlit Cloud Secrets</b>만 사용합니다. 로컬 secrets.toml/게스트/백업 기능은 포함되어 있지 않습니다.<br/>
     ※ 지점은 금액이 보이지 않고, 관리자는 단가/금액을 보며 ‘상품마스터’ 가격을 수정·저장할 수 있습니다.
     </div>
     """, unsafe_allow_html=True)
