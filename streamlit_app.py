@@ -161,10 +161,11 @@ def get_gs_client():
     google = _require_google_secrets()
     # private_key 문자열에 literal "\n"이 들어온 경우 실제 개행으로 치환
     pk = str(google.get("private_key", ""))
-    if "\n" in pk:
-        google = dict(google)
-        google["private_key"] = pk.replace("\n", "
-")
+    if "\\n" in pk:
+    google = dict(google)
+    # "\\n" 문자열을 실제 개행 문자("\n")로 변환
+    google["private_key"] = pk.replace("\\n", "\n")
+    
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
