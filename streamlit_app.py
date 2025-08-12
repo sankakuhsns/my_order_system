@@ -27,6 +27,7 @@
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, List, Optional
+from collections.abc import Mapping
 
 import hashlib
 import pandas as pd
@@ -62,12 +63,8 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 교체: users 로더 (시크릿 변경 없이 모든 케이스 강제 지원)
+# users 로더 (시크릿 변경 없이 모든 케이스 강제 지원)
 # ---------------------------------------------------------
-# >>> 교체 시작
-from typing import Dict
-from collections.abc import Mapping
-
 def _normalize_account(uid: str, payload: Mapping) -> dict:
     pwd_plain = payload.get("password")
     pwd_hash  = payload.get("password_hash")
@@ -149,7 +146,6 @@ def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
 
 # 전역 초기화
 USERS = load_users_from_secrets()
-# <<< 교체 끝
 
 # -----------------------------------------------------------------------------
 # 2) 상수/컬럼
@@ -293,8 +289,27 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     return write_orders_df(df)
 
 # -----------------------------------------------------------------------------
-# 5) 로그인 (아이디 또는 지점명으로 매칭)
+# 5) 로그인 (아이디 또는 지점명으로 매칭)  ++++ BUGFIX: verify_password 추가 ++++
 # -----------------------------------------------------------------------------
+def verify_password(uid: str, input_pw: str, stored_hash: Optional[str], fallback_plain: Optional[str]) -> bool:
+    """
+    비밀번호 비교 규칙:
+      - stored_hash 가 존재하면 sha256 해시 비교(접두사 'sha256$' 유무 상관없이 64자리 hex로 처리)
+      - 아니면 fallback_plain(평문)과 단순 비교
+    """
+    if stored_hash:
+        h = stored_hash.strip().lower()
+        if h.startswith("sha256$"):
+            h = h.split("$", 1)[1].strip()
+        try:
+            digest = hashlib.sha256(input_pw.encode()).hexdigest()
+        except Exception:
+            return False
+        return digest == h
+    if fallback_plain is not None:
+        return str(input_pw) == str(fallback_plain)
+    return False
+
 def _find_account(uid_or_name: str):
     """
     입력값이 'jeondae' 같은 아이디든, '전대점' 같은 지점명이든 모두 찾아줌.
