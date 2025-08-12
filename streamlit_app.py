@@ -198,15 +198,41 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
 # 5) 로그인 (Cloud Secrets의 [users]만 허용)
 # =============================================================================
 def load_users_from_secrets() -> pd.DataFrame:
+    """
+    Streamlit Secrets의 [users]를 탄탄하게 로드:
+    - 도트 테이블: [users.jeondae] ... / [users.hq] ...
+    - 배열 테이블: [[users]] user_id="...", password="..." ...
+    """
     rows = []
-    for uid, payload in st.secrets["users"].items():
-        rows.append({
-            "user_id": uid,
-            "password": payload.get("password",""),
-            "name": payload.get("name", uid),
-            "role": payload.get("role", "store"),
-        })
+    users_obj = st.secrets.get("users", None)
+
+    # 1) [users.jeondae] 같은 도트 테이블들 -> dict of dicts
+    if isinstance(users_obj, dict):
+        for user_id, payload in users_obj.items():
+            if isinstance(payload, dict):
+                rows.append({
+                    "user_id": str(user_id),
+                    "password": str(payload.get("password", "")),
+                    "name": payload.get("name", str(user_id)),
+                    "role": payload.get("role", "store"),
+                })
+
+    # 2) [[users]] 배열 테이블 -> list of dicts (fallback)
+    elif isinstance(users_obj, list):
+        for payload in users_obj:
+            if isinstance(payload, dict):
+                uid = payload.get("user_id") or payload.get("id") or payload.get("uid")
+                if not uid:
+                    continue
+                rows.append({
+                    "user_id": str(uid),
+                    "password": str(payload.get("password","")),
+                    "name": payload.get("name", str(uid)),
+                    "role": payload.get("role","store"),
+                })
+
     return pd.DataFrame(rows)
+
 
 USERS_DF = load_users_from_secrets()
 
