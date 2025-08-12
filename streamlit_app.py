@@ -64,9 +64,11 @@ st.markdown(f"""
 # ---------------------------------------------------------
 # 교체: users 로더 (시크릿 변경 없이 모든 케이스 강제 지원)
 # ---------------------------------------------------------
+# >>> 교체 시작
 from typing import Dict
+from collections.abc import Mapping
 
-def _normalize_account(uid: str, payload: dict) -> dict:
+def _normalize_account(uid: str, payload: Mapping) -> dict:
     pwd_plain = payload.get("password")
     pwd_hash  = payload.get("password_hash")
     name = str(payload.get("name", uid)).strip()
@@ -83,77 +85,71 @@ def _normalize_account(uid: str, payload: dict) -> dict:
 
 def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
     """
-    시크릿은 그대로 유지.
-    다음 모든 형태를 자동 인식:
-      1) [users.jeondae], [users.hq]  (dotted table)
-      2) [users] 아래 inline-table (jeondae = {...})
-      3) [[users]] list-of-tables
-      4) 최상위에 'users.jeondae' 키만 존재(일부 환경)
+    시크릿 포맷은 그대로 두고, 아래 모든 경우 지원:
+      1) [users.jeondae], [users.hq]  → st.secrets["users"] 가 AttrDict/Mapping
+      2) [users] 아래 inline-table    → st.secrets["users"] 가 Mapping
+      3) [[users]] list-of-tables     → st.secrets["users"] 가 list
+      4) (레어) 최상위 'users.xxx' 키들 → st.secrets keys 스캔
     """
     cleaned: Dict[str, Dict[str, str]] = {}
 
-    # 0) 가능한 한 dict로 강제 캐스팅 (열거 가능한 환경 우선)
-    secrets_map = None
-    try:
-        secrets_map = dict(st.secrets)  # 가능하면 전체 키 열거
-    except Exception:
-        secrets_map = None
-
-    # A) 표준 경로: [users] 가 dict
+    # A) 표준/권장: st.secrets["users"] 가 Mapping(AttrDict 포함)
     users_root = st.secrets.get("users", None)
-    if isinstance(users_root, dict) and users_root:
+    if isinstance(users_root, Mapping) and len(users_root) > 0:
         for uid, payload in users_root.items():
-            if isinstance(payload, dict):
-                cleaned[str(uid)] = _normalize_account(uid, payload)
+            if isinstance(payload, Mapping):
+                cleaned[str(uid)] = _normalize_account(str(uid), payload)
 
     # B) 리스트 경로: [[users]]
     elif isinstance(users_root, list) and users_root:
         for row in users_root:
-            if not isinstance(row, dict):
+            if not isinstance(row, Mapping):
                 continue
             uid = row.get("user_id") or row.get("uid") or row.get("id")
             if not uid:
                 continue
-            cleaned[str(uid)] = _normalize_account(uid, row)
+            cleaned[str(uid)] = _normalize_account(str(uid), row)
 
-    # C) 플랫 경로: 최상위에 'users.xxx' 키들만 존재
+    # C) 플랫 경로(최상위에 'users.xxx')
     if not cleaned:
-        # 1) 네가 실제 쓰는 키 2개를 직접 조회 (시크릿 변경 없이 확실히 잡기)
+        # 먼저 우리가 확실히 알고 있는 uid 시도
         for uid in ("jeondae", "hq"):
             dotted_key = f"users.{uid}"
             payload = st.secrets.get(dotted_key, None)
-            if isinstance(payload, dict):
-                cleaned[str(uid)] = _normalize_account(uid, payload)
+            if isinstance(payload, Mapping):
+                cleaned[str(uid)] = _normalize_account(str(uid), payload)
 
-        # 2) 혹시 더 있는 경우: 전체 키 열거 가능하면 prefix 스캔
-        if not cleaned and isinstance(secrets_map, dict):
-            for k, v in secrets_map.items():
-                if isinstance(k, str) and k.startswith("users.") and isinstance(v, dict):
-                    uid = k.split(".", 1)[1].strip()
-                    if uid:
-                        cleaned[str(uid)] = _normalize_account(uid, v)
+        # 전체 키 스캔 (가능한 환경에서만)
+        if not cleaned:
+            try:
+                for k, v in dict(st.secrets).items():
+                    if isinstance(k, str) and k.startswith("users.") and isinstance(v, Mapping):
+                        uid = k.split(".", 1)[1].strip()
+                        if uid:
+                            cleaned[str(uid)] = _normalize_account(uid, v)
+            except Exception:
+                pass
 
     if not cleaned:
-        # 디버그 보조: 민감값 없이 키만 보여주기
+        # 디버그(민감값 노출 없음)
         with st.expander("🔍 Secrets 진단 (민감값 비노출)"):
             try:
-                keys_preview = list(secrets_map.keys()) if isinstance(secrets_map, dict) else []
+                top_keys = list(dict(st.secrets).keys())
             except Exception:
-                keys_preview = []
+                top_keys = []
             st.write({
-                "has_users_section": isinstance(users_root, dict),
+                "has_users_section_as_mapping": isinstance(users_root, Mapping),
                 "users_section_type": type(users_root).__name__,
-                "top_level_keys": keys_preview[:50],  # 너무 길면 잘라서
-                "hint": "keys에 'users.jeondae' / 'users.hq' 가 보이면 플랫 경로 케이스입니다."
+                "top_level_keys": top_keys[:50],
             })
-        st.error("로그인 계정을 찾을 수 없습니다. Secrets 의 [users.jeondae], [users.hq] 구조는 유지한 채, 위 진단 정보를 확인하세요.")
+        st.error("로그인 계정을 찾을 수 없습니다. Secrets 의 [users.jeondae], [users.hq] 구조를 유지한 채 위 진단 정보를 확인하세요.")
         st.stop()
 
     return cleaned
 
 # 전역 초기화
 USERS = load_users_from_secrets()
-
+# <<< 교체 끝
 
 # -----------------------------------------------------------------------------
 # 2) 상수/컬럼
