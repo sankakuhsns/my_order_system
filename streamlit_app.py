@@ -237,16 +237,16 @@ def append_orders(rows: List[Dict[str, Any]]):
     df_old = pd.DataFrame()
     if os.path.exists(LOCAL_BACKUP_ORDERS):
         try:
-            df_old = pd.read_csv(LOCAL_BACKUP_ORDERS)
+            df_old = pd.read_csv(LOCAL_BACKUP_ORDERS, encoding="utf-8-sig")
         except Exception:
             df_old = pd.DataFrame()
     df_new = pd.DataFrame(rows)
     df_all = pd.concat([df_old, df_new], ignore_index=True)
     # 백업 디렉토리 보장 후 저장
-parent = os.path.dirname(LOCAL_BACKUP_ORDERS)
-if parent and not os.path.exists(parent):
-    os.makedirs(parent, exist_ok=True)
-df_all.to_csv(LOCAL_BACKUP_ORDERS, index=False, encoding="utf-8-sig")
+    parent = os.path.dirname(LOCAL_BACKUP_ORDERS)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent, exist_ok=True)
+    df_all.to_csv(LOCAL_BACKUP_ORDERS, index=False, encoding="utf-8-sig")
     load_orders_df.clear()
     return True
 
