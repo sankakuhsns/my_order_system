@@ -339,23 +339,45 @@ def _ensure_datetime_col(df: pd.DataFrame, src_col: str, dst_col: str = "주문�
     return df
 
 def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesIO:
+    """
+    발주/납품 내역 엑셀 생성 (합계 계산시 NaN 안전 처리)
+    """
     buf = BytesIO()
+
+    # 내보낼 컬럼 구성
     cols = ["발주번호","주문일시","납품요청일","지점명","품목코드","품목명","단위","수량","비고","상태"]
     if include_price:
         for c in ["단가","금액"]:
-            if c not in df_note.columns: df_note[c] = 0
+            if c not in df_note.columns:
+                df_note[c] = 0
         cols += ["단가","금액"]
+
     export = df_note[cols].copy().sort_values(["발주번호","품목코드"])
+
+    # ✅ 숫자형 보정 (NaN -> 0)
+    export["수량"] = pd.to_numeric(export.get("수량", 0), errors="coerce").fillna(0)
+    if include_price:
+        export["금액"] = pd.to_numeric(export.get("금액", 0), errors="coerce").fillna(0)
+
     with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
         export.to_excel(w, index=False, sheet_name="내역")
-        if include_price and "금액" in export.columns:
-            ws = w.sheets["내역"]
-            last = len(export) + 1
-            ws.write(last, export.columns.get_loc("수량"), "총 수량")
-            ws.write(last, export.columns.get_loc("수량")+1, int(export["수량"].sum()))
-            ws.write(last, export.columns.get_loc("금액")-1, "총 금액")
-            ws.write(last, export.columns.get_loc("금액"), int(export["금액"].sum()))
-    buf.seek(0); return buf
+        ws = w.sheets["내역"]
+
+        # 0-index 기준: 헤더(0) + 데이터(len(export)) → 합계 라인은 len(export)+1
+        last = len(export) + 1
+
+        # ✅ 합계도 NaN 없이 안전 계산
+        sum_qty = int(round(export["수량"].sum()))
+        ws.write(last, export.columns.get_loc("수량"), "총 수량")
+        ws.write(last, export.columns.get_loc("수량") + 1, sum_qty)
+
+        if include_price:
+            sum_amt = int(round(export["금액"].sum()))
+            ws.write(last, export.columns.get_loc("금액") - 1, "총 금액")
+            ws.write(last, export.columns.get_loc("금액"), sum_amt)
+
+    buf.seek(0)
+    return buf
 
 # =============================================================================
 # 7) 발주(지점) 화면
