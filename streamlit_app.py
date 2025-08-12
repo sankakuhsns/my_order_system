@@ -61,24 +61,6 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 1) Secrets: users 로더 (지금 포맷 고정 지원) + 해시/평문 로그인 호환
-# -----------------------------------------------------------------------------
-def _get_pepper() -> str:
-    """선택: [auth].PEPPER 보강 문자열(없어도 동작)."""
-    return str(st.secrets.get("auth", {}).get("PEPPER", ""))
-
-def hash_password(uid: str, password: str) -> str:
-    raw = (_get_pepper() + uid + ":" + password).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-def verify_password(uid: str, input_pw: str,
-                    stored_hash: Optional[str], fallback_plain: Optional[str]) -> bool:
-    """hash 우선, 없으면 평문 호환."""
-    if stored_hash:
-        return hash_password(uid, input_pw) == str(stored_hash).lower()
-    return fallback_plain is not None and str(input_pw) == str(fallback_plain)
-
 # -------------------------
 # 강력 버전: users 로더 교체
 # -------------------------
