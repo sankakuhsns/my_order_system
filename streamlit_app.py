@@ -142,9 +142,13 @@ ORDERS_COLUMNS = [
 # -----------------------------------------------------------------------------
 # 3) Google Sheets (실제 접근 시에만 검증)
 # -----------------------------------------------------------------------------
+
 def _require_google_secrets():
     google = st.secrets.get("google", {})
-    required = ["type","project_id","private_key_id","private_key","client_email","client_id","SPREADSHEET_KEY"]
+    # SPREADSHEET_KEY는 [google] 또는 루트 모두 허용 → 여기서는 필수 목록에서 제외
+    required = [
+        "type","project_id","private_key_id","private_key","client_email","client_id"
+    ]
     missing = [k for k in required if not str(google.get(k, "")).strip()]
     if missing:
         st.error("Google 연동 설정이 부족합니다. Streamlit Cloud → Settings → Secrets 의 [google] 섹션을 확인하세요.")
@@ -155,15 +159,27 @@ def _require_google_secrets():
 @st.cache_resource(show_spinner=False)
 def get_gs_client():
     google = _require_google_secrets()
-    creds = service_account.Credentials.from_service_account_info(
-        google, scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
-    )
+    # private_key 문자열에 literal "\n"이 들어온 경우 실제 개행으로 치환
+    pk = str(google.get("private_key", ""))
+    if "\n" in pk:
+        google = dict(google)
+        google["private_key"] = pk.replace("\n", "
+")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = service_account.Credentials.from_service_account_info(google, scopes=scopes)
     return gspread.authorize(creds)
 
 @st.cache_resource(show_spinner=False)
 def open_spreadsheet():
-    google = _require_google_secrets()
-    key = str(google["SPREADSHEET_KEY"]).strip()
+    # SPREADSHEET_KEY는 [google] 또는 루트 둘 중 어디에 있어도 허용
+    g = st.secrets.get("google", {})
+    key = str(g.get("SPREADSHEET_KEY") or st.secrets.get("SPREADSHEET_KEY", "")).strip()
+    if not key:
+        st.error("시크릿에 SPREADSHEET_KEY가 없습니다. [google].SPREADSHEET_KEY 또는 루트 SPREADSHEET_KEY 중 하나를 설정하세요.")
+        st.stop()
     try:
         return get_gs_client().open_by_key(key)
     except Exception as e:
@@ -245,6 +261,7 @@ def append_orders(rows: List[Dict[str, Any]]) -> bool:
     df_new = pd.DataFrame(rows)[ORDERS_COLUMNS]
     return write_orders_df(pd.concat([base, df_new], ignore_index=True))
 
+
 def update_order_status(selected_ids: List[str], new_status: str, handler: str) -> bool:
     df = load_orders_df().copy()
     if df.empty:
@@ -259,6 +276,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
 # -----------------------------------------------------------------------------
 # 5) 로그인
 # -----------------------------------------------------------------------------
+
 def _do_login(uid: str, pwd: str) -> bool:
     acct = USERS.get(uid)
     if not acct:
@@ -277,6 +295,7 @@ def _do_login(uid: str, pwd: str) -> bool:
     st.rerun()
     return True
 
+
 def require_login():
     st.session_state.setdefault("auth", {})
     if st.session_state["auth"].get("login", False):
@@ -291,8 +310,10 @@ def require_login():
 # -----------------------------------------------------------------------------
 # 6) 유틸
 # -----------------------------------------------------------------------------
+
 def make_order_id(store_id: str, seq: int) -> str:
     return f"{datetime.now():%Y%m%d-%H%M}-{store_id}-{seq:03d}"
+
 
 def merge_price(df_orders: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     if df_orders.empty: return df_orders.copy()
@@ -302,6 +323,7 @@ def merge_price(df_orders: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
     out["단가"] = pd.to_numeric(out["단가"], errors="coerce").fillna(0).astype(int)
     out["금액"] = (out["수량"] * out["단가"]).astype(int)
     return out
+
 
 def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesIO:
     """발주/납품 내역 엑셀 생성 공용"""
@@ -326,6 +348,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool) -> BytesI
 # -----------------------------------------------------------------------------
 # 7) 발주(지점) 화면
 # -----------------------------------------------------------------------------
+
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록,확인")
     l, m, r = st.columns([1,1,2])
@@ -396,6 +419,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if ok: st.success(f"발주가 접수되었습니다. 발주번호: {order_id}")
         else: st.error("발주 저장에 실패했습니다.")
 
+
 def page_store_orders_change():
     st.subheader("🧾 발주 조회,변경")
     df = load_orders_df().copy()
@@ -436,6 +460,7 @@ def page_store_orders_change():
         if ok: st.success("변경사항을 저장했습니다."); st.rerun()
         else: st.error("저장 실패")
 
+
 def page_store_order_form_download(master_df: pd.DataFrame):
     st.subheader("📑 발주서 조회,다운로드")
     df = load_orders_df().copy()
@@ -463,6 +488,7 @@ def page_store_order_form_download(master_df: pd.DataFrame):
                        file_name="발주서.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 발주 품목 가격 조회")
     cols = [c for c in ["품목코드","품목명","분류","단위","단가"] if c in master_df.columns]
@@ -471,6 +497,7 @@ def page_store_master_view(master_df: pd.DataFrame):
 # -----------------------------------------------------------------------------
 # 8) 관리자 화면
 # -----------------------------------------------------------------------------
+
 def page_admin_orders_manage(master_df: pd.DataFrame):
     st.subheader("🗂️ 주문 관리,출고확인")
     df = load_orders_df().copy()
@@ -511,6 +538,7 @@ def page_admin_orders_manage(master_df: pd.DataFrame):
             else:
                 st.warning("발주번호를 선택하세요.")
 
+
 def page_admin_shipments_change():
     st.subheader("🚚 출고내역 조회,상태변경")
     df = load_orders_df().copy()
@@ -539,6 +567,7 @@ def page_admin_shipments_change():
         if ok: st.success("상태 변경 완료"); st.rerun()
         else: st.error("상태 변경 실패")
 
+
 def page_admin_delivery_note(master_df: pd.DataFrame):
     st.subheader("📑 출고 내역서 조회, 다운로드")
     df = load_orders_df().copy()
@@ -564,6 +593,7 @@ def page_admin_delivery_note(master_df: pd.DataFrame):
     st.download_button("출고 내역서 엑셀 다운로드", data=buf.getvalue(),
                        file_name="출고내역서.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
 
 def page_admin_items_price(master_df: pd.DataFrame):
     st.subheader("🏷️ 납품 품목 가격 설정")
