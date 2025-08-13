@@ -619,7 +619,8 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *,
 
 # ──────────────────────────────────────────────
 # 🛒 발주(지점) 화면 — 누적 장바구니 + 단가 안정화
-#    + 수량 입력 안정화(편집성 개선) + 요청사항 박스 + 검색표 제거
+#    + 수량 입력 안정화 + 검색표 삭제 + 요청정보(납품선택/요청일/요청사항) 단일 박스
+#    + 수량 빠른 증감(±1/±5)
 # ──────────────────────────────────────────────
 
 # ── 장바구니 유틸 ──────────────────────────────
@@ -675,8 +676,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록 · 확인")
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
-    # ── [섹션] 납품 선택 ─────────────────────────────────────────
+    # ── [섹션] 납품 요청 정보(납품선택 + 요청일 + 요청사항) — 한 박스 ──
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
+    st.markdown("### 🗓️ 납품 요청 정보")
     c1, c2 = st.columns([1, 1])
     with c1:
         quick = st.radio("납품 선택", ["오늘", "내일", "직접선택"], horizontal=True, key="store_quick_radio")
@@ -686,10 +688,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             (date.today() + timedelta(days=1) if quick == "내일" else
              st.date_input("납품 요청일", value=date.today(), key="store_req_date"))
         )
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    # ── [섹션] 요청 사항 (독립 박스) ────────────────────────────
-    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     memo = st.text_area("요청 사항(선택)", key="store_req_memo", height=80, placeholder="예) 입고 시 얼음팩 추가 부탁드립니다.")
     st.markdown("</div></div>", unsafe_allow_html=True)
 
@@ -720,16 +718,16 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         )]
     if "분류" in df_master.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
-    st.markdown("</div></div>", unsafe_allow_html=True)  # ← 미리보기 표는 삭제
+    st.markdown("</div></div>", unsafe_allow_html=True)  # ← 미리보기 표는 제거
 
-    # ── [섹션] 2) 발주 수량 입력 (수량 편집 안정화) ─────────────
+    # ── [섹션] 2) 발주 수량 입력 (수량 안정 + 빠른 증감 버튼 포함) ─────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 2) 발주 수량 입력")
 
-    # 표시용 에디터 DF: 단가 텍스트, 수량은 float(편집 안정)
+    # 표시용 에디터 DF: 단가(원) 텍스트, 수량은 float(편집 안정)
     df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
     df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
-    df_edit_disp["수량"] = 0.0  # float로 시작 → 입력 안정
+    df_edit_disp["수량"] = 0.0  # float 시작 → 입력 안정
     editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
 
     with st.form(key="store_order_form", clear_on_submit=False):
@@ -749,6 +747,35 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             height=360,
             key=editor_key,
         )
+
+        # ── 빠른 증감: 선택한 품목코드에 대해 ±1/±5 ──
+        st.markdown("**빠른 증감(수량):**")
+        adj_col1, adj_col2 = st.columns([2,1])
+        with adj_col1:
+            # 현재 에디터에 표시중인 품목코드 목록으로 선택
+            editor_now = st.session_state.get(editor_key, df_edit_disp[["품목코드","수량"]])
+            code_list = editor_now["품목코드"].tolist() if "품목코드" in editor_now else df_edit_disp["품목코드"].tolist()
+            target_codes = st.multiselect("대상 품목코드 선택", options=code_list)
+        with adj_col2:
+            a1, a2, a3, a4 = st.columns(4)
+            do_p1 = a1.form_submit_button("+1")
+            do_p5 = a2.form_submit_button("+5")
+            do_m1 = a3.form_submit_button("-1")
+            do_m5 = a4.form_submit_button("-5")
+
+        # 증감 로직: 에디터 DF를 직접 갱신
+        if (do_p1 or do_p5 or do_m1 or do_m5) and target_codes:
+            cur = st.session_state.get(editor_key, df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]].copy()).copy()
+            if not isinstance(cur, pd.DataFrame):
+                cur = df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]].copy()
+            step = (1 if (do_p1 or do_m1) else 5)
+            sign = (1 if (do_p1 or do_p5) else -1)
+            cur.loc[cur["품목코드"].isin(target_codes), "수량"] = (
+                pd.to_numeric(cur.loc[cur["품목코드"].isin(target_codes), "수량"], errors="coerce").fillna(0).astype(float) + sign*step
+            ).clip(lower=0)
+            st.session_state[editor_key] = cur  # 에디터 내용 갱신
+
+        # 장바구니 반영/초기화 버튼
         col_btn1, col_btn2 = st.columns([1,1])
         with col_btn1:
             submitted_add = st.form_submit_button("장바구니 반영", use_container_width=True)
@@ -757,7 +784,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 
     # 장바구니 반영 (df_view로 재조인하여 숫자 단가 복원)
     if isinstance(edited_disp, pd.DataFrame) and (submitted_add or submitted_add_clear):
-        tmp = edited_disp[["품목코드","수량"]].copy()
+        # 최신 에디터 상태에서 수량 취득
+        curr_df = st.session_state.get(editor_key, edited_disp).copy()
+        tmp = curr_df[["품목코드","수량"]].copy()
         tmp["수량"] = pd.to_numeric(tmp["수량"], errors="coerce").fillna(0).astype(int)
         tmp = tmp[tmp["수량"] > 0]
         if tmp.empty:
@@ -792,7 +821,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                     "품목명":   st.column_config.TextColumn(label="품목명"),
                     "단위":     st.column_config.TextColumn(label="단위"),
                 },
-                disabled=["품목코드","품목명","단위","단가","총금액"],  # 장바구니에선 수량만 수정
+                disabled=["품목코드","품목명","단위","단가","총금액"],  # 장바구니 수량만 수정
                 hide_index=True,
                 use_container_width=True,
                 height=300,
