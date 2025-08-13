@@ -135,7 +135,7 @@ div[data-baseweb="tab-list"] {{ gap: 8px; margin-top: 6px; margin-bottom: 14px; 
 
 /* 앱 본문을 가운데로 (최대폭 1200px) */
 [data-testid="stAppViewContainer"] .main .block-container {{
-  max-width: 1200px;
+  max-width: 1000px;
   margin: 0 auto;
 }}
 
