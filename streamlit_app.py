@@ -876,7 +876,7 @@ def page_store_master_view(master_df: pd.DataFrame):
 
     st.dataframe(
         view, use_container_width=True, height=480,
-        column_config={"단가": st.column_config.NumberColumn(, format="%,d")}
+        column_config={"단가": st.column_config.NumberColumn(format="%,d")}
     )
 
 
