@@ -104,7 +104,14 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 
 /* 로그인 화면 (입력/버튼 크기 절반 수준으로 축소) */
 .login-wrap {{ display:flex; justify-content:center; }}
-.login-title {{ text-align:center; font-size:24px; font-weight:800; margin-top: 8px; }}
+/* 로그인 제목: 더 크게 + 여백 보강 */
+.login-title {
+  text-align: center;
+  font-size: 36px;     /* 24px → 36px */
+  font-weight: 800;
+  margin-top: 16px;    /* 8px → 16px */
+  margin-bottom: 12px; /* 추가: 제목 아래 공간 */
+}
 .login-card {{
   width: 300px;                 /* 320 → 300 */
   margin-top: 16px; padding: 16px;
@@ -441,22 +448,27 @@ def require_login():
     if st.session_state["auth"].get("login", False):
         return True
 
-    # 상단 제목 (로그인 전에는 타이틀만)
+    # ⬇️ 로그인 화면 상단 여백(뷰포트 기준) — 잘림 방지
+    st.markdown("<div style='height:8vh'></div>", unsafe_allow_html=True)
+
+    # 제목(글자 크게, 아래에 약간 공간)
     st.markdown('<div class="login-title">식자재 발주 시스템</div>', unsafe_allow_html=True)
 
-    # 가운데 좁은 컬럼에 폼 배치 → 입력/버튼이 과하게 넓어지는 현상 방지
+    # 제목과 폼 사이도 살짝 띄우기
+    st.markdown("<div style='height:1vh'></div>", unsafe_allow_html=True)
+
+    # 가운데 좁은 컬럼에 폼 배치 → 위젯 폭 과다 방지
     left, mid, right = st.columns([3, 2, 3], vertical_alignment="center")
     with mid:
         with st.form("login_form", clear_on_submit=False):
             uid = st.text_input("아이디 또는 지점명", key="login_uid", placeholder="예: jeondae / 전대점")
             pwd = st.text_input("비밀번호", type="password", key="login_pw")
-            submitted = st.form_submit_button("로그인", use_container_width=True)  # 버튼 가로 정렬 깔끔
+            submitted = st.form_submit_button("로그인", use_container_width=True)
 
         if submitted:
             _do_login(uid, pwd)
 
     return False
-
 
 # =============================================================================
 # 6) 유틸
