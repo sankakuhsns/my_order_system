@@ -627,7 +627,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
     # ── [섹션] 납품 선택 ─────────────────────────────────────────
-    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1,1,2])
     with c1:
         quick = st.radio("납품 선택", ["오늘","내일","직접선택"], horizontal=True, key="store_quick_radio")
