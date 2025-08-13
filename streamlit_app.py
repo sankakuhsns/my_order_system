@@ -685,13 +685,13 @@ def _clear_cart():
 def page_store_register_confirm(master_df: pd.DataFrame):
     _ensure_cart()
     st.session_state.setdefault("store_editor_ver", 0)
-    st.session_state.setdefault("cart_selected_codes", [])
+    st.session_state.setdefault("cart_selected_codes", [])  # 체크박스 선택 상태 유지
 
-    # 상단 제목
+    # 제목
     st.subheader("🛒 발주 등록 · 확인")
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
-    # ── [1] 납품 요청 정보 ──
+    # [1] 납품 요청 정보 (제목과 내용 모두 박스 안)
     with st.container(border=True):
         st.markdown("### 🗓️ 납품 요청 정보")
         c1, c2 = st.columns([1, 1])
@@ -705,11 +705,11 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             )
         memo = st.text_area("요청 사항(선택)", key="store_req_memo", height=80, placeholder="예) 입고 시 얼음팩 추가 부탁드립니다.")
 
-    # 마스터 정규화
+    # 마스터 정규화(단가 int)
     df_master = master_df.copy()
     df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
-    # ── [2] 발주 수량 입력 (검색 + 표, 버튼 1개) ──
+    # [2] 발주 수량 입력 (검색 + 표, 버튼 하나만)
     with st.container(border=True):
         st.markdown("### 🧾 발주 수량 입력")
         l, r = st.columns([2, 1])
@@ -722,16 +722,17 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             else:
                 cat_sel = "(전체)"
 
+        # 필터링
         df_view = df_master
         if keyword:
             q = keyword.strip().lower()
             df_view = df_view[df_view.apply(
-                lambda row: q in str(row.get("품목명","")).lower()
-                         or q in str(row.get("품목코드","")).lower(), axis=1)]
+                lambda row: q in str(row.get("품목명", "")).lower()
+                         or q in str(row.get("품목코드", "")).lower(), axis=1)]
         if "분류" in df_master.columns and cat_sel != "(전체)":
             df_view = df_view[df_view["분류"] == cat_sel]
 
-        # 표시용 에디터: 단가는 텍스트, 수량만 입력
+        # 수량 입력 표(단가는 텍스트로 표시, 실제 계산은 재조인)
         df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
         df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
         df_edit_disp["수량"] = 0.0
@@ -750,6 +751,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 disabled=["품목코드","품목명","단위","단가(원)"],
                 hide_index=True, use_container_width=True, num_rows="fixed", height=360, key=editor_key,
             )
+            # 버튼 하나만 유지
             submitted_add_clear = st.form_submit_button("장바구니 반영 후 입력값 초기화", use_container_width=True)
 
         if isinstance(edited_disp, pd.DataFrame) and submitted_add_clear:
@@ -764,21 +766,19 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
                 _add_to_cart(tmp)  # 품목코드 기준 누적
                 st.success("장바구니에 반영되었습니다.")
-                st.session_state["store_editor_ver"] += 1  # 에디터 초기화
-                st.rerun()
+                st.session_state["store_editor_ver"] += 1  # 에디터 초기화(다음 rerun에서 반영)
 
-    # ── [3] 장바구니 (체크박스 열 + 오토세이브) ──
+    # [3] 장바구니 (체크박스 열 + 자동 정규화/재계산, 저장버튼 없음)
     with st.container(border=True):
         st.markdown("### 🧺 장바구니")
 
         cart = _coerce_price_qty(st.session_state["cart"]).copy()
         if not cart.empty:
-            # 체크박스 열 추가(선택 상태 복원)
+            # 체크박스 열 준비(선택 상태 유지)
+            selected_set = set(map(str, st.session_state.get("cart_selected_codes", [])))
             cart_disp = cart.copy()
-            cart_disp.insert(0, "선택", False)
-            if st.session_state["cart_selected_codes"]:
-                cart_disp.loc[cart_disp["품목코드"].isin(st.session_state["cart_selected_codes"]), "선택"] = True
-
+            cart_disp.insert(0, "선택", cart_disp["품목코드"].astype(str).isin(selected_set))
+            # 편집 가능한 컬럼: '선택', '수량'만
             cart_view = st.data_editor(
                 cart_disp[["선택","품목코드","품목명","단위","수량","단가","총금액"]],
                 column_config={
@@ -790,43 +790,44 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                     "품목명":   st.column_config.TextColumn(label="품목명"),
                     "단위":     st.column_config.TextColumn(label="단위"),
                 },
-                disabled=["품목코드","품목명","단위","단가","총금액"],  # 수량과 선택만 편집
+                disabled=["품목코드","품목명","단위","단가","총금액"],  # ← 수량/선택만 수정 허용
                 hide_index=True, use_container_width=True, height=320, key="cart_editor_live",
             )
 
-            # ★ 타입 정규화/재계산(오토세이브) + 선택 상태 갱신
+            # ── 오토세이브: 타입 정규화 + 총금액 재계산 + 0수량 제거 ──
+            # 선택된 코드 업데이트(체크박스 반영)
             try:
-                sel_codes = cart_view.loc[cart_view["선택"] == True, "품목코드"].astype(str).tolist()
+                st.session_state["cart_selected_codes"] = (
+                    cart_view.loc[cart_view["선택"] == True, "품목코드"].astype(str).tolist()
+                )
             except Exception:
-                sel_codes = []
-            st.session_state["cart_selected_codes"] = sel_codes
+                st.session_state["cart_selected_codes"] = []
 
             updated = cart_view.drop(columns=["선택"], errors="ignore").copy()
-            updated = _coerce_price_qty(updated)                 # ← 수량/단가를 int로, 총금액 재계산
-            updated = updated[updated["수량"] > 0]               # ← 0 수량 제거
+            updated = _coerce_price_qty(updated)         # 수량/단가 int 강제 + 총금액 재계산
+            updated = updated[updated["수량"] > 0]       # 0 수량 행 제거
             st.session_state["cart"] = updated[["품목코드","품목명","단위","단가","수량","총금액"]]
 
-            # 버튼: 선택 삭제 / 전체 선택/해제 / 비우기
+            # 삭제/전체선택/비우기 (추가 rerun 호출 없이 버튼 자체 rerun만 사용)
             col_a, col_b, col_c = st.columns([1,1,1])
             with col_a:
                 if st.button("선택 삭제", use_container_width=True, key="btn_delete_selected"):
                     _remove_from_cart(st.session_state.get("cart_selected_codes", []))
                     st.session_state["cart_selected_codes"] = []
-                    st.rerun()
             with col_b:
-                if st.button("전체 선택/해제", use_container_width=True, key="btn_toggle_all"):
-                    if len(st.session_state.get("cart_selected_codes", [])) < len(st.session_state["cart"]):
-                        st.session_state["cart_selected_codes"] = st.session_state["cart"]["품목코드"].astype(str).tolist()
-                    else:
-                        st.session_state["cart_selected_codes"] = []
-                    st.rerun()
+                # 전체 선택/해제 토글
+                all_codes = st.session_state["cart"]["품목코드"].astype(str).tolist()
+                already_all = set(st.session_state.get("cart_selected_codes", [])) == set(all_codes) and len(all_codes) > 0
+                toggle_label = "전체 해제" if already_all else "전체 선택"
+                if st.button(toggle_label, use_container_width=True, key="btn_toggle_all"):
+                    st.session_state["cart_selected_codes"] = [] if already_all else all_codes
             with col_c:
                 if st.button("장바구니 비우기", use_container_width=True, key="btn_clear_cart"):
-                    _clear_cart(); st.session_state["cart_selected_codes"] = []; st.rerun()
+                    _clear_cart(); st.session_state["cart_selected_codes"] = []
         else:
             st.info("장바구니가 비어 있습니다.")
 
-    # ── 합계 바(장바구니 박스 밖) ──
+    # 합계 바(장바구니 박스 밖)
     cart_now = _coerce_price_qty(st.session_state["cart"])
     total_items = len(cart_now)
     total_qty   = int(cart_now["수량"].sum())   if not cart_now.empty else 0
@@ -845,7 +846,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     # 래퍼 종료
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── 제출 ──
+    # 제출
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False, key="store_confirm_chk")
     if st.button("📦 발주 제출", type="primary", use_container_width=True, key="store_submit_btn"):
         if total_items == 0:
@@ -875,6 +876,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             _clear_cart(); st.session_state["cart_selected_codes"] = []
         else:
             st.error("발주 저장에 실패했습니다.")
+
 
 # =============================================================================
 # 8) 발주 조회·변경 — 정리본
