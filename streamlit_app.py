@@ -186,6 +186,10 @@ button[role="tab"][aria-selected="true"] {{
   margin-top: 12px;
   margin-bottom: 12px;
 }}
+
+.tabs-spacer {{ height: 10px; }}
+
+
 </style>
 """, unsafe_allow_html=True)
 
