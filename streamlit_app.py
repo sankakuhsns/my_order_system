@@ -605,29 +605,28 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *,
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록 · 확인")
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 
-    # ---- 검색 영역 (가운데 폭 축소) ----
-    left, mid, right = st.columns([1, 5, 1])
-    with mid:
-        card("<b>납품 선택</b>")
-        c1, c2, c3 = st.columns([1,1,2])
-        with c1:
-            quick = st.radio("납품 선택", ["오늘","내일","직접선택"], horizontal=True, key="store_quick_radio")
-        with c2:
-            납품요청일 = (
-                date.today() if quick=="오늘" else
-                (date.today()+timedelta(days=1) if quick=="내일" else
-                 st.date_input("납품 요청일", value=date.today(), key="store_req_date"))
-            )
-        with c3:
-            memo = st.text_input("요청 사항(선택)", key="store_req_memo")
+    # 가운데 좁은 래퍼 시작
+    st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)  # /section-card
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    # ── [섹션] 납품 선택 ─────────────────────────────────────────
+    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1,1,2])
+    with c1:
+        quick = st.radio("납품 선택", ["오늘","내일","직접선택"], horizontal=True, key="store_quick_radio")
+    with c2:
+        납품요청일 = (
+            date.today() if quick=="오늘" else
+            (date.today()+timedelta(days=1) if quick=="내일" else
+             st.date_input("납품 요청일", value=date.today(), key="store_req_date"))
+        )
+    with c3:
+        memo = st.text_input("요청 사항(선택)", key="store_req_memo")
+    st.markdown("</div></div>", unsafe_allow_html=True)  # /box /section
 
-    # ---- 1) 발주 품목 검색 (가운데, 표에 '단가(원)' 표시) ----
-    card("<h3>1) 발주 품목 검색</h3>")
+    # ── [섹션] 1) 발주 품목 검색 ────────────────────────────────
+    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
+    st.markdown("### 1) 발주 품목 검색")
     l, r = st.columns([2,1])
     with l: keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
     with r:
@@ -645,66 +644,63 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     if "분류" in master_df.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
 
+    # 단가 숫자형 + 콤마 표기용 컬럼
     df_view["단가"] = pd.to_numeric(df_view.get("단가", 0), errors="coerce").fillna(0).astype(int)
-
     df_preview = df_view.copy()
     df_preview["단가(원)"] = df_preview["단가"].map(lambda v: f"{v:,.0f}")
+
     preview_cols = [c for c in ["품목코드","품목명","분류","단위","단가(원)"] if c in df_preview.columns]
     st.dataframe(df_preview[preview_cols].reset_index(drop=True),
                  use_container_width=True, height=260)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-
-    # ---- 2) 발주 수량 입력 (가운데, 수량 UI 가독성↑) ----
-    card("<h3>2) 발주 수량 입력</h3>")
+    # ── [섹션] 2) 발주 수량 입력 ────────────────────────────────
+    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
+    st.markdown("### 2) 발주 수량 입력")
     with st.form(key="store_order_form", clear_on_submit=False):
-        # 편집 데이터 (단가 숫자형 유지, 라벨 '단가')
-        df_edit = df_view[["품목코드","품목명","단위"]].copy()
-        df_edit["단가"] = df_view["단가"]
+        edit_cols = [c for c in ["품목코드","품목명","단위"] if c in df_view.columns]
+        df_edit = df_view[edit_cols].copy()
+        df_edit["단가"] = df_view["단가"]          # 숫자형 유지
         df_edit["수량"] = 0
 
         edited = st.data_editor(
             df_edit,
-            disabled=["품목코드","품목명","단위","단가"],
+            disabled=edit_cols+["단가"],
             column_config={
-                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1, help="기준 단가"),
-                # 눈에 잘 띄도록 자리수/스텝 지정
+                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
                 "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
             },
             use_container_width=True, num_rows="fixed", hide_index=True, height=360,
             key="store_order_editor"
         )
+        submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
-        # 폼 버튼은 가운데 폭에서 좌우로 늘어나지 않게
-        _, mid_btn, _ = st.columns([2,1,2])
-        with mid_btn:
-            submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-
-    # ---- 3) 발주 입력 내역 (라벨: 단가/총금액) ----
-    card("<h3>3) 발주 입력 내역</h3>")
-    sel_df = edited[edited["수량"].fillna(0).astype(float) > 0].copy() if isinstance(edited, pd.DataFrame) else pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량"])
+    # ── [섹션] 3) 발주 입력 내역 ────────────────────────────────
+    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
+    st.markdown("### 3) 발주 입력 내역")
+    sel_df = edited[edited["수량"].fillna(0).astype(float) > 0].copy() \
+             if isinstance(edited, pd.DataFrame) else \
+             pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량"])
     if not sel_df.empty:
         sel_df["단가"] = pd.to_numeric(sel_df["단가"], errors="coerce").fillna(0).astype(int)
         sel_df["수량"] = pd.to_numeric(sel_df["수량"], errors="coerce").fillna(0).astype(int)
         sel_df["총금액"] = (sel_df["수량"] * sel_df["단가"]).astype(int)
 
-        st.dataframe(sel_df[["품목코드","품목명","단위","수량","단가","총금액"]],
-                     use_container_width=True, height=260,
-                     column_config={
-                         "수량":   st.column_config.NumberColumn(format="%,d"),
-                         "단가":   st.column_config.NumberColumn(label="단가(원)", format="%,d"),
-                         "총금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
-                     })
-        total_items = len(sel_df)
-        total_qty   = int(sel_df["수량"].sum())
-        total_amt   = int(sel_df["총금액"].sum())
+        st.dataframe(
+            sel_df[["품목코드","품목명","단위","수량","단가","총금액"]],
+            use_container_width=True, height=260,
+            column_config={
+                "수량":   st.column_config.NumberColumn(format="%,d"),
+                "단가":   st.column_config.NumberColumn(label="단가(원)", format="%,d"),
+                "총금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
+            }
+        )
+        total_items = len(sel_df); total_qty = int(sel_df["수량"].sum()); total_amt = int(sel_df["총금액"].sum())
     else:
         total_items = total_qty = total_amt = 0
 
+    # 하단 합계 바
     st.markdown(f"""
     <div class="sticky-bottom">
       <div>납품 요청일: <b>{납품요청일.strftime('%Y-%m-%d')}</b></div>
@@ -713,6 +709,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
       <div>총 금액: <span class="metric">{total_amt:,}</span> 원</div>
     </div>
     """, unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)  # /box /section
+
+    # 가운데 래퍼 종료
     st.markdown("</div>", unsafe_allow_html=True)
 
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False, key="store_confirm_chk")
@@ -721,11 +720,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             st.warning("수량이 0보다 큰 품목이 없습니다."); st.stop()
         if not confirm:
             st.warning("체크박스를 확인해 주세요."); st.stop()
-
         user = st.session_state["auth"]
         order_id = make_order_id(user.get("user_id","STORE"))
         now = now_kst_str()
-
         rows = []
         for _, r in sel_df.iterrows():
             rows.append({
@@ -735,8 +732,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 "단가": int(r.get("단가",0) or 0), "금액": int(r.get("총금액",0) or 0),
                 "비고": memo or "", "상태": "접수", "처리일시": "", "처리자": ""
             })
-        ok = append_orders(rows)
-        st.success(f"발주가 접수되었습니다. 발주번호: {order_id}") if ok else st.error("발주 저장에 실패했습니다.")
+        st.success(f"발주가 접수되었습니다. 발주번호: {order_id}") if append_orders(rows) else st.error("발주 저장에 실패했습니다.")
 
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 변경")
