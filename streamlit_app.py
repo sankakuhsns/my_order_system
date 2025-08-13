@@ -87,11 +87,23 @@ html, body, [data-testid="stAppViewContainer"] {{
 .dataframe td, .dataframe th {{ vertical-align: middle; }}
 
 /* 탭 간격/하이라이트 */
-div[data-baseweb="tab-list"] {{ gap: 8px; }}
-div[data-baseweb="tab"] {{
-  border:1px solid {THEME['BORDER']};
-  border-radius:10px; padding:6px 10px; background:#fff;
+div[data-baseweb="tab-list"] {{
+  gap: 12px;               /* 탭 사이 간격 ↑ */
+  margin-top: 8px;
+  margin-bottom: 24px;     /* 탭과 본문 사이 여백 ↑ */
+  flex-wrap: wrap;         /* 화면 좁을 때 줄바꿈 허용 */
 }}
+
+div[data-baseweb="tab"] {{
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 14px;      /* 클릭 면적 넓힘 */
+  box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+  transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease, background-color .12s ease;
+  cursor: pointer;         /* 박스 전체가 클릭되는 느낌 */
+}}
+
 div[data-baseweb="tab-highlight"] {{ display:none; }}
 
 /* 하단 고정 합계 바 */
