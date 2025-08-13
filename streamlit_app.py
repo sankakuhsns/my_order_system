@@ -22,9 +22,8 @@ from google.oauth2 import service_account
 import xlsxwriter  # noqa: F401 (엔진 로딩용)
 
 # -----------------------------------------------------------------------------
-# 페이지/테마/스타일 (최소 수정판)
+# 페이지/테마/스타일 (최소 수정판 - 오류 수정)
 # -----------------------------------------------------------------------------
-# NOTE: 여기서는 import streamlit as st 를 다시 하지 않습니다. (상단 import 사용)
 st.set_page_config(page_title="발주 시스템", page_icon="📦", layout="wide")
 
 THEME = {
@@ -67,7 +66,7 @@ html, body, [data-testid="stAppViewContainer"] {{
   color:#fff;
   border:1px solid {THEME['PRIMARY']};
   border-radius:10px;
-  height:34px;   /* 버튼 살짝 줄임 */
+  height:34px;
 }}
 .stButton>button:hover {{ filter: brightness(0.95); }}
 
@@ -76,7 +75,7 @@ html, body, [data-testid="stAppViewContainer"] {{
 .stDateInput input {{
   border:1px solid {THEME['BORDER']} !important;
   border-radius:10px !important;
-  height:34px;   /* 입력박스 높이 축소 */
+  height:34px;
 }}
 
 /* 테이블 */
@@ -102,19 +101,17 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
   margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:16px;
 }}
 
-/* 로그인 화면 (입력/버튼 크기 절반 수준으로 축소) */
+/* 로그인 화면 */
 .login-wrap {{ display:flex; justify-content:center; }}
-st.markdown("""
-<style>
-.login-title {
+
+/* 🔹제목 크게 + 여백 (CSS는 반드시 이 <style>안에만!) */
+.login-title {{
   text-align: center;
-  font-size: 36px;
+  font-size: 36px;     /* 24 → 36 */
   font-weight: 800;
-  margin-top: 16px;
-  margin-bottom: 12px;
-}
-</style>
-""", unsafe_allow_html=True)
+  margin-top: 16px;    /* 상단 여백 */
+  margin-bottom: 12px; /* 제목 아래 공간 */
+}}
 
 .login-card {{
   width: 300px;                 /* 320 → 300 */
@@ -122,10 +119,10 @@ st.markdown("""
   border:1px solid {THEME['BORDER']};
   border-radius:12px; background:#fff; box-shadow: 0 4px 12px rgba(0,0,0,.04);
 }}
-.login-card .stTextInput>div>div>input {{ width: 220px; height: 32px; }}  /* 입력 폭/높이 축소 */
-.login-card .stButton>button {{ width: 220px; height: 32px; }}             /* 버튼 폭/높이 축소 */
+.login-card .stTextInput>div>div>input {{ width: 220px; height: 32px; }}
+.login-card .stButton>button {{ width: 220px; height: 32px; }}
 
-/* (선택) 로그인 백그라운드 이미지 — 필요 없으면 아래 두 블록 삭제 */
+/* (선택) 로그인 백그라운드 이미지 */
 :root {{ --login-bg-url: url('https://images.unsplash.com/photo-1542838686-73ae2c1c5c53?q=80&w=1920&auto=format'); }}
 .login-bg {{
   min-height: 50vh;
@@ -137,6 +134,7 @@ st.markdown("""
 }}
 </style>
 """, unsafe_allow_html=True)
+
 
 # --- 공용 작은 UI 유틸(그대로 유지) ---
 def fmt_num(x, decimals=0):
