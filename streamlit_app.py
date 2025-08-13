@@ -617,14 +617,63 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *,
     buf.seek(0)
     return buf
 
-# =============================================================================
-# 7) 발주(지점) 화면 — 최종 정리본
-# =============================================================================
+# ──────────────────────────────────────────────
+# 🛒 발주(지점) 화면 — 누적 장바구니 + 단가 안정화 + 장바구니 수량 직접수정
+# ──────────────────────────────────────────────
+
+# ── 장바구니 유틸 ──────────────────────────────
+def _ensure_cart():
+    if "cart" not in st.session_state or not isinstance(st.session_state["cart"], pd.DataFrame):
+        st.session_state["cart"] = pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량","총금액"])
+
+def _coerce_price_qty(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    out["단가"] = pd.to_numeric(out.get("단가", 0), errors="coerce").fillna(0).astype(int)
+    out["수량"] = pd.to_numeric(out.get("수량", 0), errors="coerce").fillna(0).astype(int)
+    out["총금액"] = (out["단가"] * out["수량"]).astype(int)
+    return out
+
+def _add_to_cart(rows_df: pd.DataFrame):
+    _ensure_cart()
+    cart = _coerce_price_qty(st.session_state["cart"])
+    add  = _coerce_price_qty(rows_df[["품목코드","품목명","단위","단가","수량"]].copy())
+    add = add[add["수량"] > 0]
+    if add.empty:
+        return
+    key = ["품목코드"]
+    merged = pd.merge(cart.drop(columns=["총금액"], errors="ignore"), add, on=key, how="outer", suffixes=("_old",""))
+    merged["품목명"] = merged["품목명"].fillna(merged.get("품목명_old"))
+    merged["단위"]   = merged["단위"].fillna(merged.get("단위_old"))
+    merged["단가"]   = merged["단가"].fillna(merged.get("단가_old")).fillna(0).astype(int)
+    qty_old = pd.to_numeric(merged.get("수량_old", 0), errors="coerce").fillna(0).astype(int)
+    qty_new = pd.to_numeric(merged.get("수량",     0), errors="coerce").fillna(0).astype(int)
+    merged["수량"] = (qty_old + qty_new).astype(int)
+    for c in ["품목명_old","단위_old","단가_old","수량_old"]:
+        if c in merged.columns:
+            merged.drop(columns=[c], inplace=True)
+    merged = merged[merged["수량"] > 0]
+    merged["총금액"] = (merged["단가"] * merged["수량"]).astype(int)
+    st.session_state["cart"] = merged[["품목코드","품목명","단위","단가","수량","총금액"]]
+
+def _remove_from_cart(codes: list[str]):
+    _ensure_cart()
+    if not codes:
+        return
+    st.session_state["cart"] = st.session_state["cart"][~st.session_state["cart"]["품목코드"].isin(codes)]
+
+def _clear_cart():
+    st.session_state["cart"] = pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량","총금액"])
+
+# ── 발주 화면 본체 ─────────────────────────────
 def page_store_register_confirm(master_df: pd.DataFrame):
+    _ensure_cart()
+
     st.subheader("🛒 발주 등록 · 확인")
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
-    # ── [섹션] 납품 선택 ─────────────────────────────────────────
+    # ── 납품 선택 ─────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
@@ -639,20 +688,23 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         memo = st.text_input("요청 사항(선택)", key="store_req_memo")
     st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # ── [섹션] 1) 발주 품목 검색 ────────────────────────────────
+    # ── 발주 품목 검색 ────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 1) 발주 품목 검색")
     l, r = st.columns([2, 1])
+    df_master = master_df.copy()
+    df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
+
     with l:
         keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
     with r:
-        if "분류" in master_df.columns:
-            cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
+        if "분류" in df_master.columns:
+            cat_opt = ["(전체)"] + sorted(df_master["분류"].dropna().unique().tolist())
             cat_sel = st.selectbox("분류(선택)", cat_opt, key="store_cat_sel")
         else:
             cat_sel = "(전체)"
 
-    df_view = master_df.copy()
+    df_view = df_master
     if keyword:
         q = keyword.strip().lower()
         df_view = df_view[df_view.apply(
@@ -660,73 +712,123 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                         or q in str(row.get("품목코드", "")).lower(),
             axis=1
         )]
-    if "분류" in master_df.columns and cat_sel != "(전체)":
+    if "분류" in df_master.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
 
-    # 단가는 숫자형 강제
-    df_view["단가"] = pd.to_numeric(df_view.get("단가", 0), errors="coerce").fillna(0).astype(int)
-
-    # 미리보기 표(단가 콤마 포맷)
     df_preview = df_view.copy()
     df_preview["단가(원)"] = df_preview["단가"].map(lambda v: f"{v:,.0f}")
     cols_preview = [c for c in ["품목코드", "품목명", "분류", "단위", "단가(원)"] if c in df_preview.columns]
     st.dataframe(df_preview[cols_preview].reset_index(drop=True), use_container_width=True, height=260)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # ── [섹션] 2) 발주 수량 입력 ────────────────────────────────
+    # ── 발주 수량 입력 ────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 2) 발주 수량 입력")
-
-    # ⚠️ 편집용 프레임: 수량은 float로 시작(에디터 호환성↑), 저장 시 int로 변환
     df_edit = df_view[["품목코드", "품목명", "단위", "단가"]].copy()
-    df_edit["수량"] = pd.Series(0.0, index=df_edit.index)  # float로 시작
+    df_edit["수량"] = 0
+    df_edit = _coerce_price_qty(df_edit)
 
     with st.form(key="store_order_form", clear_on_submit=False):
         edited = st.data_editor(
             df_edit,
             column_config={
-                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
-                "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1),  # 수량은 정수 입력하지만 내부는 float
+                "단가":  st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
+                "수량":  st.column_config.NumberColumn(label="수량", min_value=0, step=1),
+                "품목코드": st.column_config.TextColumn(label="품목코드"),
+                "품목명": st.column_config.TextColumn(label="품목명"),
+                "단위":   st.column_config.TextColumn(label="단위"),
             },
-            disabled=["품목코드", "품목명", "단위", "단가"],  # 수량만 편집
+            disabled=["품목코드", "품목명", "단위", "단가"],  # 수량만 입력
             hide_index=True,
             use_container_width=True,
             num_rows="fixed",
             height=360,
             key="store_order_editor",
         )
-        submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
+        col_btn1, col_btn2 = st.columns([1,1])
+        with col_btn1:
+            submitted_add = st.form_submit_button("장바구니 반영", use_container_width=True)
+        with col_btn2:
+            submitted_add_clear = st.form_submit_button("장바구니 반영 후 입력값 초기화", use_container_width=True)
+
+    if isinstance(edited, pd.DataFrame) and (submitted_add or submitted_add_clear):
+        tmp = _coerce_price_qty(edited.copy())
+        tmp = tmp[tmp["수량"] > 0]
+        if tmp.empty:
+            st.warning("수량이 0보다 큰 품목이 없습니다.")
+        else:
+            _add_to_cart(tmp)
+            st.success("장바구니에 반영되었습니다.")
+            if submitted_add_clear:
+                st.session_state["store_order_editor"] = df_edit
+
     st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # ── [섹션] 3) 발주 입력 내역 ────────────────────────────────
+    # ── 장바구니 (수량 직접 수정 가능) ───────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
-    st.markdown("### 3) 발주 입력 내역")
+    st.markdown("### 3) 발주 입력 내역 (장바구니)")
 
-    # 수량>0만 선택 + 타입 보정
-    if isinstance(edited, pd.DataFrame):
-        sel_df = edited.copy()
-        sel_df["단가"] = pd.to_numeric(sel_df["단가"], errors="coerce").fillna(0).astype(int)
-        sel_df["수량"] = pd.to_numeric(sel_df["수량"], errors="coerce").fillna(0).astype(int)
-        sel_df = sel_df[sel_df["수량"] > 0]
-    else:
-        sel_df = pd.DataFrame(columns=["품목코드", "품목명", "단위", "단가", "수량"])
+    cart = _coerce_price_qty(st.session_state["cart"])
+    if not cart.empty:
+        # 편집 가능한 장바구니
+        with st.form(key="cart_edit_form", clear_on_submit=False):
+            cart_editable = st.data_editor(
+                cart[["품목코드","품목명","단위","수량","단가","총금액"]],
+                column_config={
+                    "수량":   st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
+                    "단가":   st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
+                    "총금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
+                    "품목코드": st.column_config.TextColumn(label="품목코드"),
+                    "품목명": st.column_config.TextColumn(label="품목명"),
+                    "단위":   st.column_config.TextColumn(label="단위"),
+                },
+                disabled=["품목코드","품목명","단위","단가","총금액"],  # 장바구니에서는 수량만 수정
+                hide_index=True,
+                use_container_width=True,
+                height=300,
+                key="cart_editor",
+            )
+            c_upd1, c_upd2 = st.columns([1,1])
+            with c_upd1:
+                save_cart = st.form_submit_button("장바구니 변경 저장", use_container_width=True)
+            with c_upd2:
+                cancel_cart = st.form_submit_button("변경 취소(새로고침)", use_container_width=True)
 
-    if not sel_df.empty:
-        sel_df["총금액"] = (sel_df["수량"] * sel_df["단가"]).astype(int)
-        st.dataframe(
-            sel_df[["품목코드", "품목명", "단위", "수량", "단가", "총금액"]],
-            use_container_width=True, height=260,
-            column_config={
-                "수량":   st.column_config.NumberColumn(format="%,d"),
-                "단가":   st.column_config.NumberColumn(label="단가(원)", format="%,d"),
-                "총금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
-            }
+        if save_cart and isinstance(cart_editable, pd.DataFrame):
+            # 수량 반영 및 총금액 재계산, 0인 품목 제거
+            updated = _coerce_price_qty(cart_editable.copy())
+            updated = updated[updated["수량"] > 0]
+            st.session_state["cart"] = updated[["품목코드","품목명","단위","단가","수량","총금액"]]
+            st.success("장바구니 변경사항이 저장되었습니다.")
+            st.rerun()
+        elif cancel_cart:
+            st.rerun()
+
+        # 합계 계산(저장된 장바구니 기준)
+        cart = _coerce_price_qty(st.session_state["cart"])
+        total_items = len(cart)
+        total_qty   = int(cart["수량"].sum())
+        total_amt   = int(cart["총금액"].sum())
+
+        # 선택 삭제/비우기
+        st.markdown("##### 선택 삭제")
+        to_delete = st.multiselect(
+            "삭제할 품목코드 선택",
+            options=cart["품목코드"].tolist(),
+            format_func=lambda x: f"{x} — {cart.loc[cart['품목코드']==x, '품목명'].values[0]}"
         )
-        total_items = len(sel_df)
-        total_qty = int(sel_df["수량"].sum())
-        total_amt = int(sel_df["총금액"].sum())
+        cdel1, cdel2 = st.columns([1,1])
+        with cdel1:
+            if st.button("선택 품목 삭제", use_container_width=True):
+                _remove_from_cart(to_delete)
+                st.rerun()
+        with cdel2:
+            if st.button("장바구니 비우기", use_container_width=True):
+                _clear_cart()
+                st.rerun()
     else:
         total_items = total_qty = total_amt = 0
+        st.info("장바구니가 비어 있습니다.")
 
     # 합계 바
     st.markdown(f"""
@@ -737,16 +839,15 @@ def page_store_register_confirm(master_df: pd.DataFrame):
       <div>총 금액: <span class="metric">{total_amt:,}</span> 원</div>
     </div>
     """, unsafe_allow_html=True)
-    st.markdown("</div></div>", unsafe_allow_html=True)  # /box /section
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # 래퍼 종료
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 제출
+    # ── 제출 ───────────────────────────────
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False, key="store_confirm_chk")
     if st.button("📦 발주 제출", type="primary", use_container_width=True, key="store_submit_btn"):
         if total_items == 0:
-            st.warning("수량이 0보다 큰 품목이 없습니다.")
+            st.warning("장바구니가 비어 있습니다.")
             st.stop()
         if not confirm:
             st.warning("체크박스를 확인해 주세요.")
@@ -755,16 +856,28 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         user = st.session_state["auth"]
         order_id = make_order_id(user.get("user_id", "STORE"))
         now = now_kst_str()
+
         rows = []
-        for _, r in sel_df.iterrows():
+        cart_final = _coerce_price_qty(st.session_state["cart"])
+        for _, r in cart_final.iterrows():
             rows.append({
-                "주문일시": now, "발주번호": order_id, "지점ID": user.get("user_id"), "지점명": user.get("name"),
-                "납품요청일": str(납품요청일), "품목코드": r.get("품목코드"), "품목명": r.get("품목명"),
-                "단위": r.get("단위"), "수량": int(r.get("수량", 0) or 0),
-                "단가": int(r.get("단가", 0) or 0), "금액": int(r.get("총금액", 0) or 0),
+                "주문일시": now, "발주번호": order_id,
+                "지점ID": user.get("user_id"), "지점명": user.get("name"),
+                "납품요청일": str(납품요청일),
+                "품목코드": r.get("품목코드"), "품목명": r.get("품목명"),
+                "단위": r.get("단위"),
+                "수량": int(r.get("수량", 0) or 0),
+                "단가": int(r.get("단가", 0) or 0),
+                "금액": int((r.get("단가", 0) or 0) * (r.get("수량", 0) or 0)),
                 "비고": memo or "", "상태": "접수", "처리일시": "", "처리자": ""
             })
-        st.success(f"발주가 접수되었습니다. 발주번호: {order_id}") if append_orders(rows) else st.error("발주 저장에 실패했습니다.")
+
+        if append_orders(rows):
+            st.success(f"발주가 접수되었습니다. 발주번호: {order_id}")
+            _clear_cart()
+        else:
+            st.error("발주 저장에 실패했습니다.")
+
 
 # =============================================================================
 # 8) 발주 조회·변경 — 정리본
