@@ -154,17 +154,19 @@ def sticky_summary(left_html: str, right_html: str):
 def numcol(label, step=1):
     return st.column_config.NumberColumn(label=label, min_value=0, step=step, format="%,d")
 
-def textcol(label, help_txt=None, placeholder=None):
-    return st.column_config.TextColumn(label=label, help=help_txt or "", placeholder=placeholder or "")
+def textcol(label, help_txt=None):
+    # Streamlit TextColumn은 placeholder 인자를 지원하지 않습니다.
+    # help만 전달하고, 나머지는 기본값 사용
+    return st.column_config.TextColumn(label=label, help=help_txt or "")
 
 EDITOR_CFG = {
     "품목코드": st.column_config.TextColumn(label="품목코드"),
     "품목명":   st.column_config.TextColumn(label="품목명"),
     "단위":     st.column_config.TextColumn(label="단위"),
-    "수량_num": numcol("수량"),
-    "수량_txt": textcol("수량", "숫자/콤마 모두 입력 가능"),
-    "단가":     numcol("단가(원)"),
-    "총금액":   numcol("총금액(원)"),
+    "수량_num": st.column_config.NumberColumn(label="수량", min_value=0, step=1),
+    "수량_txt": st.column_config.TextColumn(label="수량", help="숫자/콤마 모두 입력 가능"),
+    "단가":     st.column_config.NumberColumn(label="단가(원)", min_value=0, step=1, format="%,d"),
+    "총금액":   st.column_config.NumberColumn(label="총금액(원)", min_value=0, step=1, format="%,d"),
 }
 
 # -----------------------------------------------------------------------------
@@ -664,7 +666,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         edited_disp = st.data_editor(
             df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
             column_config={
-                "수량":     textcol("수량", "숫자/콤마 입력 가능", "예: 12 또는 1,200"),
+                "수량": textcol("수량", "숫자/콤마 입력 가능"),
                 "단가(원)": st.column_config.TextColumn(label="단가(원)"),
                 "품목코드": EDITOR_CFG["품목코드"],
                 "품목명":   EDITOR_CFG["품목명"],
