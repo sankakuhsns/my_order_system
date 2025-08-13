@@ -58,7 +58,7 @@ html, body, [data-testid="stAppViewContainer"] {{
 
 .metric {{ font-weight:700; color:{THEME['PRIMARY']}; }}
 
-.block-container { padding-top: 2.4rem; padding-bottom: 1.6rem; }  /* 1.2rem → 2.4rem */
+.block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}  /* 1.2rem → 2.4rem */
 
 /* 버튼/입력 공통 */
 .stButton>button {{
