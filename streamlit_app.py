@@ -134,6 +134,9 @@ button[role="tab"][aria-selected="true"] {{
   background: #ffffff !important;
   font-weight: 700;
 }}
+.stTabs {{ overflow: visible !important; }}
+.stTabs [role="tablist"] {{ position: relative; z-index: 3; }}
+
 /* 구버전 하이라이트 바 제거(양쪽 DOM 모두 커버) */
 .stTabs [data-baseweb="tab-highlight"],
 [data-baseweb="tab-highlight"] {{ display: none !important; }}
