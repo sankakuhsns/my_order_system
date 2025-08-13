@@ -127,7 +127,7 @@ html, body, [data-testid="stAppViewContainer"] {{
   border-radius: 10px !important;
   height: 34px !important;
 }}
-/* ▶ 'flat-editor' 래퍼 안에서는 표(데이터 에디터/데이터프레임) 테두리·배경 제거 */
+/* ▶ 발주 수량 입력 섹션에서만 표/컨테이너 테두리 제거 */
 .flat-editor .stDataFrame,
 .flat-editor .dataframe,
 .flat-editor [data-testid="stDataFrame"],
@@ -137,6 +137,7 @@ html, body, [data-testid="stAppViewContainer"] {{
   box-shadow: none !important;
   border-radius: 0 !important;
 }}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -675,59 +676,63 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     df_master = master_df.copy()
     df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
-    # ─────────────────────────────────────────────
-    # 2) 발주 수량 입력 — 검색+표+버튼을 '한 박스'에, 폼은 무테(.flat-form)
-    # ─────────────────────────────────────────────
-    with st.container(border=True):
-        st.markdown("### 🧾 발주 수량 입력")
+# ─────────────────────────────────────────────
+# 2) 발주 수량 입력 — 검색 + 표 + 버튼을 한 박스에, 안쪽 박스 없음(폼 제거)
+# ─────────────────────────────────────────────
+with st.container(border=True):
+    st.markdown("### 🧾 발주 수량 입력")
 
-        # 검색행
-        l, r = st.columns([2, 1])
-        with l:
-            keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
-        with r:
-            if "분류" in df_master.columns:
-                cat_opt = ["(전체)"] + sorted(df_master["분류"].dropna().unique().tolist())
-                cat_sel = st.selectbox("분류(선택)", cat_opt, key="store_cat_sel")
-            else:
-                cat_sel = "(전체)"
+    # 검색행
+    l, r = st.columns([2, 1])
+    with l:
+        keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
+    with r:
+        if "분류" in df_master.columns:
+            cat_opt = ["(전체)"] + sorted(df_master["분류"].dropna().unique().tolist())
+            cat_sel = st.selectbox("분류(선택)", cat_opt, key="store_cat_sel")
+        else:
+            cat_sel = "(전체)"
 
-        # 필터링
-        df_view = df_master.copy()
-        if keyword:
-            q = keyword.strip().lower()
-            df_view = df_view[df_view.apply(
-                lambda row: q in str(row.get("품목명","")).lower()
-                         or q in str(row.get("품목코드","")).lower(), axis=1)]
-        if "분류" in df_master.columns and cat_sel != "(전체)":
-            df_view = df_view[df_view["분류"] == cat_sel]
+    # 필터링
+    df_view = df_master.copy()
+    if keyword:
+        q = keyword.strip().lower()
+        df_view = df_view[df_view.apply(
+            lambda row: q in str(row.get("품목명","")).lower()
+                     or q in str(row.get("품목코드","")).lower(), axis=1)]
+    if "분류" in df_master.columns and cat_sel != "(전체)":
+        df_view = df_view[df_view["분류"] == cat_sel]
 
-        # 표 + 버튼 (폼 = 무테)
-        df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
-        df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
-        df_edit_disp["수량"] = ""   # TextColumn(콤마 허용)
-        editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
+    # 표 (폼 없이 표시) + 버튼 — 안쪽 박스 제거용 래퍼(.flat-editor)
+    df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
+    df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
+    df_edit_disp["수량"] = ""   # TextColumn로 콤마 허용
+    editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
 
-        st.markdown("<div class='flat-form flat-editor'>", unsafe_allow_html=True)
-        with st.form(key="store_order_form", clear_on_submit=False):
-            edited_disp = st.data_editor(
-                df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
-                column_config={
-                    "수량":     st.column_config.TextColumn(label="수량", help="숫자/콤마 입력 가능"),
-                    "단가(원)": st.column_config.TextColumn(label="단가(원)"),
-                    "품목코드": st.column_config.TextColumn(label="품목코드"),
-                    "품목명":   st.column_config.TextColumn(label="품목명"),
-                    "단위":     st.column_config.TextColumn(label="단위"),
-                },
-                disabled=["품목코드","품목명","단위","단가(원)"],
-                hide_index=True, use_container_width=True, num_rows="fixed", height=380, key=editor_key,
-            )
-            submitted_add = st.form_submit_button("장바구니 추가", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<div class='flat-editor'>", unsafe_allow_html=True)
+    edited_disp = st.data_editor(
+        df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
+        column_config={
+            "수량":     st.column_config.TextColumn(label="수량", help="숫자/콤마 입력 가능"),
+            "단가(원)": st.column_config.TextColumn(label="단가(원)"),
+            "품목코드": st.column_config.TextColumn(label="품목코드"),
+            "품목명":   st.column_config.TextColumn(label="품목명"),
+            "단위":     st.column_config.TextColumn(label="단위"),
+        },
+        disabled=["품목코드","품목명","단위","단가(원)"],
+        hide_index=True, use_container_width=True, num_rows="fixed", height=380, key=editor_key,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # 장바구니 반영
-    if isinstance(edited_disp, pd.DataFrame) and submitted_add:
-        tmp = edited_disp[["품목코드","수량"]].copy()
+    # 일반 버튼(폼 X) → 클릭 1번에 바로 반영
+    add_clicked = st.button("장바구니 추가", use_container_width=True, key="btn_cart_add")
+
+# 버튼 동작: 누적 담기(초기화 없음)
+if add_clicked:
+    # 최신 편집값은 세션키로 안전하게 읽음
+    cur = st.session_state.get(editor_key, edited_disp)
+    if isinstance(cur, pd.DataFrame):
+        tmp = cur[["품목코드","수량"]].copy()
         tmp["수량"] = pd.to_numeric(
             tmp["수량"].astype(str).str.replace(",", "").str.strip(),
             errors="coerce"
@@ -739,10 +744,11 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             base = df_view[["품목코드","품목명","단위","단가"]].copy()
             base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
             tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
-            _add_to_cart(tmp)                      # ✅ 누적 유지
+            _add_to_cart(tmp)                    # ✅ 누적 추가(초기화 없음)
             st.success("장바구니에 추가되었습니다.")
-            st.session_state["store_editor_ver"] += 1
+            st.session_state["store_editor_ver"] += 1  # 입력값 초기화
             st.rerun()
+
 
     # ─────────────────────────────────────────────
     # 3) 장바구니 (체크박스 + 오토세이브 + 회색 버튼 3개)
