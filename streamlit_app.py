@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (KST/발주번호·UX·엑셀서식/관리자 개선 통합판)
+# 📦 Streamlit 식자재 발주 시스템 (최적화/오류수정/UX통일판)
+# - 수량 입력(TextColumn + 콤마 허용) / 버튼 1회 반영 / 장바구니 누적 / 박스안박스 제거
+# - 납품일: 오늘~7일 이내만 선택(과거/8일 이후 제한)
+# - 발주요청 네이밍 통일 / 리스트 선택·삭제 메커니즘 장바구니와 통일 / 새로고침 최소화
 # =============================================================================
 
 from io import BytesIO
@@ -87,30 +90,33 @@ html, body, [data-testid="stAppViewContainer"] {{
 }}
 .stTabs [data-baseweb="tab-highlight"], [data-baseweb="tab-highlight"] {{ display:none !important; }}
 
+/* Sticky summary */
 .sticky-bottom {{
   position: sticky; bottom: 0; z-index: 999;
   {CARD_STYLE}
   margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:16px;
 }}
 
+/* Title */
 .login-title {{
   text-align:center; font-size:42px; font-weight:800; margin:16px 0 12px;
 }}
 .page-title {{ font-size:34px; font-weight:800; margin:12px 0; }}
 .tabs-spacer {{ height: 10px; }}
-/* 연한 회색 버튼 영역 */
+
+/* 연한 회색 버튼 영역(전체선택/해제/삭제 등 유틸 버튼) */
 .muted-buttons .stButton > button {{
-  background: #f3f4f6 !important;  /* 연회색 */
+  background: #f3f4f6 !important;
   color: #333 !important;
-  border: 1px solid #e5e7eb !important; /* 연한 테두리 */
+  border: 1px solid #e5e7eb !important;
 }}
 .muted-buttons .stButton > button:hover {{
-  filter: none !important;
-  background: #e9eaee !important; /* 살짝 진한 회색 */
+  background: #e9eaee !important;
 }}
-/* Buttons */
+
+/* 기본 버튼 스타일 */
 .stButton > button[data-testid="baseButton-secondary"] {{
-  background: #f3f4f6 !important;   /* 연한 회색 */
+  background: #f3f4f6 !important;
   color: #333 !important;
   border: 1px solid #e5e7eb !important;
   border-radius: 10px !important;
@@ -121,13 +127,14 @@ html, body, [data-testid="stAppViewContainer"] {{
 }}
 
 .stButton > button[data-testid="baseButton-primary"] {{
-  background: #1C6758 !important;   /* THEME PRIMARY */
+  background: #1C6758 !important;
   color: #fff !important;
   border: 1px solid #1C6758 !important;
   border-radius: 10px !important;
   height: 34px !important;
 }}
-/* ▶ 발주 수량 입력 섹션에서만 표/컨테이너 테두리 제거(강화판) */
+
+/* ▶ 발주 수량 입력 섹션: 표/컨테이너 테두리·패딩 제거(박스안박스 제거) */
 .flat-editor [data-testid="stDataFrame"],
 .flat-editor [data-testid="stDataFrameContainer"],
 .flat-editor [data-testid="stElementToolbar"],
@@ -139,16 +146,12 @@ html, body, [data-testid="stAppViewContainer"] {{
   box-shadow: none !important;
   border-radius: 0 !important;
 }}
-
-/* 데이터 에디터 외곽 패딩/테두리까지 제거 */
 .flat-editor [data-testid="stVerticalBlock"] > div {{
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   padding: 0 !important;
 }}
-
-/* 데이터 에디터 내부 캔버스 컨테이너까지 통일 */
 .flat-editor [data-testid="stDataFrame"] > div {{
   background: transparent !important;
   border: none !important;
@@ -205,8 +208,6 @@ def numcol(label, step=1):
     return st.column_config.NumberColumn(label=label, min_value=0, step=step, format="%,d")
 
 def textcol(label, help_txt=None):
-    # Streamlit TextColumn은 placeholder 인자를 지원하지 않습니다.
-    # help만 전달하고, 나머지는 기본값 사용
     return st.column_config.TextColumn(label=label, help=help_txt or "")
 
 EDITOR_CFG = {
@@ -586,6 +587,85 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *,
     buf.seek(0)
     return buf
 
+# =============================================================================
+# 🛒 장바구니 유틸(전역) — 반드시 이 아래부터 페이지 함수에서 사용
+# =============================================================================
+def _ensure_cart():
+    """세션에 cart DF가 없으면 초기화"""
+    if "cart" not in st.session_state or not isinstance(st.session_state.get("cart"), pd.DataFrame):
+        st.session_state["cart"] = pd.DataFrame(
+            columns=["품목코드","품목명","단위","단가","수량","총금액"]
+        )
+
+def _coerce_price_qty(df: pd.DataFrame) -> pd.DataFrame:
+    """단가/수량을 int로 강제, 총금액 재계산. 콤마/공백/문자/NaN 안전."""
+    if not isinstance(df, pd.DataFrame):
+        return pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량","총금액"])
+    out = df.copy()
+    for c in ["품목코드","품목명","단위","단가","수량","총금액"]:
+        if c not in out.columns:
+            out[c] = 0 if c in ("단가","수량","총금액") else ""
+    out["단가"] = (
+        pd.to_numeric(out["단가"].astype(str).str.replace(",", "").str.strip(), errors="coerce")
+        .fillna(0).astype(int).clip(lower=0)
+    )
+    out["수량"] = (
+        pd.to_numeric(out["수량"].astype(str).str.replace(",", "").str.strip(), errors="coerce")
+        .fillna(0).astype(int).clip(lower=0)
+    )
+    out["총금액"] = (out["단가"] * out["수량"]).astype(int)
+    return out[["품목코드","품목명","단위","단가","수량","총금액"]]
+
+def normalize_cart(df: pd.DataFrame) -> pd.DataFrame:
+    """0수량 제거한 정규화 장바구니 반환"""
+    df = _coerce_price_qty(df)
+    return df[df["수량"] > 0][["품목코드","품목명","단위","단가","수량","총금액"]]
+
+def _add_to_cart(rows_df: pd.DataFrame):
+    """
+    장바구니에 안전하게 '누적' 추가.
+    - 같은 품목코드는 수량 합산
+    - 품목명/단위/단가는 '최근 추가분'으로 갱신
+    """
+    _ensure_cart()
+    need_cols = ["품목코드","품목명","단위","단가","수량"]
+    if not isinstance(rows_df, pd.DataFrame) or any(c not in rows_df.columns for c in need_cols):
+        return
+    add = _coerce_price_qty(rows_df[need_cols].copy())
+    add = add[add["수량"] > 0]
+    if add.empty:
+        return
+
+    cart = _coerce_price_qty(st.session_state["cart"]).copy()
+    add["__new__"]  = 1  # 최근 추가분 표시
+    cart["__new__"] = 0
+    merged = pd.concat([cart, add], ignore_index=True, sort=False).sort_values(["품목코드","__new__"])
+
+    agg = merged.groupby("품목코드", as_index=False).agg({
+        "품목명": "last",
+        "단위":   "last",
+        "단가":   "last",
+        "수량":   "sum",
+    })
+    agg["총금액"] = (pd.to_numeric(agg["단가"], errors="coerce").fillna(0).astype(int) *
+                   pd.to_numeric(agg["수량"], errors="coerce").fillna(0).astype(int)).astype(int)
+
+    st.session_state["cart"] = agg[["품목코드","품목명","단위","단가","수량","총금액"]]
+
+def _remove_from_cart(codes: list[str]):
+    _ensure_cart()
+    if not codes:
+        return
+    codes = [str(c) for c in codes]
+    st.session_state["cart"] = st.session_state["cart"][
+        ~st.session_state["cart"]["품목코드"].astype(str).isin(codes)
+    ]
+
+def _clear_cart():
+    st.session_state["cart"] = pd.DataFrame(
+        columns=["품목코드","품목명","단위","단가","수량","총금액"]
+    )
+
 # ──────────────────────────────────────────────
 # 🛒 발주(지점) 화면 — 수량입력 자유(텍스트) + 박스중복 제거 + 장바구니 체크박스/오토세이브
 # ──────────────────────────────────────────────
@@ -597,7 +677,10 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 
     # 제목
     st.subheader("🛒 발주 요청")
-    st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
+
+    # 납품일 제한: 오늘 ~ 7일 이내
+    today = date.today()
+    max_day = today + timedelta(days=7)
 
     # 1) 납품 요청 정보
     with st.container(border=True):
@@ -606,11 +689,20 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         with c1:
             quick = st.radio("납품 선택", ["오늘", "내일", "직접선택"], horizontal=True, key="store_quick_radio")
         with c2:
-            납품요청일 = (
-                date.today() if quick == "오늘" else
-                (date.today() + timedelta(days=1) if quick == "내일" else
-                 st.date_input("납품 요청일", value=date.today(), key="store_req_date"))
-            )
+            if quick == "오늘":
+                납품요청일 = today
+            elif quick == "내일":
+                납품요청일 = min(today + timedelta(days=1), max_day)
+            else:
+                default = min(max(st.session_state.get("store_req_date", today), today), max_day) \
+                          if isinstance(st.session_state.get("store_req_date"), date) else today
+                납품요청일 = st.date_input(
+                    "납품 요청일", value=default, min_value=today, max_value=max_day, key="store_req_date"
+                )
+        # 보정(직접선택 외 케이스에서도 강제 범위)
+        if not (today <= 납품요청일 <= max_day):
+            납품요청일 = min(max(납품요청일, today), max_day)
+
         memo = st.text_area("요청 사항(선택)", key="store_req_memo", height=80,
                             placeholder="예) 입고 시 얼음팩 추가 부탁드립니다.")
 
@@ -667,7 +759,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         # 일반 버튼(폼 X) → 클릭 1번에 바로 반영
         add_clicked = st.button("장바구니 추가", use_container_width=True, key="btn_cart_add")
 
-    # 버튼 동작: 누적 담기(초기화 없음)
+    # 버튼 동작: 누적 담기(초기화 없음, 최신값 반영을 위해 세션에서 읽기)
     if add_clicked:
         cur = st.session_state.get(editor_key, edited_disp)
         if isinstance(cur, pd.DataFrame):
@@ -767,7 +859,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     total_items = len(cart_now)
     total_qty   = int(cart_now["수량"].sum())   if not cart_now.empty else 0
     total_amt   = int(cart_now["총금액"].sum()) if not cart_now.empty else 0
-    req_date_str = getattr(납품요청일, "strftime", lambda *_: str(납품요청일))("%Y-%m-%d")
+    req_date_str = 납품요청일.strftime("%Y-%m-%d")
 
     st.markdown(f"""
     <div class="sticky-bottom">
@@ -823,9 +915,7 @@ def page_store_orders_change():
         return
     df_all = df_all[df_all["지점ID"].astype(str) == user.get("user_id")]
 
-    # ─────────────────────────────────────────────
     # 1) 조회 조건
-    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 🔎 조회 조건")
         c1, c2 = st.columns(2)
@@ -855,15 +945,11 @@ def page_store_orders_change():
 
     st.session_state.setdefault("orders_selected_ids", [])
 
-    # ─────────────────────────────────────────────
     # 2) 발주 리스트
-    #    - 접수: 체크박스 선택/삭제 가능
-    #    - 출고완료: 표시만(체크박스 없음)
-    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 📦 발주 리스트")
 
-        # (A) 접수 목록 — 체크 가능
+        # (A) 접수 목록 — 체크 가능(장바구니와 동일한 회색 버튼)
         st.markdown("**접수(수정/삭제 가능)**")
         if not orders_pending.empty:
             selset = set(map(str, st.session_state.get("orders_selected_ids", [])))
@@ -887,31 +973,36 @@ def page_store_orders_change():
             except Exception:
                 st.session_state["orders_selected_ids"] = []
 
-            with st.form("orders_list_actions", clear_on_submit=False):
-                c1, c2, c3 = st.columns([1,1,1])
-                with c1: del_orders = st.form_submit_button("선택 발주 삭제", use_container_width=True)
-                with c2: sel_all    = st.form_submit_button("전체 선택", use_container_width=True)
-                with c3: unsel_all  = st.form_submit_button("전체 해제", use_container_width=True)
+            st.markdown("<div class='muted-buttons'>", unsafe_allow_html=True)
+            c1, c2 = st.columns([1,1])
 
-            if del_orders:
-                ids = st.session_state.get("orders_selected_ids", [])
-                if ids:
-                    base = load_orders_df().copy()
-                    # 접수 건만 삭제
-                    del_mask = base["발주번호"].astype(str).isin(ids) & (base["상태"] != "출고완료")
-                    keep = base[~del_mask].copy()
-                    ok = write_orders_df(keep)
-                    if ok:
-                        st.success("선택한 발주(접수)를 삭제했습니다.")
-                        st.session_state["orders_selected_ids"] = []
+            all_ids = orders_pending["발주번호"].astype(str).tolist()
+            already_all = set(st.session_state.get("orders_selected_ids", [])) == set(all_ids) and len(all_ids) > 0
+            toggle_label = "전체 해제" if already_all else "전체 선택"
+
+            with c1:
+                if st.button(toggle_label, use_container_width=True, key="btn_orders_toggle_all"):
+                    st.session_state["orders_selected_ids"] = [] if already_all else all_ids
+                    st.rerun()
+
+            with c2:
+                if st.button("선택 발주 삭제", use_container_width=True, key="btn_orders_delete"):
+                    ids = st.session_state.get("orders_selected_ids", [])
+                    if ids:
+                        base = load_orders_df().copy()
+                        # 접수 건만 삭제
+                        del_mask = base["발주번호"].astype(str).isin(ids) & (base["상태"] != "출고완료")
+                        keep = base[~del_mask].copy()
+                        ok = write_orders_df(keep)
+                        if ok:
+                            st.success("선택한 발주(접수)를 삭제했습니다.")
+                            st.session_state["orders_selected_ids"] = []
+                            st.rerun()
+                        else:
+                            st.error("삭제 실패")
                     else:
-                        st.error("삭제 실패")
-                else:
-                    st.info("삭제할 발주가 선택되지 않았습니다.")
-            if sel_all:
-                st.session_state["orders_selected_ids"] = orders_pending["발주번호"].astype(str).tolist()
-            if unsel_all:
-                st.session_state["orders_selected_ids"] = []
+                        st.info("삭제할 발주가 선택되지 않았습니다.")
+            st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.info("접수 상태의 발주가 없습니다.")
 
@@ -931,12 +1022,9 @@ def page_store_orders_change():
         else:
             st.caption("출고완료 상태의 발주가 없습니다.")
 
-    # ─────────────────────────────────────────────
     # 3) 세부 내용 확인 (발주번호 선택 시 품목 목록 + 합계)
-    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 📄 세부 내용 확인")
-
         options = orders["발주번호"].astype(str).tolist()
         target_order = st.radio("발주번호 선택", options=options, key="store_edit_pick")
         if not target_order:
@@ -979,9 +1067,7 @@ def page_store_orders_change():
         </div>
         """, unsafe_allow_html=True)
 
-        # 상태 표기
         st.caption(f"상태: {'출고완료' if (target_df['상태'] == '출고완료').all() else '접수'}  ·  발주번호: {target_order}")
-
 
 # =============================================================================
 # 9) 발주서 조회·다운로드
@@ -1225,7 +1311,8 @@ if __name__ == "__main__":
         with t3: page_admin_delivery_note(master)
         with t4: page_admin_items_price(master)
     else:
-        t1, t2, t3, t4 = st.tabs(["발주 등록·확인", "발주 조회·변경", "발주서 다운로드", "발주 품목 가격 조회"])
+        # ▶ 네이밍 통일: '발주 요청'
+        t1, t2, t3, t4 = st.tabs(["발주 요청", "발주 조회·변경", "발주서 다운로드", "발주 품목 가격 조회"])
         with t1: page_store_register_confirm(master)
         with t2: page_store_orders_change()
         with t3: page_store_order_form_download(master)
