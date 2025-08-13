@@ -43,24 +43,33 @@ CARD_STYLE = (
 
 st.markdown(f"""
 <style>
-/* 전체 배경/텍스트 */
+/* =========================
+   Global
+========================= */
 html, body, [data-testid="stAppViewContainer"] {{
   background: {THEME['BG']};
   color: {THEME['TEXT']};
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR",
                "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "Helvetica Neue", Arial, sans-serif;
 }}
-
 .small {{ font-size:12px; color:{THEME['MUTED']}; }}
+.block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}
 
 .card {{ {CARD_STYLE} box-shadow: 0 2px 8px rgba(0,0,0,0.03); }}
 .card-tight {{ background:{THEME['CARD_BG']}; border:1px solid {THEME['BORDER']}; border-radius:12px; padding:12px; }}
-
 .metric {{ font-weight:700; color:{THEME['PRIMARY']}; }}
 
-.block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}  /* 1.2rem → 2.4rem */
+/* 본문을 더 좁게(양옆 여백 ↑) */
+[data-testid="stAppViewContainer"] .main .block-container {{
+  max-width: 1050px;     /* 980~1100으로 취향대로 조정 가능 */
+  margin: 0 auto;
+  padding-left: 12px;
+  padding-right: 12px;
+}}
 
-/* 버튼/입력 공통 */
+/* =========================
+   Inputs / Tables
+========================= */
 .stButton>button {{
   background:{THEME['PRIMARY']};
   color:#fff;
@@ -78,7 +87,6 @@ html, body, [data-testid="stAppViewContainer"] {{
   height:34px;
 }}
 
-/* 테이블 */
 .dataframe, .stDataFrame, .stTable {{
   background:{THEME['CARD_BG']};
   border-radius:12px;
@@ -86,47 +94,85 @@ html, body, [data-testid="stAppViewContainer"] {{
 }}
 .dataframe td, .dataframe th {{ vertical-align: middle; }}
 
-/* 탭 간격/하이라이트 */
-div[data-baseweb="tab-list"] {{
-  gap: 12px;               /* 탭 사이 간격 ↑ */
-  margin-top: 8px;
-  margin-bottom: 24px;     /* 탭과 본문 사이 여백 ↑ */
-  flex-wrap: wrap;         /* 화면 좁을 때 줄바꿈 허용 */
+/* =========================
+   Tabs: 카드형 + 간격 확장
+   (신규 DOM: button[role="tab"] 대응)
+========================= */
+/* 탭 컨테이너 */
+.stTabs [role="tablist"],
+div[role="tablist"] {{
+  display: flex !important;
+  gap: 12px !important;          /* 탭 사이 간격 */
+  flex-wrap: wrap !important;    /* 좁을 때 줄바꿈 */
+  margin-top: 8px !important;
+  margin-bottom: 24px !important;/* 탭과 본문 사이 여백 */
+  border-bottom: none !important;
 }}
+/* 탭 버튼을 카드처럼 */
+.stTabs button[role="tab"],
+button[role="tab"] {{
+  border: 1px solid {THEME['BORDER']} !important;
+  border-radius: 12px !important;
+  background: #fff !important;
+  padding: 10px 14px !important; /* 클릭 면적 ↑ */
+  box-shadow: 0 1px 6px rgba(0,0,0,0.04) !important;
+  cursor: pointer !important;
+  transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease, background-color .12s ease;
+}}
+/* 호버 효과 */
+.stTabs button[role="tab"]:hover,
+button[role="tab"]:hover {{
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}}
+/* 선택된 탭 강조 */
+.stTabs button[role="tab"][aria-selected="true"],
+button[role="tab"][aria-selected="true"] {{
+  border-color: {THEME['PRIMARY']} !important;
+  color: {THEME['PRIMARY']} !important;
+  box-shadow: 0 6px 16px rgba(28,103,88,0.18) !important;
+  background: #ffffff !important;
+  font-weight: 700;
+}}
+/* 구버전 하이라이트 바 제거(양쪽 DOM 모두 커버) */
+.stTabs [data-baseweb="tab-highlight"],
+[data-baseweb="tab-highlight"] {{ display: none !important; }}
 
-div[data-baseweb="tab"] {{
+/* =========================
+   Sections (가운데 박스/여백)
+========================= */
+.center-narrow {{ max-width: 900px; margin: 0 auto; }}
+.section {{ margin: 16px 0 24px; }}
+.section > .box {{
+  background: #ffffff;                 /* 필요시 #FAFBFC로 톤업 */
   border: 1px solid #e8e8e8;
   border-radius: 12px;
-  background: #fff;
-  padding: 10px 14px;      /* 클릭 면적 넓힘 */
-  box-shadow: 0 1px 6px rgba(0,0,0,0.04);
-  transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease, background-color .12s ease;
-  cursor: pointer;         /* 박스 전체가 클릭되는 느낌 */
+  padding: 14px 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
 }}
 
-div[data-baseweb="tab-highlight"] {{ display:none; }}
-
-/* 하단 고정 합계 바 */
+/* =========================
+   Sticky summary
+========================= */
 .sticky-bottom {{
   position: sticky; bottom: 0; z-index: 999;
   {CARD_STYLE}
   margin-top:10px; display:flex; align-items:center; justify-content:space-between; gap:16px;
 }}
 
-/* 로그인 화면 */
+/* =========================
+   로그인 / 타이틀
+========================= */
 .login-wrap {{ display:flex; justify-content:center; }}
-
-/* 🔹제목 크게 + 여백 (CSS는 반드시 이 <style>안에만!) */
 .login-title {{
   text-align: center;
-  font-size: 42px;     /* 24 → 36 */
+  font-size: 42px;
   font-weight: 800;
-  margin-top: 16px;    /* 상단 여백 */
-  margin-bottom: 12px; /* 제목 아래 공간 */
+  margin-top: 16px;
+  margin-bottom: 12px;
 }}
-
 .login-card {{
-  width: 300px;                 /* 320 → 300 */
+  width: 300px;
   margin-top: 16px; padding: 16px;
   border:1px solid {THEME['BORDER']};
   border-radius:12px; background:#fff; box-shadow: 0 4px 12px rgba(0,0,0,.04);
@@ -134,49 +180,14 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 .login-card .stTextInput>div>div>input {{ width: 220px; height: 32px; }}
 .login-card .stButton>button {{ width: 220px; height: 32px; }}
 
-/* A-2. 페이지 타이틀(로그인 이후) */
 .page-title {{
   font-size: 34px;
   font-weight: 800;
-  margin-top: 12px;     /* 상단 여백 */
-  margin-bottom: 12px;  /* 제목과 탭 사이 */
+  margin-top: 12px;
+  margin-bottom: 12px;
 }}
-
-/* A-3. 탭 아래쪽 간격 확보 */
-div[data-baseweb="tab-list"] {{ gap: 8px; margin-top: 6px; margin-bottom: 14px; }}
-
-/* 본문을 더 좁게(양옆 여백 ↑) */
-[data-testid="stAppViewContainer"] .main .block-container {{
-  max-width: 1050px;    /* 1100~1200 에서 더 좁게 하고 싶으면 980~1024로 */
-  margin: 0 auto;
-  padding-left: 12px;
-  padding-right: 12px;
-}}
-
-/* 상단 탭들 사이 여백/분리감 */
-div[data-baseweb="tab-list"] {{
-  gap: 10px;
-  margin-top: 8px;
-  margin-bottom: 24px;  /* 🔸 탭과 본문 사이 간격 키움 */
-}}
-div[data-baseweb="tab"] {{ padding: 8px 12px; }}
-
-/* 가운데 정렬 컨테이너 (섹션별로 사용) */
-.center-narrow {{ max-width: 900px; margin: 0 auto; }}
-
-/* 섹션 박스 + 섹션 간 간격 */
-.section {{ margin: 16px 0 24px; }}
-.section > .box {{
-  background: #ffffff;                      /* 박스 색 (조금 더 톤 주려면 #FAFBFC 등으로 바꿔도 OK) */
-  border: 1px solid #e8e8e8;
-  border-radius: 12px;
-  padding: 14px 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-}}
-
 </style>
 """, unsafe_allow_html=True)
-
 
 # --- 공용 작은 UI 유틸(그대로 유지) ---
 def fmt_num(x, decimals=0):
