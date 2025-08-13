@@ -508,7 +508,7 @@ def require_login():
 
     # 제목(글자 크게, 아래에 약간 공간)
     st.markdown('<div class="login-title">식자재 발주 시스템</div>', unsafe_allow_html=True)
-
+    st.markdown("<div class='tabs-spacer'></div>", unsafe_allow_html=True)  
     # 제목과 폼 사이도 살짝 띄우기
     st.markdown("<div style='height:1vh'></div>", unsafe_allow_html=True)
 
