@@ -622,7 +622,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *,
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록 · 확인")
-    # 전체를 가운데 좁은 래퍼로 감싸기
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
     # ── [섹션] 납품 선택 ─────────────────────────────────────────
@@ -664,33 +663,30 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     if "분류" in master_df.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
 
-    # 단가: 숫자형 강제 + 미리보기는 콤마 표기
+    # 단가는 숫자형 강제
     df_view["단가"] = pd.to_numeric(df_view.get("단가", 0), errors="coerce").fillna(0).astype(int)
+
+    # 미리보기 표(단가 콤마 포맷)
     df_preview = df_view.copy()
     df_preview["단가(원)"] = df_preview["단가"].map(lambda v: f"{v:,.0f}")
-
-    preview_cols = [c for c in ["품목코드", "품목명", "분류", "단위", "단가(원)"] if c in df_preview.columns]
-    st.dataframe(
-        df_preview[preview_cols].reset_index(drop=True),
-        use_container_width=True,
-        height=260
-    )
+    cols_preview = [c for c in ["품목코드", "품목명", "분류", "단위", "단가(원)"] if c in df_preview.columns]
+    st.dataframe(df_preview[cols_preview].reset_index(drop=True), use_container_width=True, height=260)
     st.markdown("</div></div>", unsafe_allow_html=True)
 
     # ── [섹션] 2) 발주 수량 입력 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 2) 발주 수량 입력")
 
-    # 편집 프레임: 반드시 숫자형 단가/수량
+    # ⚠️ 편집용 프레임: 수량은 float로 시작(에디터 호환성↑), 저장 시 int로 변환
     df_edit = df_view[["품목코드", "품목명", "단위", "단가"]].copy()
-    df_edit["수량"] = 0  # int 시작값
+    df_edit["수량"] = pd.Series(0.0, index=df_edit.index)  # float로 시작
 
     with st.form(key="store_order_form", clear_on_submit=False):
         edited = st.data_editor(
             df_edit,
             column_config={
                 "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
-                "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
+                "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1),  # 수량은 정수 입력하지만 내부는 float
             },
             disabled=["품목코드", "품목명", "단위", "단가"],  # 수량만 편집
             hide_index=True,
@@ -706,24 +702,23 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 3) 발주 입력 내역")
 
+    # 수량>0만 선택 + 타입 보정
     if isinstance(edited, pd.DataFrame):
-        # 수량>0만 선택
-        sel_df = edited[pd.to_numeric(edited["수량"], errors="coerce").fillna(0) > 0].copy()
+        sel_df = edited.copy()
+        sel_df["단가"] = pd.to_numeric(sel_df["단가"], errors="coerce").fillna(0).astype(int)
+        sel_df["수량"] = pd.to_numeric(sel_df["수량"], errors="coerce").fillna(0).astype(int)
+        sel_df = sel_df[sel_df["수량"] > 0]
     else:
         sel_df = pd.DataFrame(columns=["품목코드", "품목명", "단위", "단가", "수량"])
 
     if not sel_df.empty:
-        sel_df["단가"] = pd.to_numeric(sel_df["단가"], errors="coerce").fillna(0).astype(int)
-        sel_df["수량"] = pd.to_numeric(sel_df["수량"], errors="coerce").fillna(0).astype(int)
         sel_df["총금액"] = (sel_df["수량"] * sel_df["단가"]).astype(int)
-
         st.dataframe(
             sel_df[["품목코드", "품목명", "단위", "수량", "단가", "총금액"]],
-            use_container_width=True,
-            height=260,
+            use_container_width=True, height=260,
             column_config={
-                "수량": st.column_config.NumberColumn(format="%,d"),
-                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d"),
+                "수량":   st.column_config.NumberColumn(format="%,d"),
+                "단가":   st.column_config.NumberColumn(label="단가(원)", format="%,d"),
                 "총금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
             }
         )
@@ -733,7 +728,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     else:
         total_items = total_qty = total_amt = 0
 
-    # 하단 합계 바
+    # 합계 바
     st.markdown(f"""
     <div class="sticky-bottom">
       <div>납품 요청일: <b>{납품요청일.strftime('%Y-%m-%d')}</b></div>
@@ -770,7 +765,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 "비고": memo or "", "상태": "접수", "처리일시": "", "처리자": ""
             })
         st.success(f"발주가 접수되었습니다. 발주번호: {order_id}") if append_orders(rows) else st.error("발주 저장에 실패했습니다.")
-
 
 # =============================================================================
 # 8) 발주 조회·변경 — 정리본
