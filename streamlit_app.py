@@ -127,6 +127,16 @@ html, body, [data-testid="stAppViewContainer"] {{
   border-radius: 10px !important;
   height: 34px !important;
 }}
+/* ▶ 'flat-editor' 래퍼 안에서는 표(데이터 에디터/데이터프레임) 테두리·배경 제거 */
+.flat-editor .stDataFrame,
+.flat-editor .dataframe,
+.flat-editor [data-testid="stDataFrame"],
+.flat-editor [data-testid="stDataFrameContainer"]{{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -698,7 +708,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         df_edit_disp["수량"] = ""   # TextColumn(콤마 허용)
         editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
 
-        st.markdown("<div class='flat-form'>", unsafe_allow_html=True)
+        st.markdown("<div class='flat-form flat-editor'>", unsafe_allow_html=True)
         with st.form(key="store_order_form", clear_on_submit=False):
             edited_disp = st.data_editor(
                 df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
