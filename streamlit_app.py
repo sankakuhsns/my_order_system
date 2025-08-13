@@ -107,7 +107,7 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 /* 🔹제목 크게 + 여백 (CSS는 반드시 이 <style>안에만!) */
 .login-title {{
   text-align: center;
-  font-size: 36px;     /* 24 → 36 */
+  font-size: 42px;     /* 24 → 36 */
   font-weight: 800;
   margin-top: 16px;    /* 상단 여백 */
   margin-bottom: 12px; /* 제목 아래 공간 */
