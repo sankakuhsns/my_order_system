@@ -673,24 +673,33 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     # ── [섹션] 2) 발주 수량 입력 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 2) 발주 수량 입력")
-    with st.form(key="store_order_form", clear_on_submit=False):
-        edit_cols = [c for c in ["품목코드","품목명","단위"] if c in df_view.columns]
-        df_edit = df_view[edit_cols].copy()
-        df_edit["단가"] = df_view["단가"]          # 숫자형 유지
-        df_edit["수량"] = 0
 
-        edited = st.data_editor(
-            df_edit,
-            disabled=edit_cols+["단가"],
-            column_config={
-                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
-                "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
-            },
-            use_container_width=True, num_rows="fixed", hide_index=True, height=360,
-            key="store_order_editor"
-        )
-        submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
-    st.markdown("</div></div>", unsafe_allow_html=True)
+ # df_view가 이미 필터링된 마스터라고 가정
+ df_view = df_view.copy()
+ # 🔒 숫자형 강제 (NaN → 0)
+ df_view["단가"] = pd.to_numeric(df_view.get("단가", 0), errors="coerce").fillna(0).astype(int)
+
+ with st.form(key="store_order_form", clear_on_submit=False):
+     # 에디터에 넣을 프레임: 숫자 단가 + 수량 0으로 시작
+     df_edit = df_view[["품목코드","품목명","단위","단가"]].copy()
+     df_edit["수량"] = 0  # <- int 타입
+
+     edited = st.data_editor(
+         df_edit,
+         column_config={
+             # 단가는 읽기전용 숫자(콤마표시)
+             "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
+             # 수량은 편집 가능
+             "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
+         },
+         disabled=["품목코드","품목명","단위","단가"],   # 수량만 편집
+         hide_index=True,
+         use_container_width=True,
+         num_rows="fixed",
+         height=360,
+         key="store_order_editor",
+     )
+    submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
 
     # ── [섹션] 3) 발주 입력 내역 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
