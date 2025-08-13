@@ -127,17 +127,33 @@ html, body, [data-testid="stAppViewContainer"] {{
   border-radius: 10px !important;
   height: 34px !important;
 }}
-/* ▶ 발주 수량 입력 섹션에서만 표/컨테이너 테두리 제거 */
+/* ▶ 발주 수량 입력 섹션에서만 표/컨테이너 테두리 제거(강화판) */
+.flat-editor [data-testid="stDataFrame"],
+.flat-editor [data-testid="stDataFrameContainer"],
+.flat-editor [data-testid="stElementToolbar"],
 .flat-editor .stDataFrame,
 .flat-editor .dataframe,
-.flat-editor [data-testid="stDataFrame"],
-.flat-editor [data-testid="stDataFrameContainer"]{{
+.flat-editor .stTable {{
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
   border-radius: 0 !important;
 }}
 
+/* 데이터 에디터 외곽 패딩/테두리까지 제거 */
+.flat-editor [data-testid="stVerticalBlock"] > div {{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}}
+
+/* 데이터 에디터 내부 캔버스 컨테이너까지 통일 */
+.flat-editor [data-testid="stDataFrame"] > div {{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -676,9 +692,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     df_master = master_df.copy()
     df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
-# ─────────────────────────────────────────────
-# 2) 발주 수량 입력 — 검색 + 표 + 버튼을 한 박스에, 안쪽 박스 없음(폼 제거)
-# ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # 2) 발주 수량 입력 — 검색 + 표 + 버튼을 한 박스에, 안쪽 박스 없음(폼 제거)
+    # ─────────────────────────────────────────────
 with st.container(border=True):
     st.markdown("### 🧾 발주 수량 입력")
 
@@ -703,10 +719,10 @@ with st.container(border=True):
     if "분류" in df_master.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
 
-    # 표 (폼 없이 표시) + 버튼 — 안쪽 박스 제거용 래퍼(.flat-editor)
+    # 표(폼 없이) — 안쪽 박스 제거를 위해 .flat-editor 래퍼만 사용
     df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
     df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
-    df_edit_disp["수량"] = ""   # TextColumn로 콤마 허용
+    df_edit_disp["수량"] = ""   # 콤마 허용(TextColumn)
     editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
 
     st.markdown("<div class='flat-editor'>", unsafe_allow_html=True)
@@ -724,31 +740,31 @@ with st.container(border=True):
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 일반 버튼(폼 X) → 클릭 1번에 바로 반영
+    # 일반 버튼(폼 X) – 박스 추가 생성 없음
     add_clicked = st.button("장바구니 추가", use_container_width=True, key="btn_cart_add")
 
-# 버튼 동작: 누적 담기(초기화 없음)
-if add_clicked:
-    # 최신 편집값은 세션키로 안전하게 읽음
-    cur = st.session_state.get(editor_key, edited_disp)
-    if isinstance(cur, pd.DataFrame):
-        tmp = cur[["품목코드","수량"]].copy()
-        tmp["수량"] = pd.to_numeric(
-            tmp["수량"].astype(str).str.replace(",", "").str.strip(),
-            errors="coerce"
-        ).fillna(0).astype(int)
-        tmp = tmp[tmp["수량"] > 0]
-        if tmp.empty:
-            st.warning("수량이 0보다 큰 품목이 없습니다.")
-        else:
-            base = df_view[["품목코드","품목명","단위","단가"]].copy()
-            base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
-            tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
-            _add_to_cart(tmp)                    # ✅ 누적 추가(초기화 없음)
-            st.success("장바구니에 추가되었습니다.")
-            st.session_state["store_editor_ver"] += 1  # 입력값 초기화
-            st.rerun()
 
+    # 버튼 동작: 누적 담기(초기화 없음)
+    if add_clicked:
+        # 최신 편집값은 세션키로 안전하게 읽음
+        cur = st.session_state.get(editor_key, edited_disp)
+        if isinstance(cur, pd.DataFrame):
+            tmp = cur[["품목코드","수량"]].copy()
+            tmp["수량"] = pd.to_numeric(
+                tmp["수량"].astype(str).str.replace(",", "").str.strip(),
+                errors="coerce"
+            ).fillna(0).astype(int)
+            tmp = tmp[tmp["수량"] > 0]
+            if tmp.empty:
+                st.warning("수량이 0보다 큰 품목이 없습니다.")
+            else:
+                base = df_view[["품목코드","품목명","단위","단가"]].copy()
+                base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
+                tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
+                _add_to_cart(tmp)                    # ✅ 누적 추가(초기화 없음)
+                st.success("장바구니에 추가되었습니다.")
+                st.session_state["store_editor_ver"] += 1  # 입력값 초기화
+                st.rerun()
 
     # ─────────────────────────────────────────────
     # 3) 장바구니 (체크박스 + 오토세이브 + 회색 버튼 3개)
