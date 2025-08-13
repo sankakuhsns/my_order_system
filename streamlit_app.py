@@ -123,15 +123,15 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 .login-card .stButton>button {{ width: 220px; height: 32px; }}
 
 /* A-2. 페이지 타이틀(로그인 이후) */
-.page-title {
+.page-title {{
   font-size: 34px;
   font-weight: 800;
   margin-top: 12px;     /* 상단 여백 */
   margin-bottom: 12px;  /* 제목과 탭 사이 */
-}
+}}
 
 /* A-3. 탭 아래쪽 간격 확보 */
-div[data-baseweb="tab-list"] { gap: 8px; margin-top: 6px; margin-bottom: 14px; }
+div[data-baseweb="tab-list"] {{ gap: 8px; margin-top: 6px; margin-bottom: 14px; }}
 
 </style>
 """, unsafe_allow_html=True)
