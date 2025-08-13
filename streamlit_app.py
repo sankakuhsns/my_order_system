@@ -104,14 +104,18 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 
 /* 로그인 화면 (입력/버튼 크기 절반 수준으로 축소) */
 .login-wrap {{ display:flex; justify-content:center; }}
-/* 로그인 제목: 더 크게 + 여백 보강 */
+st.markdown("""
+<style>
 .login-title {
   text-align: center;
-  font-size: 36px;     /* 24px → 36px */
+  font-size: 36px;
   font-weight: 800;
-  margin-top: 16px;    /* 8px → 16px */
-  margin-bottom: 12px; /* 추가: 제목 아래 공간 */
+  margin-top: 16px;
+  margin-bottom: 12px;
 }
+</style>
+""", unsafe_allow_html=True)
+
 .login-card {{
   width: 300px;                 /* 320 → 300 */
   margin-top: 16px; padding: 16px;
