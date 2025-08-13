@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v2.2)
+# 📦 Streamlit 식자재 발주 시스템 (v2.3)
 # - 주요 개선사항:
-#   - 장바구니 추가 안정성 강화 및 불필요한 새로고침 방지 (st.rerun 제거)
-#   - 사용자 피드백 강화를 위한 st.toast 메시지 적용
+#   - st.experimental_rerun()을 st.rerun()으로 변경하여 최신 Streamlit 버전과 호환
 # =============================================================================
 
 from io import BytesIO
@@ -704,7 +703,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         df_view = df_master.copy()
         if keyword:
             q = keyword.strip().lower()
-            df_view = df_view[df_view.apply(lambda row: q in str(row["품목명"]).lower() or q in str(row["품목코드"]).lower(), axis=1)]
+            df_view = df_view[df_view.apply(lambda row: q in str(row.get("품목명","")).lower() or q in str(row.get("품목코드","")).lower(), axis=1)]
         if cat_sel != "(전체)":
             df_view = df_view[df_view["분류"] == cat_sel]
 
@@ -726,7 +725,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             add_clicked = st.form_submit_button("장바구니 추가", use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # [수정] 장바구니 추가 로직
+        # [수정] 장바구니 추가 로직: st.rerun() 제거
         if add_clicked:
             items_to_add = normalize_cart(edited_disp)
             if items_to_add.empty:
@@ -738,8 +737,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 _add_to_cart(final_add_data)
                 st.toast(f"{len(items_to_add)}개 품목을 장바구니에 추가했습니다.", icon="🛒")
                 st.session_state.store_editor_ver += 1 # 입력창 초기화를 위해 key 변경
-                st.experimental_rerun() # 안정적인 새로고침
-
+                # st.rerun()을 호출하지 않으면 스크립트가 자연스럽게 끝까지 실행되고
+                # 다음 상호작용 시 위젯들이 자동으로 업데이트됨
+    
     with st.container(border=True):
         st.markdown("### 🧺 장바구니")
         # 장바구니 수정 로직
@@ -761,7 +761,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             updated_cart_df = edited_cart.drop(columns=["선택"])
             st.session_state.cart = normalize_cart(updated_cart_df)
             
-            # 장바구니 관리 버튼
+            # 장바구니 관리 버튼 (rerun 제거)
             st.markdown("<div class='muted-buttons'>", unsafe_allow_html=True)
             c1, c2, c3 = st.columns([1,1,1])
             all_codes = st.session_state.cart["품목코드"].astype(str).tolist()
@@ -769,15 +769,13 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             
             if c1.button("전체 해제" if is_all_selected else "전체 선택", use_container_width=True):
                 st.session_state.cart_selected_codes = [] if is_all_selected else all_codes
-                st.experimental_rerun()
+                # rerun() 없이도 다음 스크립트 실행 시 반영됨
             if c2.button("선택 삭제", use_container_width=True):
                 _remove_from_cart(st.session_state.cart_selected_codes)
                 st.session_state.cart_selected_codes = []
-                st.experimental_rerun()
             if c3.button("장바구니 비우기", use_container_width=True):
                 _clear_cart()
                 st.session_state.cart_selected_codes = []
-                st.experimental_rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
         else:
@@ -808,14 +806,10 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 st.success(f"발주가 접수되었습니다. 발주번호: {order_id}")
                 _clear_cart()
                 st.session_state.cart_selected_codes = []
-                st.experimental_rerun()
+                st.rerun() # 제출 후에는 상태를 완전히 초기화하기 위해 rerun
             else:
                 st.error("발주 저장에 실패했습니다.")
 
-# ──────────────────────────────────────────────
-# 이하 페이지 함수들은 이전 버전과 동일하게 유지됩니다.
-# (st.rerun()을 st.experimental_rerun()으로 변경하여 안정성을 높일 수 있습니다.)
-# ──────────────────────────────────────────────
 
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 수정")
@@ -869,7 +863,7 @@ def page_store_orders_change():
                     if write_orders_df(to_keep):
                         st.success("선택한 발주를 삭제했습니다.")
                         st.session_state.orders_selected_ids = []
-                        st.experimental_rerun()
+                        st.rerun() # 삭제 후에는 목록 갱신을 위해 rerun
                     else:
                         st.error("삭제 실패")
                 else:
@@ -886,7 +880,6 @@ def page_store_orders_change():
                 done_disp, key="store_done_editor", use_container_width=True, hide_index=True, height=200,
                 disabled=["발주번호", "주문일시", "건수", "총수량", "총금액", "상태"]
             )
-            # 출고완료 건 선택 시, 다른 선택은 해제
             selected_done = edited_done[edited_done["선택"]]["발주번호"].tolist()
             if selected_done:
                 st.session_state.orders_selected_ids = selected_done
@@ -988,7 +981,7 @@ def page_admin_unified_management():
             if st.button("✅ 선택 발주 출고", key="btn_pend_ship", type="primary"):
                 if st.session_state.admin_pending_selection:
                     if update_order_status(st.session_state.admin_pending_selection, "출고완료", st.session_state.auth.get("name","관리자")):
-                        st.success("출고완료 처리되었습니다."); st.session_state.admin_pending_selection = []; st.experimental_rerun()
+                        st.success("출고완료 처리되었습니다."); st.session_state.admin_pending_selection = []; st.rerun()
                 else: st.warning("출고할 발주를 선택하세요.")
         else: st.info("접수 상태인 발주가 없습니다.")
 
@@ -1001,7 +994,7 @@ def page_admin_unified_management():
             if st.button("↩️ 접수 상태로 변경", key="btn_ship_revert"):
                 if st.session_state.admin_shipped_selection:
                     if update_order_status(st.session_state.admin_shipped_selection, "접수", st.session_state.auth.get("name","관리자")):
-                        st.success("접수 상태로 변경되었습니다."); st.session_state.admin_shipped_selection = []; st.experimental_rerun()
+                        st.success("접수 상태로 변경되었습니다."); st.session_state.admin_shipped_selection = []; st.rerun()
                 else: st.warning("상태를 변경할 발주를 선택하세요.")
         else: st.info("출고 완료된 발주가 없습니다.")
             
@@ -1066,7 +1059,7 @@ def page_admin_items_price(master_df: pd.DataFrame):
             if write_master_df(final_df):
                 st.success("상품마스터에 저장되었습니다.")
                 st.cache_data.clear()
-                st.experimental_rerun()
+                st.rerun() # 마스터 데이터 변경 후에는 전체 앱 캐시를 지우고 새로고침
             else:
                 st.error("저장 실패")
 
