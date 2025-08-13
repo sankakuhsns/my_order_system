@@ -605,15 +605,18 @@ def _clear_cart():
 
 # === 메인 페이지 ===
 def page_store_register_confirm(master_df: pd.DataFrame):
+    # 세션 준비
     _ensure_cart()
     st.session_state.setdefault("store_editor_ver", 0)
-    st.session_state.setdefault("cart_selected_codes", [])  # 장바구니 체크박스 상태
+    st.session_state.setdefault("cart_selected_codes", [])  # 장바구니 체크 상태
 
     # 제목
     st.subheader("🛒 발주 등록 · 확인")
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
-    # ── 1) 납품 요청 정보 ─────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # 1) 납품 요청 정보 (제목+내용: 박스)
+    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 🗓️ 납품 요청 정보")
         c1, c2 = st.columns([1, 1])
@@ -632,7 +635,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     df_master = master_df.copy()
     df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
-    # ── 2) 발주 수량 입력 ─────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # 2) 발주 수량 입력 (제목+검색: 박스 / 표+버튼: 박스 밖)
+    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 🧾 발주 수량 입력")
         l, r = st.columns([2, 1])
@@ -645,7 +650,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             else:
                 cat_sel = "(전체)"
 
-    # 필터링(카드 밖)
+    # 필터링 (박스 밖)
     df_view = df_master.copy()
     if keyword:
         q = keyword.strip().lower()
@@ -655,12 +660,13 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     if "분류" in df_master.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
 
-    # 입력표(카드 밖) — 수량은 텍스트 입력(콤마 허용)
+    # 표(박스 밖): 수량은 TextColumn으로 콤마 허용
     df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
     df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
     df_edit_disp["수량"] = ""   # 텍스트 시작 → 입력 자유
     editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
 
+    # 표+버튼을 한 form에 넣어 '한 번에' 커밋 → 지연/두번클릭 방지
     with st.form(key="store_order_form", clear_on_submit=False):
         edited_disp = st.data_editor(
             df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
@@ -674,33 +680,39 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             disabled=["품목코드","품목명","단위","단가(원)"],
             hide_index=True, use_container_width=True, num_rows="fixed", height=380, key=editor_key,
         )
-        submitted_add_clear = st.form_submit_button("장바구니 추가", use_container_width=True)
+        submitted_add = st.form_submit_button("장바구니 추가", use_container_width=True)
 
-    if isinstance(edited_disp, pd.DataFrame) and submitted_add_clear:
+    if isinstance(edited_disp, pd.DataFrame) and submitted_add:
         tmp = edited_disp[["품목코드","수량"]].copy()
         # 콤마/공백 허용 → 안전 변환
         tmp["수량"] = pd.to_numeric(tmp["수량"].astype(str).str.replace(",", "").str.strip(),
                                    errors="coerce").fillna(0).astype(int)
         tmp = tmp[tmp["수량"] > 0]
-        if not tmp.empty:
+        if tmp.empty:
+            st.warning("수량이 0보다 큰 품목이 없습니다.")
+        else:
             base = df_view[["품목코드","품목명","단위","단가"]].copy()
             base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
             tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
             _add_to_cart(tmp)
             st.success("장바구니에 추가되었습니다.")
-            st.session_state["store_editor_ver"] += 1  # 입력표 초기화(다음 rerun에서 반영)
+            # 에디터 완전 초기화 + 즉시 반영
+            st.session_state["store_editor_ver"] += 1
+            st.rerun()
 
-    # ── 3) 장바구니 (체크박스 열 + 오토세이브, 저장버튼 없음) ─────
-    st.session_state.setdefault("cart_selected_codes", [])
+    # ─────────────────────────────────────────────
+    # 3) 장바구니 (체크박스 + 오토세이브, 3버튼)
+    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 🧺 장바구니")
 
-        cart = normalize_cart(st.session_state["cart"]).copy()
+        cart = _coerce_price_qty(st.session_state["cart"]).copy()
         if not cart.empty:
-            # 👉 TextColumn 사용 컬럼은 문자열로 변환
-            cart["수량"] = cart["수량"].astype(int).astype(str)
-            selected_set = set(map(str, st.session_state.get("cart_selected_codes", [])))
+            # TextColumn 사용을 위해 수량은 문자열로 렌더링 (콤마 없이 표준 숫자문자열)
+            cart["수량"] = pd.to_numeric(cart["수량"], errors="coerce").fillna(0).astype(int).astype(str)
 
+            # 체크 상태 적용
+            selected_set = set(map(str, st.session_state.get("cart_selected_codes", [])))
             cart_disp = cart.copy()
             cart_disp.insert(0, "선택", cart_disp["품목코드"].astype(str).isin(selected_set))
 
@@ -719,40 +731,54 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 hide_index=True, use_container_width=True, height=340, key="cart_editor_live",
             )
 
-            # 선택 상태 갱신
+            # 최신 선택 상태 반영
             try:
                 st.session_state["cart_selected_codes"] = (
-                    cart_view.loc[cart_view["선택"] == True, "품목코드"].astype(str).tolist()
+                    cart_view.loc[cart_view["선택"] == True, "품목코드"].astype(str).tolist()  # noqa: E712
                 )
             except Exception:
                 st.session_state["cart_selected_codes"] = []
 
-            # 오토세이브: 타입 강제 + 총금액 재계산 + 0수량 제거
+            # 오토세이브: 수량 텍스트 → 숫자 정규화 후 재계산
             updated = cart_view.drop(columns=["선택"], errors="ignore").copy()
-            st.session_state["cart"] = normalize_cart(updated)
+            if "수량" in updated.columns:
+                updated["수량"] = pd.to_numeric(
+                    updated["수량"].astype(str).str.replace(",", "").str.strip(),
+                    errors="coerce"
+                ).fillna(0).astype(int)
+            st.session_state["cart"] = _coerce_price_qty(updated)
 
-            # 액션(폼으로 묶어 rerun 최소화)
-            with st.form(key="cart_actions", clear_on_submit=False):
-                col_a, col_b, col_c, col_d = st.columns([1,1,1,1])
-                with col_a: do_delete = st.form_submit_button("선택 삭제", use_container_width=True)
-                with col_b: do_select_all = st.form_submit_button("전체 선택", use_container_width=True)
-                with col_c: do_unselect_all = st.form_submit_button("전체 해제", use_container_width=True)
-                with col_d: do_clear = st.form_submit_button("장바구니 비우기", use_container_width=True)
+            # ── 3개 버튼: [전체 선택/해제](토글) · [선택 삭제] · [장바구니 비우기]
+            c1, c2, c3 = st.columns([1,1,1])
 
-            if do_delete:
-                _remove_from_cart(st.session_state.get("cart_selected_codes", []))
-                st.session_state["cart_selected_codes"] = []
-            if do_select_all:
-                st.session_state["cart_selected_codes"] = st.session_state["cart"]["품목코드"].astype(str).tolist()
-            if do_unselect_all:
-                st.session_state["cart_selected_codes"] = []
-            if do_clear:
-                _clear_cart(); st.session_state["cart_selected_codes"] = []
+            # 토글 라벨 결정
+            all_codes = st.session_state["cart"]["품목코드"].astype(str).tolist()
+            already_all = set(st.session_state.get("cart_selected_codes", [])) == set(all_codes) and len(all_codes) > 0
+            toggle_label = "전체 해제" if already_all else "전체 선택"
+
+            with c1:
+                if st.button(toggle_label, use_container_width=True, key="btn_toggle_all_cart"):
+                    st.session_state["cart_selected_codes"] = [] if already_all else all_codes
+                    st.rerun()
+
+            with c2:
+                if st.button("선택 삭제", use_container_width=True, key="btn_delete_selected_cart"):
+                    _remove_from_cart(st.session_state.get("cart_selected_codes", []))
+                    st.session_state["cart_selected_codes"] = []
+                    st.rerun()
+
+            with c3:
+                if st.button("장바구니 비우기", use_container_width=True, key="btn_clear_cart"):
+                    _clear_cart()
+                    st.session_state["cart_selected_codes"] = []
+                    st.rerun()
         else:
             st.info("장바구니가 비어 있습니다.")
 
-    # ── 합계 바(장바구니 박스 밖, 하단 고정) ───────────────────────
-    cart_now = normalize_cart(st.session_state["cart"])
+    # ─────────────────────────────────────────────
+    # 하단 고정 합계 바 (장바구니 박스 밖)
+    # ─────────────────────────────────────────────
+    cart_now = _coerce_price_qty(st.session_state["cart"])
     total_items = len(cart_now)
     total_qty   = int(cart_now["수량"].sum())   if not cart_now.empty else 0
     total_amt   = int(cart_now["총금액"].sum()) if not cart_now.empty else 0
@@ -770,7 +796,9 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     # 래퍼 종료
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── 제출 ─────────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # 제출(한 번 클릭으로 즉시 확정)
+    # ─────────────────────────────────────────────
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False, key="store_confirm_chk")
     if st.button("📦 발주 제출", type="primary", use_container_width=True, key="store_submit_btn"):
         if total_items == 0:
