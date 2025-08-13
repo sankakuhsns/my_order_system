@@ -24,7 +24,7 @@ import xlsxwriter  # noqa: F401 (엔진 로딩용)
 # -----------------------------------------------------------------------------
 # 페이지/테마/스타일 (최소 수정판 - 오류 수정)
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="발주 시스템", page_icon="📦", layout="wide")
+st.set_page_config(page_title="산카쿠 식자재 발주 시스템", page_icon="📦", layout="wide")
 
 THEME = {
     "BORDER": "#e8e8e8",
@@ -58,7 +58,7 @@ html, body, [data-testid="stAppViewContainer"] {{
 
 .metric {{ font-weight:700; color:{THEME['PRIMARY']}; }}
 
-.block-container {{ padding-top: 1.2rem; padding-bottom: 1.6rem; }}
+.block-container { padding-top: 2.4rem; padding-bottom: 1.6rem; }  /* 1.2rem → 2.4rem */
 
 /* 버튼/입력 공통 */
 .stButton>button {{
@@ -122,16 +122,17 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 .login-card .stTextInput>div>div>input {{ width: 220px; height: 32px; }}
 .login-card .stButton>button {{ width: 220px; height: 32px; }}
 
-/* (선택) 로그인 백그라운드 이미지 */
-:root {{ --login-bg-url: url('https://images.unsplash.com/photo-1542838686-73ae2c1c5c53?q=80&w=1920&auto=format'); }}
-.login-bg {{
-  min-height: 50vh;
-  background-image: var(--login-bg-url);
-  background-size: cover;
-  background-position: center;
-  border-radius: 12px;
-  border: 1px solid {THEME['BORDER']};
-}}
+/* A-2. 페이지 타이틀(로그인 이후) */
+.page-title {
+  font-size: 34px;
+  font-weight: 800;
+  margin-top: 12px;     /* 상단 여백 */
+  margin-bottom: 12px;  /* 제목과 탭 사이 */
+}
+
+/* A-3. 탭 아래쪽 간격 확보 */
+div[data-baseweb="tab-list"] { gap: 8px; margin-top: 6px; margin-bottom: 14px; }
+
 </style>
 """, unsafe_allow_html=True)
 
