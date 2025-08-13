@@ -142,19 +142,6 @@ button[role="tab"][aria-selected="true"] {{
 [data-baseweb="tab-highlight"] {{ display: none !important; }}
 
 /* =========================
-   Sections (가운데 박스/여백)
-========================= */
-.center-narrow {{ max-width: 900px; margin: 0 auto; }}
-.section {{ margin: 16px 0 24px; }}
-.section > .box {{
-  background: #ffffff;                 /* 필요시 #FAFBFC로 톤업 */
-  border: 1px solid #e8e8e8;
-  border-radius: 12px;
-  padding: 14px 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
-}}
-
-/* =========================
    Sticky summary
 ========================= */
 .sticky-bottom {{
