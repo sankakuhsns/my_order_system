@@ -661,17 +661,17 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         memo = st.text_area("요청 사항(선택)", key="store_req_memo", height=80,
                             placeholder="예) 입고 시 얼음팩 추가 부탁드립니다.")
 
-    # 마스터 정규화(단가 int)
+    # 마스터(단가 정수화)
     df_master = master_df.copy()
     df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
     # ─────────────────────────────────────────────
-    # 2) 발주 수량 입력  ⟶  **검색 + 표 + 버튼을 '한 박스'에 통합**
+    # 2) 발주 수량 입력 — 검색+표+버튼을 '한 박스'에, 폼은 무테(.flat-form)
     # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 🧾 발주 수량 입력")
 
-        # (검색행)
+        # 검색행
         l, r = st.columns([2, 1])
         with l:
             keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
@@ -682,7 +682,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             else:
                 cat_sel = "(전체)"
 
-        # (필터링)
+        # 필터링
         df_view = df_master.copy()
         if keyword:
             q = keyword.strip().lower()
@@ -692,12 +692,13 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if "분류" in df_master.columns and cat_sel != "(전체)":
             df_view = df_view[df_view["분류"] == cat_sel]
 
-        # (표 + 버튼) — 폼 1개에 묶어 한 번 클릭으로 커밋
+        # 표 + 버튼 (폼 = 무테)
         df_edit_disp = df_view[["품목코드","품목명","단위","단가"]].copy()
         df_edit_disp["단가(원)"] = df_edit_disp["단가"].map(lambda v: f"{v:,.0f}")
-        df_edit_disp["수량"] = ""   # TextColumn로 콤마 허용
+        df_edit_disp["수량"] = ""   # TextColumn(콤마 허용)
         editor_key = f"store_order_editor_v{st.session_state['store_editor_ver']}"
 
+        st.markdown("<div class='flat-form'>", unsafe_allow_html=True)
         with st.form(key="store_order_form", clear_on_submit=False):
             edited_disp = st.data_editor(
                 df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
@@ -712,24 +713,26 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 hide_index=True, use_container_width=True, num_rows="fixed", height=380, key=editor_key,
             )
             submitted_add = st.form_submit_button("장바구니 추가", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        if isinstance(edited_disp, pd.DataFrame) and submitted_add:
-            tmp = edited_disp[["품목코드","수량"]].copy()
-            tmp["수량"] = pd.to_numeric(
-                tmp["수량"].astype(str).str.replace(",", "").str.strip(),
-                errors="coerce"
-            ).fillna(0).astype(int)
-            tmp = tmp[tmp["수량"] > 0]
-            if tmp.empty:
-                st.warning("수량이 0보다 큰 품목이 없습니다.")
-            else:
-                base = df_view[["품목코드","품목명","단위","단가"]].copy()
-                base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
-                tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
-                _add_to_cart(tmp)           # ✅ 누적 추가 (초기화 없음)
-                st.success("장바구니에 추가되었습니다.")
-                st.session_state["store_editor_ver"] += 1
-                st.rerun()                   # 즉시 반영
+    # 장바구니 반영
+    if isinstance(edited_disp, pd.DataFrame) and submitted_add:
+        tmp = edited_disp[["품목코드","수량"]].copy()
+        tmp["수량"] = pd.to_numeric(
+            tmp["수량"].astype(str).str.replace(",", "").str.strip(),
+            errors="coerce"
+        ).fillna(0).astype(int)
+        tmp = tmp[tmp["수량"] > 0]
+        if tmp.empty:
+            st.warning("수량이 0보다 큰 품목이 없습니다.")
+        else:
+            base = df_view[["품목코드","품목명","단위","단가"]].copy()
+            base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
+            tmp = tmp.merge(base, on="품목코드", how="left")[["품목코드","품목명","단위","단가","수량"]]
+            _add_to_cart(tmp)                      # ✅ 누적 유지
+            st.success("장바구니에 추가되었습니다.")
+            st.session_state["store_editor_ver"] += 1
+            st.rerun()
 
     # ─────────────────────────────────────────────
     # 3) 장바구니 (체크박스 + 오토세이브 + 회색 버튼 3개)
@@ -758,7 +761,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                     "품목명":   st.column_config.TextColumn(label="품목명"),
                     "단위":     st.column_config.TextColumn(label="단위"),
                 },
-                disabled=["품목코드","품목명","단위","단가","총금액"],  # 수량/선택만 편집
+                disabled=["품목코드","품목명","단위","단가","총금액"],
                 hide_index=True, use_container_width=True, height=340, key="cart_editor_live",
             )
 
@@ -779,7 +782,8 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 ).fillna(0).astype(int)
             st.session_state["cart"] = _coerce_price_qty(updated)
 
-            # 회색 버튼 3개: [전체 선택/해제(토글)] [선택 삭제] [비우기]
+            # 회색 버튼 3개(클래스 래퍼로 색 고정)
+            st.markdown("<div class='muted-buttons'>", unsafe_allow_html=True)
             c1, c2, c3 = st.columns([1,1,1])
 
             all_codes = st.session_state["cart"]["품목코드"].astype(str).tolist()
@@ -802,6 +806,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                     _clear_cart()
                     st.session_state["cart_selected_codes"] = []
                     st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.info("장바구니가 비어 있습니다.")
 
@@ -826,9 +831,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     # 래퍼 종료
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────
     # 제출
-    # ─────────────────────────────────────────────
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False, key="store_confirm_chk")
     if st.button("📦 발주 제출", type="primary", use_container_width=True, key="store_submit_btn"):
         if total_items == 0:
