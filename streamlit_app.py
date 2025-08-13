@@ -618,33 +618,34 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *,
     return buf
 
 # =============================================================================
-# 7) 발주(지점) 화면  — 개선판
+# 7) 발주(지점) 화면 — 최종 정리본
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 등록 · 확인")
-
-    # 가운데 좁은 래퍼 시작
+    # 전체를 가운데 좁은 래퍼로 감싸기
     st.markdown("<div class='center-narrow'>", unsafe_allow_html=True)
 
     # ── [섹션] 납품 선택 ─────────────────────────────────────────
-    c1, c2, c3 = st.columns([1,1,2])
+    st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
-        quick = st.radio("납품 선택", ["오늘","내일","직접선택"], horizontal=True, key="store_quick_radio")
+        quick = st.radio("납품 선택", ["오늘", "내일", "직접선택"], horizontal=True, key="store_quick_radio")
     with c2:
         납품요청일 = (
-            date.today() if quick=="오늘" else
-            (date.today()+timedelta(days=1) if quick=="내일" else
+            date.today() if quick == "오늘" else
+            (date.today() + timedelta(days=1) if quick == "내일" else
              st.date_input("납품 요청일", value=date.today(), key="store_req_date"))
         )
     with c3:
         memo = st.text_input("요청 사항(선택)", key="store_req_memo")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     # ── [섹션] 1) 발주 품목 검색 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 1) 발주 품목 검색")
-    l, r = st.columns([2,1])
-    with l: keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
+    l, r = st.columns([2, 1])
+    with l:
+        keyword = st.text_input("품목 검색(이름/코드)", key="store_kw")
     with r:
         if "분류" in master_df.columns:
             cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
@@ -655,73 +656,80 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     df_view = master_df.copy()
     if keyword:
         q = keyword.strip().lower()
-        df_view = df_view[df_view.apply(lambda r: q in str(r.get("품목명","")).lower()
-                                                  or q in str(r.get("품목코드","")).lower(), axis=1)]
+        df_view = df_view[df_view.apply(
+            lambda row: q in str(row.get("품목명", "")).lower()
+                        or q in str(row.get("품목코드", "")).lower(),
+            axis=1
+        )]
     if "분류" in master_df.columns and cat_sel != "(전체)":
         df_view = df_view[df_view["분류"] == cat_sel]
 
-    # 단가 숫자형 + 콤마 표기용 컬럼
+    # 단가: 숫자형 강제 + 미리보기는 콤마 표기
     df_view["단가"] = pd.to_numeric(df_view.get("단가", 0), errors="coerce").fillna(0).astype(int)
     df_preview = df_view.copy()
     df_preview["단가(원)"] = df_preview["단가"].map(lambda v: f"{v:,.0f}")
 
-    preview_cols = [c for c in ["품목코드","품목명","분류","단위","단가(원)"] if c in df_preview.columns]
-    st.dataframe(df_preview[preview_cols].reset_index(drop=True),
-                 use_container_width=True, height=260)
+    preview_cols = [c for c in ["품목코드", "품목명", "분류", "단위", "단가(원)"] if c in df_preview.columns]
+    st.dataframe(
+        df_preview[preview_cols].reset_index(drop=True),
+        use_container_width=True,
+        height=260
+    )
     st.markdown("</div></div>", unsafe_allow_html=True)
 
     # ── [섹션] 2) 발주 수량 입력 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 2) 발주 수량 입력")
 
- # df_view가 이미 필터링된 마스터라고 가정
- df_view = df_view.copy()
- # 🔒 숫자형 강제 (NaN → 0)
- df_view["단가"] = pd.to_numeric(df_view.get("단가", 0), errors="coerce").fillna(0).astype(int)
+    # 편집 프레임: 반드시 숫자형 단가/수량
+    df_edit = df_view[["품목코드", "품목명", "단위", "단가"]].copy()
+    df_edit["수량"] = 0  # int 시작값
 
- with st.form(key="store_order_form", clear_on_submit=False):
-     # 에디터에 넣을 프레임: 숫자 단가 + 수량 0으로 시작
-     df_edit = df_view[["품목코드","품목명","단위","단가"]].copy()
-     df_edit["수량"] = 0  # <- int 타입
-
-     edited = st.data_editor(
-         df_edit,
-         column_config={
-             # 단가는 읽기전용 숫자(콤마표시)
-             "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
-             # 수량은 편집 가능
-             "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
-         },
-         disabled=["품목코드","품목명","단위","단가"],   # 수량만 편집
-         hide_index=True,
-         use_container_width=True,
-         num_rows="fixed",
-         height=360,
-         key="store_order_editor",
-     )
-    submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
+    with st.form(key="store_order_form", clear_on_submit=False):
+        edited = st.data_editor(
+            df_edit,
+            column_config={
+                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d", step=1),
+                "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
+            },
+            disabled=["품목코드", "품목명", "단위", "단가"],  # 수량만 편집
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",
+            height=360,
+            key="store_order_editor",
+        )
+        submitted = st.form_submit_button("장바구니 반영", use_container_width=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     # ── [섹션] 3) 발주 입력 내역 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
     st.markdown("### 3) 발주 입력 내역")
-    sel_df = edited[edited["수량"].fillna(0).astype(float) > 0].copy() \
-             if isinstance(edited, pd.DataFrame) else \
-             pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량"])
+
+    if isinstance(edited, pd.DataFrame):
+        # 수량>0만 선택
+        sel_df = edited[pd.to_numeric(edited["수량"], errors="coerce").fillna(0) > 0].copy()
+    else:
+        sel_df = pd.DataFrame(columns=["품목코드", "품목명", "단위", "단가", "수량"])
+
     if not sel_df.empty:
         sel_df["단가"] = pd.to_numeric(sel_df["단가"], errors="coerce").fillna(0).astype(int)
         sel_df["수량"] = pd.to_numeric(sel_df["수량"], errors="coerce").fillna(0).astype(int)
         sel_df["총금액"] = (sel_df["수량"] * sel_df["단가"]).astype(int)
 
         st.dataframe(
-            sel_df[["품목코드","품목명","단위","수량","단가","총금액"]],
-            use_container_width=True, height=260,
+            sel_df[["품목코드", "품목명", "단위", "수량", "단가", "총금액"]],
+            use_container_width=True,
+            height=260,
             column_config={
-                "수량":   st.column_config.NumberColumn(format="%,d"),
-                "단가":   st.column_config.NumberColumn(label="단가(원)", format="%,d"),
+                "수량": st.column_config.NumberColumn(format="%,d"),
+                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d"),
                 "총금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
             }
         )
-        total_items = len(sel_df); total_qty = int(sel_df["수량"].sum()); total_amt = int(sel_df["총금액"].sum())
+        total_items = len(sel_df)
+        total_qty = int(sel_df["수량"].sum())
+        total_amt = int(sel_df["총금액"].sum())
     else:
         total_items = total_qty = total_amt = 0
 
@@ -736,89 +744,101 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     """, unsafe_allow_html=True)
     st.markdown("</div></div>", unsafe_allow_html=True)  # /box /section
 
-    # 가운데 래퍼 종료
+    # 래퍼 종료
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # 제출
     confirm = st.checkbox("제출 전 입력 내용 확인했습니다.", value=False, key="store_confirm_chk")
     if st.button("📦 발주 제출", type="primary", use_container_width=True, key="store_submit_btn"):
         if total_items == 0:
-            st.warning("수량이 0보다 큰 품목이 없습니다."); st.stop()
+            st.warning("수량이 0보다 큰 품목이 없습니다.")
+            st.stop()
         if not confirm:
-            st.warning("체크박스를 확인해 주세요."); st.stop()
+            st.warning("체크박스를 확인해 주세요.")
+            st.stop()
+
         user = st.session_state["auth"]
-        order_id = make_order_id(user.get("user_id","STORE"))
+        order_id = make_order_id(user.get("user_id", "STORE"))
         now = now_kst_str()
         rows = []
         for _, r in sel_df.iterrows():
             rows.append({
                 "주문일시": now, "발주번호": order_id, "지점ID": user.get("user_id"), "지점명": user.get("name"),
                 "납품요청일": str(납품요청일), "품목코드": r.get("품목코드"), "품목명": r.get("품목명"),
-                "단위": r.get("단위"), "수량": int(r.get("수량",0) or 0),
-                "단가": int(r.get("단가",0) or 0), "금액": int(r.get("총금액",0) or 0),
+                "단위": r.get("단위"), "수량": int(r.get("수량", 0) or 0),
+                "단가": int(r.get("단가", 0) or 0), "금액": int(r.get("총금액", 0) or 0),
                 "비고": memo or "", "상태": "접수", "처리일시": "", "처리자": ""
             })
         st.success(f"발주가 접수되었습니다. 발주번호: {order_id}") if append_orders(rows) else st.error("발주 저장에 실패했습니다.")
 
+
+# =============================================================================
+# 8) 발주 조회·변경 — 정리본
+# =============================================================================
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 변경")
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
     df = load_orders_df().copy()
     user = st.session_state["auth"]
     if df.empty:
-        st.info("발주 데이터가 없습니다."); st.markdown("</div>", unsafe_allow_html=True); return
+        st.info("발주 데이터가 없습니다.")
+        return
     df = df[df["지점ID"].astype(str) == user.get("user_id")]
 
     c1, c2 = st.columns(2)
-    with c1: dt_from = st.date_input("시작일", value=date.today()-timedelta(days=14), key="store_edit_from")
-    with c2: dt_to   = st.date_input("종료일", value=date.today(), key="store_edit_to")
+    with c1:
+        dt_from = st.date_input("시작일", value=date.today() - timedelta(days=14), key="store_edit_from")
+    with c2:
+        dt_to = st.date_input("종료일", value=date.today(), key="store_edit_to")
 
     dt_series = pd.to_datetime(df["주문일시"], errors="coerce")
     mask = dt_series.notna() & (dt_series.dt.date >= dt_from) & (dt_series.dt.date <= dt_to)
-    dfv = df[mask].copy().sort_values(["발주번호","품목코드"])
+    dfv = df[mask].copy().sort_values(["발주번호", "품목코드"])
 
     orders = dfv.groupby("발주번호").agg(
-        건수=("품목코드","count"),
+        건수=("품목코드", "count"),
         총수량=("수량", lambda x: pd.to_numeric(x, errors="coerce").fillna(0).sum()),
         총금액=("금액", lambda x: pd.to_numeric(x, errors="coerce").fillna(0).sum()),
-        상태=("상태", lambda s: "출고완료" if (s=="출고완료").all() else "접수")
+        상태=("상태", lambda s: "출고완료" if (s == "출고완료").all() else "접수")
     ).reset_index()
 
-    tbl, pick = st.columns([3,1])
+    tbl, pick = st.columns([3, 1])
     with tbl:
         st.dataframe(
-            orders.rename(columns={"총금액":"총 금액","총수량":"총 수량"}),
+            orders.rename(columns={"총금액": "총 금액", "총수량": "총 수량"}),
             use_container_width=True, height=220,
-            column_config={"총 금액": st.column_config.NumberColumn(format="%,d"),
-                           "총 수량": st.column_config.NumberColumn(format="%,d")}
+            column_config={
+                "총 금액": st.column_config.NumberColumn(format="%,d"),
+                "총 수량": st.column_config.NumberColumn(format="%,d")
+            }
         )
     with pick:
         target_order = st.radio("발주번호", options=orders["발주번호"].tolist(), key="store_edit_pick")
-    st.markdown("</div>", unsafe_allow_html=True)
 
     if not target_order:
         return
 
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-    target_df = dfv[dfv["발주번호"]==target_order].copy()
-    is_ship_done = (target_df["상태"]=="출고완료").all()
+    target_df = dfv[dfv["발주번호"] == target_order].copy()
+    is_ship_done = (target_df["상태"] == "출고완료").all()
 
     st.caption(f"선택 발주 품목수: {len(target_df)}  |  상태: {'출고완료' if is_ship_done else '접수'}")
-    show_cols = ["품목코드","품목명","단위","수량","단가","비고"]
+    show_cols = ["품목코드", "품목명", "단위", "수량", "단가", "비고"]
 
     if is_ship_done:
         st.info("출고완료 건은 수정/삭제할 수 없습니다.")
-        st.dataframe(target_df[show_cols], use_container_width=True, height=360,
-                     column_config={
-                        "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d"),
-                        "수량": st.column_config.NumberColumn(format="%,d")
-                     })
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.dataframe(
+            target_df[show_cols], use_container_width=True, height=360,
+            column_config={
+                "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d"),
+                "수량": st.column_config.NumberColumn(format="%,d")
+            }
+        )
         return
 
     target_df["삭제"] = False
     edited = st.data_editor(
-        target_df[["발주번호"]+show_cols+["삭제"]],
+        target_df[["발주번호"] + show_cols + ["삭제"]],
         disabled=["발주번호"],
         column_config={
             "수량": st.column_config.NumberColumn(min_value=0, step=1, format="%,d"),
@@ -828,14 +848,14 @@ def page_store_orders_change():
         use_container_width=True, num_rows="dynamic", hide_index=True, key="store_edit_orders_editor"
     )
 
-    col_a, col_b = st.columns([1,1])
+    col_a, col_b = st.columns([1, 1])
     with col_a:
         if st.button("선택 행 삭제", key="store_del_rows"):
             base = df.copy()
-            to_del = edited[edited["삭제"]==True][["발주번호","품목코드"]]  # noqa: E712
+            to_del = edited[edited["삭제"] == True][["발주번호", "품목코드"]]  # noqa: E712
             if not to_del.empty:
                 drop_idx = pd.MultiIndex.from_frame(to_del)
-                base_idx = pd.MultiIndex.from_frame(base[["발주번호","품목코드"]])
+                base_idx = pd.MultiIndex.from_frame(base[["발주번호", "품목코드"]])
                 keep_mask = ~base_idx.isin(drop_idx)
                 ok = write_orders_df(base.loc[keep_mask].copy())
                 st.success("선택 행을 삭제했습니다.") if ok else st.error("삭제 실패")
@@ -845,34 +865,44 @@ def page_store_orders_change():
     with col_b:
         if st.button("변경 내용 저장", type="primary", key="store_edit_save"):
             base = df.copy()
-            key_cols = ["발주번호","품목코드"]
-            merged = base.merge(edited[key_cols+["수량","단가","비고","삭제"]],
-                                on=key_cols, how="left", suffixes=("","_new"))
+            key_cols = ["발주번호", "품목코드"]
+            merged = base.merge(
+                edited[key_cols + ["수량", "단가", "비고", "삭제"]],
+                on=key_cols, how="left", suffixes=("", "_new")
+            )
             base["수량"] = merged["수량_new"].combine_first(base["수량"])
             base["단가"] = merged["단가_new"].combine_first(base["단가"])
             base["비고"] = merged["비고_new"].combine_first(base["비고"])
-            del_mask = (merged["삭제"]==True) | (pd.to_numeric(base["수량"], errors="coerce").fillna(0).astype(int) == 0)
+            del_mask = (merged["삭제"] == True) | (
+                pd.to_numeric(base["수량"], errors="coerce").fillna(0).astype(int) == 0
+            )
             base = base[~(del_mask.fillna(False))].copy()
             base["수량"] = pd.to_numeric(base["수량"], errors="coerce").fillna(0).astype(int)
             base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
             base["금액"] = (base["수량"] * base["단가"]).astype(int)
             ok = write_orders_df(base)
             st.success("변경사항을 저장했습니다.") if ok else st.error("저장 실패")
-    st.markdown("</div>", unsafe_allow_html=True)
 
+
+# =============================================================================
+# 9) 발주서 조회·다운로드 — 정리본
+# =============================================================================
 def page_store_order_form_download(master_df: pd.DataFrame):
     st.subheader("📑 발주서 조회 · 다운로드")
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
     df = load_orders_df().copy()
     if df.empty:
-        st.info("발주 데이터가 없습니다."); return
+        st.info("발주 데이터가 없습니다.")
+        return
     user = st.session_state["auth"]
     df = df[df["지점ID"].astype(str) == user.get("user_id")]
 
-    c1, c2, c3 = st.columns([1,1,2])
-    with c1: dt_from = st.date_input("시작일", value=date.today()-timedelta(days=7), key="store_dl_from")
-    with c2: dt_to   = st.date_input("종료일", value=date.today(), key="store_dl_to")
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        dt_from = st.date_input("시작일", value=date.today() - timedelta(days=7), key="store_dl_from")
+    with c2:
+        dt_to = st.date_input("종료일", value=date.today(), key="store_dl_to")
     with c3:
         order_ids = ["(전체)"] + sorted(df["발주번호"].dropna().unique().tolist())
         target_order = st.selectbox("발주번호(선택 시 해당 건만)", order_ids, key="store_dl_orderid")
@@ -880,15 +910,14 @@ def page_store_order_form_download(master_df: pd.DataFrame):
     dt_series = pd.to_datetime(df["주문일시"], errors="coerce")
     mask = dt_series.notna() & (dt_series.dt.date >= dt_from) & (dt_series.dt.date <= dt_to)
     if target_order != "(전체)":
-        mask &= (df["발주번호"]==target_order)
-    dfv = df[mask].copy().sort_values(["발주번호","품목코드"])
+        mask &= (df["발주번호"] == target_order)
+    dfv = df[mask].copy().sort_values(["발주번호", "품목코드"])
 
     st.dataframe(
-        dfv,
-        use_container_width=True, height=420,
+        dfv, use_container_width=True, height=420,
         column_config={
-            "단가": st.column_config.NumberColumn(format="%,d"),
-            "금액": st.column_config.NumberColumn(format="%,d"),
+            "단가": st.column_config.NumberColumn(label="단가(원)", format="%,d"),
+            "금액": st.column_config.NumberColumn(label="총금액(원)", format="%,d"),
             "수량": st.column_config.NumberColumn(format="%,d"),
         }
     )
@@ -896,23 +925,28 @@ def page_store_order_form_download(master_df: pd.DataFrame):
     period_text = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
     buf = make_order_sheet_excel(dfv, include_price=False, title="산카쿠 납품내역서", period_text=period_text)
     fname = make_filename("산카쿠 납품내역서", dt_from, dt_to)
-    st.download_button("발주서 엑셀 다운로드", data=buf.getvalue(),
-                       file_name=fname,
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       key="store_dl_btn")
+    st.download_button(
+        "발주서 엑셀 다운로드", data=buf.getvalue(),
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="store_dl_btn"
+    )
 
 
+# =============================================================================
+# 10) 발주 품목 가격 조회 — 정리본
+# =============================================================================
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 발주 품목 가격 조회")
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-    cols = [c for c in ["품목코드","품목명","분류","단위","단가"] if c in master_df.columns]
+    cols = [c for c in ["품목코드", "품목명", "분류", "단위", "단가"] if c in master_df.columns]
     view = master_df[cols].copy()
     view["단가"] = pd.to_numeric(view.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
     st.dataframe(
         view, use_container_width=True, height=480,
-        column_config={"단가": st.column_config.NumberColumn(format="%,d")}
+        column_config={"단가": st.column_config.NumberColumn(label="단가(원)", format="%,d")}
     )
 
 
