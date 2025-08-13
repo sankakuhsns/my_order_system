@@ -633,7 +633,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     df_master["단가"] = pd.to_numeric(df_master.get("단가", 0), errors="coerce").fillna(0).astype(int)
 
     # ── 2) 발주 수량 입력 ─────────────────────────────────────
-    # (요청: 표와 버튼은 '박스' 밖으로 분리, 카드는 필터/제목만 포함)
     with st.container(border=True):
         st.markdown("### 🧾 발주 수량 입력")
         l, r = st.columns([2, 1])
@@ -666,11 +665,11 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         edited_disp = st.data_editor(
             df_edit_disp[["품목코드","품목명","단위","단가(원)","수량"]],
             column_config={
-                "수량": textcol("수량", "숫자/콤마 입력 가능"),
+                "수량":     st.column_config.TextColumn(label="수량", help="숫자/콤마 입력 가능"),
                 "단가(원)": st.column_config.TextColumn(label="단가(원)"),
-                "품목코드": EDITOR_CFG["품목코드"],
-                "품목명":   EDITOR_CFG["품목명"],
-                "단위":     EDITOR_CFG["단위"],
+                "품목코드": st.column_config.TextColumn(label="품목코드"),
+                "품목명":   st.column_config.TextColumn(label="품목명"),
+                "단위":     st.column_config.TextColumn(label="단위"),
             },
             disabled=["품목코드","품목명","단위","단가(원)"],
             hide_index=True, use_container_width=True, num_rows="fixed", height=380, key=editor_key,
@@ -698,7 +697,10 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 
         cart = normalize_cart(st.session_state["cart"]).copy()
         if not cart.empty:
+            # 👉 TextColumn 사용 컬럼은 문자열로 변환
+            cart["수량"] = cart["수량"].astype(int).astype(str)
             selected_set = set(map(str, st.session_state.get("cart_selected_codes", [])))
+
             cart_disp = cart.copy()
             cart_disp.insert(0, "선택", cart_disp["품목코드"].astype(str).isin(selected_set))
 
@@ -706,13 +708,12 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 cart_disp[["선택","품목코드","품목명","단위","수량","단가","총금액"]],
                 column_config={
                     "선택":   st.column_config.CheckboxColumn(label=""),
-                    # 수량은 텍스트 입력(콤마 허용) → 내부에서 정규화
-                    "수량":   textcol("수량", "숫자/콤마 입력 가능"),
-                    "단가":   EDITOR_CFG["단가"],
-                    "총금액": EDITOR_CFG["총금액"],
-                    "품목코드": EDITOR_CFG["품목코드"],
-                    "품목명":   EDITOR_CFG["품목명"],
-                    "단위":     EDITOR_CFG["단위"],
+                    "수량":   st.column_config.TextColumn(label="수량", help="숫자/콤마 입력 가능"),
+                    "단가":   st.column_config.NumberColumn(label="단가(원)", min_value=0, step=1, format="%,d"),
+                    "총금액": st.column_config.NumberColumn(label="총금액(원)", min_value=0, step=1, format="%,d"),
+                    "품목코드": st.column_config.TextColumn(label="품목코드"),
+                    "품목명":   st.column_config.TextColumn(label="품목명"),
+                    "단위":     st.column_config.TextColumn(label="단위"),
                 },
                 disabled=["품목코드","품목명","단위","단가","총금액"],  # 수량/선택만 편집
                 hide_index=True, use_container_width=True, height=340, key="cart_editor_live",
@@ -847,8 +848,8 @@ def page_store_orders_change():
             orders_disp[["선택","발주번호","건수","총수량","총금액","상태"]],
             column_config={
                 "선택":   st.column_config.CheckboxColumn(label=""),
-                "총수량": numcol("총 수량"),
-                "총금액": numcol("총 금액"),
+                "총수량": st.column_config.NumberColumn(label="총 수량", min_value=0, step=1, format="%,d"),
+                "총금액": st.column_config.NumberColumn(label="총 금액", min_value=0, step=1, format="%,d"),
             },
             disabled=["발주번호","건수","총수량","총금액","상태"],
             use_container_width=True, height=240, hide_index=True, key="store_orders_list_editor"
@@ -889,11 +890,9 @@ def page_store_orders_change():
     with st.container(border=True):
         st.markdown("### ✏️ 세부 내역 수정")
 
-        # 라디오: 최신 데이터 반영
-        orders_fresh = df.groupby("발주번호").size().reset_index(name="n")
-        options = orders_fresh["발주번호"].tolist()
+        # 최신 옵션 목록
+        options = df.groupby("발주번호").size().reset_index(name="n")["발주번호"].tolist()
         target_order = st.radio("발주번호 선택", options=options, key="store_edit_pick")
-
         if not target_order:
             st.info("발주번호를 선택하세요.")
             return
@@ -908,25 +907,41 @@ def page_store_orders_change():
             st.info("출고완료 건은 수정/삭제할 수 없습니다.")
             st.dataframe(
                 target_df[show_cols], use_container_width=True, height=360,
-                column_config={"단가": numcol("단가(원)"), "수량": numcol("수량")}
+                column_config={
+                    "단가": st.column_config.NumberColumn(label="단가(원)", min_value=0, step=1, format="%,d"),
+                    "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d")
+                }
             )
             return
 
-        # 장바구니와 동일: 체크박스 열 + 선택 삭제 & 전체 선택/해제
-        target_df = target_df.copy()
-        target_df.insert(0, "선택", False)
+        # 👉 dtype 보정: 단가는 숫자, 수량은 문자열(텍스트 편집/콤마 허용)
+        target_df["단가"] = pd.to_numeric(target_df["단가"], errors="coerce").fillna(0).astype(int)
+        target_df["수량"] = pd.to_numeric(target_df["수량"], errors="coerce").fillna(0).astype(int).astype(str)
+
+        # 선택 상태 세션키 (발주번호별 보존)
+        sel_key = f"order_detail_selected_{target_order}"
+        st.session_state.setdefault(sel_key, [])
+        selected_set = set(map(str, st.session_state[sel_key]))
+
+        target_edit = target_df.copy()
+        target_edit.insert(0, "선택", target_edit["품목코드"].astype(str).isin(selected_set))
 
         edited = st.data_editor(
-            target_df[["선택","발주번호"] + show_cols],
+            target_edit[["선택","발주번호"] + show_cols],
             disabled=["발주번호","품목코드","품목명","단위"],
             column_config={
                 "선택": st.column_config.CheckboxColumn(label=""),
-                # 수량: 텍스트로 입력 허용(콤마 가능)
-                "수량": textcol("수량", "숫자/콤마 입력 가능"),
-                "단가": numcol("단가(원)"),
+                "수량": st.column_config.TextColumn(label="수량", help="숫자/콤마 입력 가능"),
+                "단가": st.column_config.NumberColumn(label="단가(원)", min_value=0, step=1, format="%,d"),
             },
             use_container_width=True, num_rows="dynamic", hide_index=True, key="store_edit_orders_editor"
         )
+
+        # 현재 선택 반영
+        try:
+            st.session_state[sel_key] = edited.loc[edited["선택"] == True, "품목코드"].astype(str).tolist()
+        except Exception:
+            st.session_state[sel_key] = []
 
         with st.form("order_detail_actions", clear_on_submit=False):
             a, b, c = st.columns([1,1,1])
@@ -934,12 +949,10 @@ def page_store_orders_change():
             with b: btn_sel_all = st.form_submit_button("전체 선택", use_container_width=True)
             with c: btn_unsel_all = st.form_submit_button("전체 해제", use_container_width=True)
 
-        # 버튼 동작
-        # 전체 선택/해제는 data_editor의 표시 상태만 바꾸는 용도이므로
-        # 간단히 session state에 플래그를 넣고, 다음 렌더에서 반영하도록 처리(여기서는 생략/단순 안내)
-        if btn_sel_all or btn_unsel_all:
-            # 안내만 (Streamlit의 data_editor는 프로그래매틱 체크 변경이 어려움)
-            st.toast("체크박스를 직접 드래그해 다중 선택/해제할 수 있습니다.", icon="ℹ️")
+        if btn_sel_all:
+            st.session_state[sel_key] = target_df["품목코드"].astype(str).tolist()
+        if btn_unsel_all:
+            st.session_state[sel_key] = []
 
         # 저장/삭제 동작
         col_s1, col_s2 = st.columns([1,1])
@@ -966,8 +979,9 @@ def page_store_orders_change():
         if save_change:
             base = load_orders_df().copy()
             key_cols = ["발주번호", "품목코드"]
-            # 수량 텍스트 → 정규화
+
             edited_norm = edited.copy()
+            # 텍스트 수량 → 숫자 정규화
             edited_norm["수량"] = pd.to_numeric(
                 edited_norm["수량"].astype(str).str.replace(",", "").str.strip(),
                 errors="coerce"
