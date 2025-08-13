@@ -652,7 +652,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         )
     with c3:
         memo = st.text_input("요청 사항(선택)", key="store_req_memo")
-    st.markdown("</div></div>", unsafe_allow_html=True)  # /box /section
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     # ── [섹션] 1) 발주 품목 검색 ────────────────────────────────
     st.markdown("<div class='section'><div class='box'>", unsafe_allow_html=True)
