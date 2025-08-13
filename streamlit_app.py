@@ -133,19 +133,34 @@ div[data-baseweb="tab-highlight"] {{ display:none; }}
 /* A-3. 탭 아래쪽 간격 확보 */
 div[data-baseweb="tab-list"] {{ gap: 8px; margin-top: 6px; margin-bottom: 14px; }}
 
-/* 앱 본문을 가운데로 (최대폭 1200px) */
+/* 본문을 더 좁게(양옆 여백 ↑) */
 [data-testid="stAppViewContainer"] .main .block-container {{
-  max-width: 500px;
+  max-width: 1050px;    /* 1100~1200 에서 더 좁게 하고 싶으면 980~1024로 */
   margin: 0 auto;
+  padding-left: 12px;
+  padding-right: 12px;
 }}
 
-/* 탭과 본문 사이 분리감 + 탭 아래 여백 */
-div[data-baseweb="tab-list"] {{ gap: 8px; margin-top: 6px; margin-bottom: 16px; }}
+/* 상단 탭들 사이 여백/분리감 */
+div[data-baseweb="tab-list"] {{
+  gap: 10px;
+  margin-top: 8px;
+  margin-bottom: 24px;  /* 🔸 탭과 본문 사이 간격 키움 */
+}}
+div[data-baseweb="tab"] {{ padding: 8px 12px; }}
 
-/* 섹션 카드(각 구역을 살짝 띄우기) */
-.section-card {{ margin: 12px 0 18px; }}
-.section-card > .card {{ margin: 0; }}  /* 기존 .card 스타일 재사용 */
+/* 가운데 정렬 컨테이너 (섹션별로 사용) */
+.center-narrow {{ max-width: 900px; margin: 0 auto; }}
 
+/* 섹션 박스 + 섹션 간 간격 */
+.section {{ margin: 16px 0 24px; }}
+.section > .box {{
+  background: #ffffff;                      /* 박스 색 (조금 더 톤 주려면 #FAFBFC 등으로 바꿔도 OK) */
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+}}
 
 </style>
 """, unsafe_allow_html=True)
