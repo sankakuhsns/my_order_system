@@ -816,6 +816,9 @@ def page_store_orders_change():
         return
     df_all = df_all[df_all["지점ID"].astype(str) == user.get("user_id")]
 
+    # ─────────────────────────────────────────────
+    # 1) 조회 조건
+    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 🔎 조회 조건")
         c1, c2 = st.columns(2)
@@ -828,183 +831,150 @@ def page_store_orders_change():
     mask = dt_series.notna() & (dt_series.dt.date >= dt_from) & (dt_series.dt.date <= dt_to)
     df = df_all[mask].copy().sort_values(["발주번호", "품목코드"])
 
-    # ── 발주 리스트(집계) : 체크박스 선택/전체선택/해제/삭제 ──
+    if df.empty:
+        st.info("해당 기간에 조회할 발주가 없습니다.")
+        return
+
+    # 집계
+    orders = df.groupby("발주번호").agg(
+        건수=("품목코드", "count"),
+        총수량=("수량", lambda x: pd.to_numeric(x, errors="coerce").fillna(0).sum()),
+        총금액=("금액", lambda x: pd.to_numeric(x, errors="coerce").fillna(0).sum()),
+        상태=("상태", lambda s: "출고완료" if (s == "출고완료").all() else "접수")
+    ).reset_index()
+
+    orders_pending = orders[orders["상태"] == "접수"].copy()
+    orders_done    = orders[orders["상태"] == "출고완료"].copy()
+
     st.session_state.setdefault("orders_selected_ids", [])
+
+    # ─────────────────────────────────────────────
+    # 2) 발주 리스트
+    #    - 접수: 체크박스 선택/삭제 가능
+    #    - 출고완료: 표시만(체크박스 없음)
+    # ─────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### 📦 발주 리스트")
 
-        orders = df.groupby("발주번호").agg(
-            건수=("품목코드", "count"),
-            총수량=("수량", lambda x: pd.to_numeric(x, errors="coerce").fillna(0).sum()),
-            총금액=("금액", lambda x: pd.to_numeric(x, errors="coerce").fillna(0).sum()),
-            상태=("상태", lambda s: "출고완료" if (s == "출고완료").all() else "접수")
-        ).reset_index()
+        # (A) 접수 목록 — 체크 가능
+        st.markdown("**접수(수정/삭제 가능)**")
+        if not orders_pending.empty:
+            selset = set(map(str, st.session_state.get("orders_selected_ids", [])))
+            pend_disp = orders_pending.copy()
+            pend_disp.insert(0, "선택", pend_disp["발주번호"].astype(str).isin(selset))
 
-        selset = set(map(str, st.session_state.get("orders_selected_ids", [])))
-        orders_disp = orders.copy()
-        orders_disp.insert(0, "선택", orders_disp["발주번호"].astype(str).isin(selset))
-
-        orders_view = st.data_editor(
-            orders_disp[["선택","발주번호","건수","총수량","총금액","상태"]],
-            column_config={
-                "선택":   st.column_config.CheckboxColumn(label=""),
-                "총수량": st.column_config.NumberColumn(label="총 수량", min_value=0, step=1, format="%,d"),
-                "총금액": st.column_config.NumberColumn(label="총 금액", min_value=0, step=1, format="%,d"),
-            },
-            disabled=["발주번호","건수","총수량","총금액","상태"],
-            use_container_width=True, height=240, hide_index=True, key="store_orders_list_editor"
-        )
-
-        try:
-            st.session_state["orders_selected_ids"] = (
-                orders_view.loc[orders_view["선택"] == True, "발주번호"].astype(str).tolist()
+            pend_view = st.data_editor(
+                pend_disp[["선택","발주번호","건수","총수량","총금액","상태"]],
+                column_config={
+                    "선택":   st.column_config.CheckboxColumn(label=""),
+                    "총수량": st.column_config.NumberColumn(label="총 수량", min_value=0, step=1, format="%,d"),
+                    "총금액": st.column_config.NumberColumn(label="총 금액", min_value=0, step=1, format="%,d"),
+                },
+                disabled=["발주번호","건수","총수량","총금액","상태"],
+                use_container_width=True, height=240, hide_index=True, key="store_orders_list_pending"
             )
-        except Exception:
-            st.session_state["orders_selected_ids"] = []
+            try:
+                st.session_state["orders_selected_ids"] = (
+                    pend_view.loc[pend_view["선택"] == True, "발주번호"].astype(str).tolist()  # noqa: E712
+                )
+            except Exception:
+                st.session_state["orders_selected_ids"] = []
 
-        with st.form("orders_list_actions", clear_on_submit=False):
-            c1, c2, c3 = st.columns([1,1,1])
-            with c1: del_orders = st.form_submit_button("선택 발주 삭제", use_container_width=True)
-            with c2: sel_all    = st.form_submit_button("전체 선택", use_container_width=True)
-            with c3: unsel_all  = st.form_submit_button("전체 해제", use_container_width=True)
+            with st.form("orders_list_actions", clear_on_submit=False):
+                c1, c2, c3 = st.columns([1,1,1])
+                with c1: del_orders = st.form_submit_button("선택 발주 삭제", use_container_width=True)
+                with c2: sel_all    = st.form_submit_button("전체 선택", use_container_width=True)
+                with c3: unsel_all  = st.form_submit_button("전체 해제", use_container_width=True)
 
-        if del_orders:
-            ids = st.session_state.get("orders_selected_ids", [])
-            if ids:
-                base = load_orders_df().copy()
-                keep_mask = ~base["발주번호"].astype(str).isin([str(x) for x in ids])
-                ok = write_orders_df(base.loc[keep_mask].copy())
-                if ok:
-                    st.success("선택한 발주를 삭제했습니다.")
-                    st.session_state["orders_selected_ids"] = []
+            if del_orders:
+                ids = st.session_state.get("orders_selected_ids", [])
+                if ids:
+                    base = load_orders_df().copy()
+                    # 접수 건만 삭제
+                    del_mask = base["발주번호"].astype(str).isin(ids) & (base["상태"] != "출고완료")
+                    keep = base[~del_mask].copy()
+                    ok = write_orders_df(keep)
+                    if ok:
+                        st.success("선택한 발주(접수)를 삭제했습니다.")
+                        st.session_state["orders_selected_ids"] = []
+                    else:
+                        st.error("삭제 실패")
                 else:
-                    st.error("삭제 실패")
-            else:
-                st.info("삭제할 발주가 선택되지 않았습니다.")
-        if sel_all:
-            st.session_state["orders_selected_ids"] = orders["발주번호"].astype(str).tolist()
-        if unsel_all:
-            st.session_state["orders_selected_ids"] = []
+                    st.info("삭제할 발주가 선택되지 않았습니다.")
+            if sel_all:
+                st.session_state["orders_selected_ids"] = orders_pending["발주번호"].astype(str).tolist()
+            if unsel_all:
+                st.session_state["orders_selected_ids"] = []
+        else:
+            st.info("접수 상태의 발주가 없습니다.")
 
-    # ── 세부 내역 수정(선택 발주) — 체크박스/전체선택/해제/선택 삭제 ──
+        st.markdown("---")
+
+        # (B) 출고완료 목록 — 선택 불가(표시만)
+        st.markdown("**출고완료(선택 불가)**")
+        if not orders_done.empty:
+            st.dataframe(
+                orders_done[["발주번호","건수","총수량","총금액","상태"]],
+                use_container_width=True, height=200,
+                column_config={
+                    "총수량": st.column_config.NumberColumn(label="총 수량", min_value=0, step=1, format="%,d"),
+                    "총금액": st.column_config.NumberColumn(label="총 금액", min_value=0, step=1, format="%,d"),
+                }
+            )
+        else:
+            st.caption("출고완료 상태의 발주가 없습니다.")
+
+    # ─────────────────────────────────────────────
+    # 3) 세부 내용 확인 (발주번호 선택 시 품목 목록 + 합계)
+    # ─────────────────────────────────────────────
     with st.container(border=True):
-        st.markdown("### ✏️ 세부 내역 수정")
+        st.markdown("### 📄 세부 내용 확인")
 
-        # 최신 옵션 목록
-        options = df.groupby("발주번호").size().reset_index(name="n")["발주번호"].tolist()
+        options = orders["발주번호"].astype(str).tolist()
         target_order = st.radio("발주번호 선택", options=options, key="store_edit_pick")
         if not target_order:
             st.info("발주번호를 선택하세요.")
             return
 
-        target_df = df[df["발주번호"] == target_order].copy()
-        is_ship_done = (target_df["상태"] == "출고완료").all()
-
-        st.caption(f"선택 발주 품목수: {len(target_df)}  |  상태: {'출고완료' if is_ship_done else '접수'}")
-
-        show_cols = ["품목코드", "품목명", "단위", "수량", "단가", "비고"]
-        if is_ship_done:
-            st.info("출고완료 건은 수정/삭제할 수 없습니다.")
-            st.dataframe(
-                target_df[show_cols], use_container_width=True, height=360,
-                column_config={
-                    "단가": st.column_config.NumberColumn(label="단가(원)", min_value=0, step=1, format="%,d"),
-                    "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d")
-                }
-            )
+        target_df = df[df["발주번호"].astype(str) == target_order].copy()
+        if target_df.empty:
+            st.info("해당 발주에 품목이 없습니다.")
             return
 
-        # 👉 dtype 보정: 단가는 숫자, 수량은 문자열(텍스트 편집/콤마 허용)
+        # 타입 정규화
+        target_df["수량"] = pd.to_numeric(target_df["수량"], errors="coerce").fillna(0).astype(int)
         target_df["단가"] = pd.to_numeric(target_df["단가"], errors="coerce").fillna(0).astype(int)
-        target_df["수량"] = pd.to_numeric(target_df["수량"], errors="coerce").fillna(0).astype(int).astype(str)
+        target_df["금액"] = (target_df["수량"] * target_df["단가"]).astype(int)
 
-        # 선택 상태 세션키 (발주번호별 보존)
-        sel_key = f"order_detail_selected_{target_order}"
-        st.session_state.setdefault(sel_key, [])
-        selected_set = set(map(str, st.session_state[sel_key]))
-
-        target_edit = target_df.copy()
-        target_edit.insert(0, "선택", target_edit["품목코드"].astype(str).isin(selected_set))
-
-        edited = st.data_editor(
-            target_edit[["선택","발주번호"] + show_cols],
-            disabled=["발주번호","품목코드","품목명","단위"],
+        # 표(읽기 전용)
+        show_cols = ["품목코드","품목명","단위","수량","단가","금액","비고"]
+        st.dataframe(
+            target_df[show_cols], use_container_width=True, height=380, hide_index=True,
             column_config={
-                "선택": st.column_config.CheckboxColumn(label=""),
-                "수량": st.column_config.TextColumn(label="수량", help="숫자/콤마 입력 가능"),
+                "수량": st.column_config.NumberColumn(label="수량", min_value=0, step=1, format="%,d"),
                 "단가": st.column_config.NumberColumn(label="단가(원)", min_value=0, step=1, format="%,d"),
-            },
-            use_container_width=True, num_rows="dynamic", hide_index=True, key="store_edit_orders_editor"
+                "금액": st.column_config.NumberColumn(label="금액(원)", min_value=0, step=1, format="%,d"),
+            }
         )
 
-        # 현재 선택 반영
-        try:
-            st.session_state[sel_key] = edited.loc[edited["선택"] == True, "품목코드"].astype(str).tolist()
-        except Exception:
-            st.session_state[sel_key] = []
+        # 합계 요약(등록 화면과 동일 포맷)
+        total_items = len(target_df)  # 행 수(=선택 품목수)
+        total_qty   = int(target_df["수량"].sum())
+        total_amt   = int(target_df["금액"].sum())
+        req_date    = str(target_df["납품요청일"].iloc[0]) if "납품요청일" in target_df.columns else "-"
 
-        with st.form("order_detail_actions", clear_on_submit=False):
-            a, b, c = st.columns([1,1,1])
-            with a: btn_del = st.form_submit_button("선택 삭제", use_container_width=True)
-            with b: btn_sel_all = st.form_submit_button("전체 선택", use_container_width=True)
-            with c: btn_unsel_all = st.form_submit_button("전체 해제", use_container_width=True)
+        st.markdown(f"""
+        <div class="card-tight" style="display:flex; gap:16px; align-items:center; justify-content:flex-start; margin-top:8px;">
+            <div>납품 요청일: <b>{req_date}</b></div>
+            <div>선택 품목수: <span class="metric">{total_items:,}</span> 개</div>
+            <div>총 수량: <span class="metric">{total_qty:,}</span></div>
+            <div>총 금액: <span class="metric">{total_amt:,}</span> 원</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        if btn_sel_all:
-            st.session_state[sel_key] = target_df["품목코드"].astype(str).tolist()
-        if btn_unsel_all:
-            st.session_state[sel_key] = []
+        # 상태 표기
+        st.caption(f"상태: {'출고완료' if (target_df['상태'] == '출고완료').all() else '접수'}  ·  발주번호: {target_order}")
 
-        # 저장/삭제 동작
-        col_s1, col_s2 = st.columns([1,1])
-        with col_s1:
-            save_change = st.button("변경 내용 저장", type="primary", key="store_edit_save")
-        with col_s2:
-            st.caption("수정 시 수량/단가는 자동 정규화되어 저장됩니다.")
-
-        if btn_del:
-            base = load_orders_df().copy()
-            to_del = edited[edited["선택"] == True][["발주번호", "품목코드"]]  # noqa: E712
-            if not to_del.empty:
-                drop_idx = pd.MultiIndex.from_frame(to_del.astype(str))
-                base_idx = pd.MultiIndex.from_frame(base[["발주번호", "품목코드"]].astype(str))
-                keep_mask = ~base_idx.isin(drop_idx)
-                ok = write_orders_df(base.loc[keep_mask].copy())
-                if ok:
-                    st.success("선택 행을 삭제했습니다.")
-                else:
-                    st.error("삭제 실패")
-            else:
-                st.info("삭제할 행이 선택되지 않았습니다.")
-
-        if save_change:
-            base = load_orders_df().copy()
-            key_cols = ["발주번호", "품목코드"]
-
-            edited_norm = edited.copy()
-            # 텍스트 수량 → 숫자 정규화
-            edited_norm["수량"] = pd.to_numeric(
-                edited_norm["수량"].astype(str).str.replace(",", "").str.strip(),
-                errors="coerce"
-            ).fillna(0).astype(int).clip(lower=0)
-
-            merged = base.merge(
-                edited_norm[key_cols + ["수량", "단가", "비고"]],
-                on=key_cols, how="left", suffixes=("", "_new")
-            )
-            base["수량"] = merged["수량_new"].combine_first(base["수량"])
-            base["단가"] = merged["단가_new"].combine_first(base["단가"])
-            base["비고"] = merged["비고_new"].combine_first(base["비고"])
-
-            base["수량"] = pd.to_numeric(base["수량"], errors="coerce").fillna(0).astype(int)
-            base["단가"] = pd.to_numeric(base["단가"], errors="coerce").fillna(0).astype(int)
-            base = base[~(base["수량"] <= 0)].copy()
-            base["금액"] = (base["수량"] * base["단가"]).astype(int)
-
-            ok = write_orders_df(base)
-            if ok:
-                st.success("변경사항을 저장했습니다.")
-            else:
-                st.error("저장 실패")
 
 # =============================================================================
 # 9) 발주서 조회·다운로드
