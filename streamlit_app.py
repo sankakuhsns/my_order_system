@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v4.1 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v5.0 - 최종 안정화판)
 # - 주요 개선사항:
-#   - NameError 해결: 누락되었던 유틸리티 함수(make_order_sheet_excel) 복원
-#   - 전체 기능 및 로직 최종 검토 및 안정화
+#   - UI/UX 전면 통일 ('박스 안 박스' 해결, 간격 통일)
+#   - 버튼 클릭 로직 최적화 (st.form 기반 재구성으로 이중 클릭/새로고침 문제 해결)
+#   - Excel 다운로드 기능 대폭 강화 (정형화된 양식 및 인쇄 설정 적용)
+#   - 누락 기능 전체 복원 및 코드 안정성 최종 검토
 # =============================================================================
 
 from io import BytesIO
@@ -34,19 +36,18 @@ CARD_STYLE = f"background-color:{THEME['CARD_BG']}; border:1px solid {THEME['BOR
 st.markdown(f"""
 <style>
 html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; color: {THEME['TEXT']}; }}
-.small {{ font-size:12px; color:{THEME['MUTED']}; }}
 .block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}
 .card {{ {CARD_STYLE} box-shadow: 0 2px 8px rgba(0,0,0,0.03); }}
 [data-testid="stAppViewContainer"] .main .block-container {{ max-width: 1050px; margin: 0 auto; padding: 0 12px; }}
 .stTextInput>div>div>input, .stNumberInput input, .stDateInput input {{ border:1px solid {THEME['BORDER']} !important; border-radius:10px !important; height:34px; }}
 .stTabs [role="tablist"] {{ display:flex !important; gap:12px !important; flex-wrap:wrap !important; margin:8px 0 24px !important; border-bottom:none !important; }}
-.stTabs button[role="tab"] {{ border:1px solid {THEME['BORDER']} !important; border-radius:12px !important; background:#fff !important; padding:10px 14px !important; box-shadow:0 1px 6px rgba(0,0,0,0.04) !important; cursor:pointer !important; transition: transform .08s ease, box-shadow .12s ease; }}
-.stTabs button[role="tab"]:hover {{ transform: translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.08); }}
+.stTabs button[role="tab"] {{ border:1px solid {THEME['BORDER']} !important; border-radius:12px !important; background:#fff !important; padding:10px 14px !important; box-shadow:0 1px 6px rgba(0,0,0,0.04) !important; }}
 .stTabs button[role="tab"][aria-selected="true"] {{ border-color:{THEME['PRIMARY']} !important; color:{THEME['PRIMARY']} !important; box-shadow:0 6px 16px rgba(28,103,88,0.18) !important; font-weight:700; }}
-.stTabs [data-baseweb="tab-highlight"] {{ display:none !important; }}
 .login-title {{ text-align:center; font-size:42px; font-weight:800; margin:16px 0 12px; }}
 .stButton > button[data-testid="baseButton-primary"] {{ background: #1C6758 !important; color: #fff !important; border: 1px solid #1C6758 !important; border-radius: 10px !important; height: 34px !important; }}
-.flat-container [data-testid="stDataFrame"] {{ border: none; box-shadow: none; }}
+/* [UI 수정] 박스 안의 박스 문제 해결용 CSS */
+.flat-container [data-testid="stDataFrame"] {{ border: none !important; box-shadow: none !important; }}
+.flat-container [data-testid="stDataFrameContainer"] {{ border: 1px solid {THEME['BORDER']}; border-radius: 10px; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -204,25 +205,66 @@ def _find_account(uid_or_name: str):
     return None, None
 
 # =============================================================================
-# 6) 유틸 - [누락된 함수 복원]
+# 6) 유틸 - [Excel 서식 강화]
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
-def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *, title: str = "산카쿠 납품내역서") -> BytesIO:
+def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, date_range: str) -> BytesIO:
     buf = BytesIO()
-    cols = ["발주번호","주문일시","납품요청일","지점명","품목코드","품목명","단위","수량","비고","상태"]
-    if include_price: cols += ["단가","금액"]
-    
-    export = df_note[cols].copy().sort_values(["발주번호","품목코드"])
+    cols = ["품목코드","품목명","단위","수량","단가","금액"]
+    export = df_note[cols].copy().sort_values(["품목코드"])
     for col in ["수량", "단가", "금액"]:
-        if col in export.columns:
-            export[col] = pd.to_numeric(export[col], errors="coerce").fillna(0)
+        export[col] = pd.to_numeric(export[col], errors="coerce").fillna(0)
 
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        export.to_excel(w, index=False, sheet_name="내역", startrow=2)
-        wb, ws = w.book, w.sheets["내역"]
-        fmt = { "title": wb.add_format({"bold": True, "font_size": 16, "align":"center"}), "th": wb.add_format({"bold": True, "bg_color":"#F2F2F2", "border":1}) }
-        ws.merge_range(0, 0, 0, len(export.columns)-1, title, fmt["title"])
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        export.to_excel(writer, index=False, sheet_name="내역", startrow=5)
+        wb = writer.book
+        ws = writer.sheets["내역"]
+
+        # --- 포맷 정의 ---
+        fmt_title = wb.add_format({"bold": True, "font_size": 20, "align": "center", "valign": "vcenter"})
+        fmt_subtitle = wb.add_format({"font_size": 11, "align": "right"})
+        fmt_header = wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"})
+        fmt_money = wb.add_format({"num_format": "#,##0", "border": 1})
+        fmt_total_label = wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center"})
+        fmt_total_money = wb.add_format({"bold": True, "num_format": "#,##0", "border": 1, "bg_color": "#F2F2F2"})
+        
+        # --- 문서 제목 및 정보 ---
+        ws.merge_range("A1:F1", title, fmt_title)
+        ws.merge_range("A3:F3", f"지점명: {store_name}", fmt_subtitle)
+        ws.merge_range("A4:F4", f"발주기간: {date_range}", fmt_subtitle)
+        
+        # --- 헤더 ---
+        for col_num, value in enumerate(export.columns):
+            ws.write(5, col_num, value, fmt_header)
+            
+        # --- 데이터 포맷 적용 및 열 너비 자동 조정 ---
+        ws.set_column("A:A", 12) # 품목코드
+        ws.set_column("B:B", 30) # 품목명
+        ws.set_column("C:C", 10) # 단위
+        ws.set_column("D:D", 15, fmt_money) # 수량
+        ws.set_column("E:E", 18, fmt_money) # 단가
+        ws.set_column("F:F", 20, fmt_money) # 금액
+
+        # --- 합계 ---
+        last_row = len(export) + 6
+        supply_value = export["금액"].sum()
+        vat = int(supply_value * 0.1)
+        total_value = supply_value + vat
+        
+        ws.merge_range(f"A{last_row}:E{last_row}", "공급가액", fmt_total_label)
+        ws.write(f"F{last_row}", supply_value, fmt_total_money)
+        ws.merge_range(f"A{last_row+1}:E{last_row+1}", "부가세 (10%)", fmt_total_label)
+        ws.write(f"F{last_row+1}", vat, fmt_total_money)
+        ws.merge_range(f"A{last_row+2}:E{last_row+2}", "총 합계", fmt_total_label)
+        ws.write(f"F{last_row+2}", total_value, fmt_total_money)
+
+        # --- 인쇄 설정 ---
+        ws.set_landscape()  # 가로 방향
+        ws.set_paper(9)     # A4 용지
+        ws.fit_to_pages(1, 0) # 너비 1페이지에 맞춤
+        ws.print_area(0, 0, last_row + 2, 5) # 인쇄 영역 설정
+
     buf.seek(0)
     return buf
 
@@ -335,20 +377,23 @@ def page_store_orders_change():
     pending = orders[orders["상태"] == "접수"]; done = orders[orders["상태"] == "출고완료"]
     with st.container(border=True):
         st.markdown("##### 📦 발주 리스트")
-        disp_df = pd.concat([pending, done]).copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.store_selected_orders))
-        edited_df = st.data_editor(disp_df, key="store_orders_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        st.session_state.store_selected_orders = edited_df[edited_df["선택"]]["발주번호"].tolist()
-        if st.button("선택 발주 삭제", disabled=not any(pid in pending["발주번호"].tolist() for pid in st.session_state.store_selected_orders)):
-            if write_orders_df(df_all[~df_all["발주번호"].isin(st.session_state.store_selected_orders)]):
-                st.success("선택한 발주가 삭제되었습니다."); st.session_state.store_selected_orders = []; st.rerun()
+        with st.form("order_management_form"):
+            disp_df = pd.concat([pending, done]).copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.store_selected_orders))
+            edited_df = st.data_editor(disp_df, key="store_orders_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+            st.session_state.store_selected_orders = edited_df[edited_df["선택"]]["발주번호"].tolist()
+            is_deletable = any(pid in pending["발주번호"].tolist() for pid in st.session_state.store_selected_orders)
+            if st.form_submit_button("선택 발주 삭제", disabled=not is_deletable):
+                if write_orders_df(df_all[~df_all["발주번호"].isin(st.session_state.store_selected_orders)]):
+                    st.success("선택한 발주가 삭제되었습니다."); st.session_state.store_selected_orders = []; st.rerun()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주품목조회")
         if len(st.session_state.store_selected_orders) == 1:
             target_df = df_user[df_user["발주번호"] == st.session_state.store_selected_orders[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
-            buf = make_order_sheet_excel(target_df, include_price=True, title=f"발주서 ({st.session_state.store_selected_orders[0]})")
-            st.download_button("이 발주서 다운로드", data=buf, file_name=f"발주서_{st.session_state.store_selected_orders[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+            date_range = f"{pd.to_datetime(target_df['납품요청일'].iloc[0]):%Y-%m-%d}"
+            buf = make_order_sheet_excel(target_df, title="발주내역서", store_name=user['name'], date_range=date_range)
+            st.download_button("이 발주서 다운로드", data=buf, file_name=f"발주서_{user['name']}_{st.session_state.store_selected_orders[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
         else: st.info("상세 내용을 보려면 위 목록에서 발주를 하나만 선택하세요.")
 
 # ──────────────────────────────────────────────
@@ -356,20 +401,22 @@ def page_store_orders_change():
 # ──────────────────────────────────────────────
 def page_store_order_form_download():
     st.subheader("📑 발주서 다운로드")
-    df = load_orders_df()[load_orders_df()["지점ID"] == st.session_state.auth["user_id"]]
+    user = st.session_state.auth
+    df = load_orders_df()[load_orders_df()["지점ID"] == user["user_id"]]
     if df.empty: st.info("발주 데이터가 없습니다."); return
     with st.container(border=True):
         st.markdown("##### 🔎 조회 조건")
         c1, c2 = st.columns(2)
         dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="store_dl_from")
         dt_to = c2.date_input("종료일", date.today(), key="store_dl_to")
-    dfv = df[(pd.to_datetime(df["주문일시"]).dt.date >= dt_from) & (pd.to_datetime(df["주문일시"]).dt.date <= dt_to)].copy().sort_values(["발주번호", "품목코드"])
+    dfv = df[(pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)].copy().sort_values(["발주번호", "품목코드"])
     with st.container(border=True):
         st.markdown("##### 📄 미리보기 및 다운로드")
-        st.dataframe(dfv, use_container_width=True, height=420, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
+        st.dataframe(dfv, use_container_width=True, height=420, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
         if not dfv.empty:
-            buf = make_order_sheet_excel(dfv, include_price=True, title="산카쿠 발주서")
-            st.download_button("엑셀 다운로드", data=buf, file_name=f"발주서_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+            date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
+            buf = make_order_sheet_excel(dfv, title="발주내역서", store_name=user['name'], date_range=date_range)
+            st.download_button("엑셀 다운로드", data=buf, file_name=f"발주서_{user['name']}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
 # ──────────────────────────────────────────────
 # 🏷️ 품목 가격 조회 (지점)
@@ -392,25 +439,27 @@ def page_admin_unified_management():
         dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
         stores = ["(전체)"] + sorted(df_all["지점명"].dropna().unique().tolist())
         store = c3.selectbox("지점", stores, key="admin_mng_store")
-    df = df_all[(pd.to_datetime(df_all["주문일시"]).dt.date >= dt_from) & (pd.to_datetime(df_all["주문일시"]).dt.date <= dt_to)]
+    df = df_all[(pd.to_datetime(df_all["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df_all["납품요청일"]).dt.date <= dt_to)]
     if store != "(전체)": df = df[df["지점명"] == store]
     orders = df.groupby("발주번호").agg(주문일시=("주문일시", "first"), 지점명=("지점명", "first"), 건수=("품목코드", "count"), 금액=("금액", "sum"), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
     pending = orders[orders["상태"] == "접수"]; shipped = orders[orders["상태"] == "출고완료"]
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
     with tab1:
-        disp_df = pending.copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.admin_pending_selection))
-        edited_df = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        st.session_state.admin_pending_selection = edited_df[edited_df["선택"]]["발주번호"].tolist()
-        if st.button("✅ 선택 발주 출고", type="primary", disabled=not st.session_state.admin_pending_selection):
-            if update_order_status(st.session_state.admin_pending_selection, "출고완료", st.session_state.auth["name"]):
-                st.success(f"{len(st.session_state.admin_pending_selection)}건이 출고 처리되었습니다."); st.session_state.admin_pending_selection = []; st.rerun()
+        with st.form("pending_form"):
+            disp_df = pending.copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.admin_pending_selection))
+            edited_df = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+            st.session_state.admin_pending_selection = edited_df[edited_df["선택"]]["발주번호"].tolist()
+            if st.form_submit_button("✅ 선택 발주 출고", type="primary", disabled=not st.session_state.admin_pending_selection):
+                if update_order_status(st.session_state.admin_pending_selection, "출고완료", st.session_state.auth["name"]):
+                    st.success(f"{len(st.session_state.admin_pending_selection)}건이 출고 처리되었습니다."); st.session_state.admin_pending_selection = []; st.rerun()
     with tab2:
-        disp_df = shipped.copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.admin_shipped_selection))
-        edited_df = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        st.session_state.admin_shipped_selection = edited_df[edited_df["선택"]]["발주번호"].tolist()
-        if st.button("↩️ 접수 상태로 변경", disabled=not st.session_state.admin_shipped_selection):
-            if update_order_status(st.session_state.admin_shipped_selection, "접수", st.session_state.auth["name"]):
-                st.success(f"{len(st.session_state.admin_shipped_selection)}건이 접수 상태로 변경되었습니다."); st.session_state.admin_shipped_selection = []; st.rerun()
+        with st.form("shipped_form"):
+            disp_df = shipped.copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.admin_shipped_selection))
+            edited_df = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+            st.session_state.admin_shipped_selection = edited_df[edited_df["선택"]]["발주번호"].tolist()
+            if st.form_submit_button("↩️ 접수 상태로 변경", disabled=not st.session_state.admin_shipped_selection):
+                if update_order_status(st.session_state.admin_shipped_selection, "접수", st.session_state.auth["name"]):
+                    st.success(f"{len(st.session_state.admin_shipped_selection)}건이 접수 상태로 변경되었습니다."); st.session_state.admin_shipped_selection = []; st.rerun()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주품목확인")
@@ -418,8 +467,10 @@ def page_admin_unified_management():
         if len(total_selection) == 1:
             target_df = df_all[df_all["발주번호"] == total_selection[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
-            buf = make_order_sheet_excel(target_df, include_price=True, title=f"출고내역서 ({total_selection[0]})")
-            st.download_button("이 내역서 다운로드", data=buf, file_name=f"출고내역서_{total_selection[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+            store_name = target_df['지점명'].iloc[0]
+            date_range = f"{pd.to_datetime(target_df['납품요청일'].iloc[0]):%Y-%m-%d}"
+            buf = make_order_sheet_excel(target_df, title="출고내역서", store_name=store_name, date_range=date_range)
+            st.download_button("이 내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{total_selection[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
         else: st.info("상세 내용을 보려면 위 목록에서 발주를 하나만 선택하세요.")
 
 # ──────────────────────────────────────────────
@@ -438,14 +489,16 @@ def page_admin_delivery_note():
         store = c3.selectbox("지점", stores, key="admin_dl_store")
         order_ids = ["(전체)"] + sorted(df["발주번호"].dropna().unique().tolist(), reverse=True)
         target_order = c4.selectbox("발주번호", order_ids, key="admin_dl_orderid")
-    mask = (pd.to_datetime(df["주문일시"]).dt.date >= dt_from) & (pd.to_datetime(df["주문일시"]).dt.date <= dt_to)
+    mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
     if store != "(전체)": mask &= (df["지점명"]==store)
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
     dfv = df[mask].copy().sort_values(["지점명", "발주번호", "품목코드"])
     st.dataframe(dfv, hide_index=True)
     if not dfv.empty:
-        buf = make_order_sheet_excel(dfv, include_price=True, title="산카쿠 출고내역서")
-        st.download_button("엑셀 다운로드", data=buf, file_name=f"출고내역서_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+        store_name = store if store != "(전체)" else "전체 지점"
+        date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
+        buf = make_order_sheet_excel(dfv, title="출고내역서", store_name=store_name, date_range=date_range)
+        st.download_button("엑셀 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
 # ──────────────────────────────────────────────
 # 🏷️ 납품 품목 가격 설정 (관리자)
