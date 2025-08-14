@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.3 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v5.4 - 최종 안정화판)
 # - 주요 개선사항:
-#   - 버튼 클릭 로직 전면 재구성 (st.form 제거로 이중 클릭/미작동 문제 해결)
-#   - Excel 다운로드 기능 대폭 강화 (정형화된 양식 및 인쇄 설정 적용)
-#   - UI/UX 전면 통일 ('박스 안 박스' 해결, 간격/탭바 통일)
-#   - TypeError 해결 및 누락 기능 전체 복원
+#   - 버튼 클릭 로직 최종 최적화 (st.form 제거 및 session_state 직접 참조)
+#   - Excel 다운로드 품목 누락 오류 해결 (데이터 쓰기 방식 변경)
+#   - 관리자 페이지 UI 구조 및 간격 통일
 # =============================================================================
 
 from io import BytesIO
@@ -265,7 +264,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     return buf
 
 # =============================================================================
-# � 장바구니 유틸(전역)
+# 🛒 장바구니 유틸(전역)
 # =============================================================================
 def init_session_state():
     defaults = { "cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "cart_selected_codes": [], "store_selected_orders": [], "admin_pending_selection": [], "admin_shipped_selection": [], "success_message": "" }
@@ -365,7 +364,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 # 🧾 발주 조회/수정 (지점)
 # ──────────────────────────────────────────────
 def page_store_orders_change():
-    st.subheader("🧾 발주 조회 · 수정")
+    st.subheader("🧾 발주 조회·수정")
     display_feedback()
     df_all, user = load_orders_df(), st.session_state.auth
     df_user = df_all[df_all["지점ID"] == user["user_id"]]
@@ -512,13 +511,13 @@ def page_admin_delivery_note():
     dfv = df[mask].copy().sort_values(["지점명", "발주번호", "품목코드"])
     v_spacer(16)
     with st.container(border=True):
-        st.markdown("##### 📄 미리보기 및 다운로드")
-        st.dataframe(dfv, hide_index=True)
-        if not dfv.empty:
-            store_name = store if store != "(전체)" else "전체 지점"
-            date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
-            buf = make_order_sheet_excel(dfv, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
-            st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+      st.markdown("##### 📄 미리보기 및 다운로드")
+      st.dataframe(dfv, hide_index=True)
+      if not dfv.empty:
+          store_name = store if store != "(전체)" else "전체 지점"
+          date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
+          buf = make_order_sheet_excel(dfv, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
+          st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
 # ──────────────────────────────────────────────
 # 🏷️ 납품 품목 가격 설정 (관리자)
