@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.4 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v5.5 - 최종 안정화판)
 # - 주요 개선사항:
-#   - 버튼 클릭 로직 최종 수정 (st.form 제거로 이중 클릭/미작동 문제 해결)
 #   - Excel 다운로드 품목 누락 오류 해결 (데이터 쓰기 방식 변경)
-#   - 관리자 페이지 UI 구조 및 간격 통일
 # =============================================================================
 
 from io import BytesIO
@@ -45,7 +43,6 @@ html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; col
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
 .login-title {{ text-align:center; font-size:42px; font-weight:800; margin:16px 0 12px; }}
 .stButton > button[data-testid="baseButton-primary"] {{ background: #1C6758 !important; color: #fff !important; border: 1px solid #1C6758 !important; border-radius: 10px !important; height: 34px !important; }}
-/* [UI 수정] 박스 안의 박스 문제 해결용 CSS */
 .flat-container .stDataFrame, .flat-container [data-testid="stDataFrame"] {{ border: none !important; box-shadow: none !important; }}
 .flat-container [data-testid="stDataFrameContainer"] {{ border: 1px solid {THEME['BORDER']}; border-radius: 10px; }}
 </style>
@@ -364,7 +361,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 # 🧾 발주 조회/수정 (지점)
 # ──────────────────────────────────────────────
 def page_store_orders_change():
-    st.subheader("🧾 발주 조회·수정")
+    st.subheader("� 발주 조회·수정")
     display_feedback()
     df_all, user = load_orders_df(), st.session_state.auth
     df_user = df_all[df_all["지점ID"] == user["user_id"]]
@@ -388,7 +385,7 @@ def page_store_orders_change():
                 st.session_state.store_selected_orders = []; st.rerun()
     v_spacer(16)
     with st.container(border=True):
-        st.markdown("##### � 발주품목조회")
+        st.markdown("##### 📄 발주품목조회")
         if len(st.session_state.store_selected_orders) == 1:
             target_df = df_user[df_user["발주번호"] == st.session_state.store_selected_orders[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
