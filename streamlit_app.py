@@ -213,50 +213,50 @@ def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%
 
 def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, date_range: str) -> BytesIO:
     buf = BytesIO()
+    workbook = xlsxwriter.Workbook(buf, {'in_memory': True})
+    ws = workbook.add_worksheet("내역")
+
     cols = ["납품요청일","품목코드","품목명","단위","수량","단가","금액"]
     export = df_note[cols].copy().sort_values(["납품요청일", "품목코드"])
     for col in ["수량", "단가", "금액"]:
         export[col] = pd.to_numeric(export[col], errors="coerce").fillna(0)
 
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        wb = writer.book
-        ws = wb.add_worksheet("내역")
+    fmt = {
+        "title": workbook.add_format({"bold": True, "font_size": 18, "align": "center", "valign": "vcenter", "border": 1}),
+        "subtitle": workbook.add_format({"font_size": 11, "align": "right"}),
+        "header": workbook.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"}),
+        "text": workbook.add_format({"border": 1}), "date": workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1}),
+        "money": workbook.add_format({"num_format": "#,##0", "border": 1}),
+        "total_label": workbook.add_format({"bold": True, "bg_color": "#DDEBF7", "border": 1, "align": "center"}),
+        "total_money": workbook.add_format({"bold": True, "num_format": "#,##0", "border": 1, "bg_color": "#DDEBF7"})
+    }
+    
+    ws.merge_range("A1:G2", title, fmt["title"])
+    ws.merge_range("A4:G4", f"■ 지점명: {store_name} / 발주기간: {date_range}", fmt["subtitle"])
+    
+    for col_num, value in enumerate(export.columns):
+        ws.write(5, col_num, value, fmt["header"])
         
-        fmt = {
-            "title": wb.add_format({"bold": True, "font_size": 18, "align": "center", "valign": "vcenter", "border": 1}),
-            "subtitle": wb.add_format({"font_size": 11, "align": "right"}),
-            "header": wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"}),
-            "text": wb.add_format({"border": 1}), "date": wb.add_format({"num_format": "yyyy-mm-dd", "border": 1}),
-            "money": wb.add_format({"num_format": "#,##0", "border": 1}),
-            "total_label": wb.add_format({"bold": True, "bg_color": "#DDEBF7", "border": 1, "align": "center"}),
-            "total_money": wb.add_format({"bold": True, "num_format": "#,##0", "border": 1, "bg_color": "#DDEBF7"})
-        }
-        
-        ws.merge_range("A1:G2", title, fmt["title"])
-        ws.merge_range("A4:G4", f"■ 지점명: {store_name} / 발주기간: {date_range}", fmt["subtitle"])
-        
-        for col_num, value in enumerate(export.columns):
-            ws.write(5, col_num, value, fmt["header"])
-            
-        for row_num, row_data in enumerate(export.itertuples(index=False)):
-            ws.write(row_num + 6, 0, row_data.납품요청일, fmt["date"])
-            ws.write(row_num + 6, 1, row_data.품목코드, fmt["text"])
-            ws.write(row_num + 6, 2, row_data.품목명, fmt["text"])
-            ws.write(row_num + 6, 3, row_data.단위, fmt["text"])
-            ws.write(row_num + 6, 4, row_data.수량, fmt["money"])
-            ws.write(row_num + 6, 5, row_data.단가, fmt["money"])
-            ws.write(row_num + 6, 6, row_data.금액, fmt["money"])
+    for row_num, row_data in enumerate(export.itertuples(index=False)):
+        ws.write(row_num + 6, 0, row_data.납품요청일, fmt["date"])
+        ws.write(row_num + 6, 1, row_data.품목코드, fmt["text"])
+        ws.write(row_num + 6, 2, row_data.품목명, fmt["text"])
+        ws.write(row_num + 6, 3, row_data.단위, fmt["text"])
+        ws.write(row_num + 6, 4, row_data.수량, fmt["money"])
+        ws.write(row_num + 6, 5, row_data.단가, fmt["money"])
+        ws.write(row_num + 6, 6, row_data.금액, fmt["money"])
 
-        ws.set_column("A:A", 12); ws.set_column("B:B", 12); ws.set_column("C:C", 35); ws.set_column("D:D", 10);
-        ws.set_column("E:E", 15); ws.set_column("F:F", 18); ws.set_column("G:G", 20)
+    ws.set_column("A:A", 12); ws.set_column("B:B", 12); ws.set_column("C:C", 35); ws.set_column("D:D", 10);
+    ws.set_column("E:E", 15); ws.set_column("F:F", 18); ws.set_column("G:G", 20)
 
-        last_row = len(export) + 6
-        total_value = export["금액"].sum()
-        ws.merge_range(f"A{last_row}:F{last_row}", "공급가액 합계", fmt["total_label"])
-        ws.write(f"G{last_row}", total_value, fmt["total_money"])
+    last_row = len(export) + 6
+    total_value = export["금액"].sum()
+    ws.merge_range(f"A{last_row+1}:F{last_row+1}", "공급가액 합계", fmt["total_label"])
+    ws.write(f"G{last_row+1}", total_value, fmt["total_money"])
 
-        ws.set_portrait(); ws.set_paper(9); ws.fit_to_pages(1, 0); ws.print_area(0, 0, last_row, 6)
-
+    ws.set_portrait(); ws.set_paper(9); ws.fit_to_pages(1, 0); ws.print_area(0, 0, last_row + 1, 6)
+    
+    workbook.close()
     buf.seek(0)
     return buf
 
@@ -361,7 +361,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 # 🧾 발주 조회/수정 (지점)
 # ──────────────────────────────────────────────
 def page_store_orders_change():
-    st.subheader("� 발주 조회·수정")
+    st.subheader("🧾 발주 조회·수정")
     display_feedback()
     df_all, user = load_orders_df(), st.session_state.auth
     df_user = df_all[df_all["지점ID"] == user["user_id"]]
