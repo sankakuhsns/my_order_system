@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v3.3 - 최종 완성판)
+# 📦 Streamlit 식자재 발주 시스템 (v3.4 - 최종 완성판)
 # - 주요 개선사항:
-#   - KeyError 수정: '단가'와 '단가(원)' 컬럼명 불일치 문제 해결
-#   - 코드 안정성 및 일관성 강화
+#   - UI 레이아웃 수정: 입력 섹션을 컨테이너에 포함
+#   - 단가 표시 오류 해결: column_config 수정 및 disabled 처리
+#   - 버튼 이중 클릭 문제 해결: 불필요한 st.rerun() 제거
 # =============================================================================
 
 from io import BytesIO
@@ -280,7 +281,14 @@ def _coerce_price_qty(df: pd.DataFrame) -> pd.DataFrame:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c].astype(str).str.replace(",", "").str.strip(), errors="coerce").fillna(0).astype(int)
     out["총금액"] = out.get("단가", 0) * out.get("수량", 0)
-    return out[["품목코드","품목명","단위","단가","수량","총금액"]]
+    
+    # 필수 컬럼 보장
+    required_cols = ["품목코드","품목명","단위","단가","수량","총금액"]
+    for col in required_cols:
+        if col not in out.columns:
+            out[col] = "" if col in ["품목코드","품목명","단위"] else 0
+            
+    return out[required_cols]
 
 def normalize_cart(df: pd.DataFrame) -> pd.DataFrame:
     df = _coerce_price_qty(df)
@@ -330,39 +338,44 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 
     v_spacer(16)
     
-    st.markdown("##### 🧾 발주 수량 입력")
-    master_df["단가"] = pd.to_numeric(master_df.get("단가", 0), errors="coerce").fillna(0).astype(int)
+    # [UI 수정] 발주 수량 입력 섹션을 컨테이너로 감싸기
+    with st.container(border=True):
+        st.markdown("##### 🧾 발주 수량 입력")
+        master_df["단가"] = pd.to_numeric(master_df["단가"], errors="coerce").fillna(0).astype(int)
 
-    l, r = st.columns([2, 1])
-    keyword = l.text_input("품목 검색(이름/코드)", key="store_kw", placeholder="오이, P001 등")
-    cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
-    cat_sel = r.selectbox("분류(선택)", cat_opt, key="store_cat_sel")
+        l, r = st.columns([2, 1])
+        keyword = l.text_input("품목 검색(이름/코드)", key="store_kw", placeholder="오이, P001 등")
+        cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
+        cat_sel = r.selectbox("분류(선택)", cat_opt, key="store_cat_sel")
 
-    df_view = master_df.copy()
-    if keyword:
-        q = keyword.strip().lower()
-        df_view = df_view[df_view.apply(lambda row: q in str(row.get("품목명","")).lower() or q in str(row.get("품목코드","")).lower(), axis=1)]
-    if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
+        df_view = master_df.copy()
+        if keyword:
+            q = keyword.strip().lower()
+            df_view = df_view[df_view.apply(lambda row: q in str(row.get("품목명","")).lower() or q in str(row.get("품목코드","")).lower(), axis=1)]
+        if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
 
-    with st.form(key="add_to_cart_form"):
-        df_edit = df_view[["품목코드","품목명","단위","단가"]].copy()
-        df_edit["수량"] = ""
-        
-        edited_disp = st.data_editor(
-            df_edit, 
-            key=f"store_order_editor_v{st.session_state.store_editor_ver}", 
-            hide_index=True, 
-            disabled=["품목코드","품목명","단위","단가"], 
-            use_container_width=True,
-            column_config={
-                "품목코드": st.column_config.Column("품목코드", width="medium"),
-                "품목명": st.column_config.Column("품목명", width="large"),
-                "단가": st.column_config.NumberColumn("단가(원)", format="%,d"),
-                "수량": st.column_config.TextColumn("수량", help="숫자/콤마 입력 가능"),
-            }
-        )
-        if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-            # [오류 수정] 편집된 데이터프레임(edited_disp)에는 이미 '단가' 컬럼이 있으므로, 그대로 사용합니다.
+        with st.form(key="add_to_cart_form"):
+            df_edit = df_view[["품목코드","품목명","단위","단가"]].copy()
+            df_edit["수량"] = ""
+            
+            edited_disp = st.data_editor(
+                df_edit, 
+                key=f"store_order_editor_v{st.session_state.store_editor_ver}", 
+                hide_index=True, 
+                # [오류 수정] '단가' 컬럼은 수정 불가하도록 disabled 처리
+                disabled=["품목코드","품목명","단위","단가"], 
+                use_container_width=True,
+                column_config={
+                    "품목코드": st.column_config.Column("품목코드", width="medium"),
+                    "품목명": st.column_config.Column("품목명", width="large"),
+                    # [오류 수정] format을 보다 안정적인 방식으로 변경
+                    "단가": st.column_config.NumberColumn("단가(원)", format="%,.0f"),
+                    "수량": st.column_config.TextColumn("수량", help="숫자/콤마 입력 가능"),
+                }
+            )
+            add_clicked = st.form_submit_button("장바구니 추가", use_container_width=True, type="primary")
+
+        if add_clicked:
             items_to_add = normalize_cart(edited_disp)
             if items_to_add.empty: 
                 st.warning("수량이 0보다 큰 품목이 없습니다.")
@@ -370,8 +383,8 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 _add_to_cart(items_to_add)
                 st.toast(f"{len(items_to_add)}개 품목을 장바구니에 추가했습니다.", icon="🛒")
                 st.session_state.store_editor_ver += 1
-                st.rerun()
-
+                # [오류 수정] 이중 클릭 방지를 위해 form 내부의 rerun 제거, form 제출 시 자연스럽게 1회만 rerun 됨
+    
     v_spacer(16)
 
     with st.container(border=True):
@@ -385,7 +398,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 key="cart_editor", 
                 hide_index=True, 
                 disabled=["품목코드","품목명","단위","총금액"], 
-                column_config={"단가": st.column_config.NumberColumn("단가(원)", format="%,d")}
+                column_config={"단가": st.column_config.NumberColumn("단가(원)", format="%,.0f")}
             )
             st.session_state.cart_selected_codes = edited_cart[edited_cart["선택"]]["품목코드"].tolist()
             st.session_state.cart = normalize_cart(edited_cart.drop(columns=["선택"]))
@@ -429,7 +442,7 @@ def render_selectable_list(df: pd.DataFrame, session_state_key: str, editor_key:
     disp_df = df.copy()
     disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state[session_state_key]))
     
-    edited_df = st.data_editor( disp_df, key=editor_key, hide_index=True, use_container_width=True, disabled=df.columns, column_config={"총금액": st.column_config.NumberColumn("총금액", format="%,d원")})
+    edited_df = st.data_editor( disp_df, key=editor_key, hide_index=True, use_container_width=True, disabled=df.columns, column_config={"총금액": st.column_config.NumberColumn("총금액", format="%,.0f원")})
     
     selected_ids = edited_df[edited_df["선택"]]["발주번호"].tolist()
     st.session_state[session_state_key] = selected_ids
@@ -466,7 +479,7 @@ def page_store_orders_change():
         st.markdown("##### 📄 발주품목조회")
         if len(selected_ids) == 1:
             target_df = df_user[df_user["발주번호"] == selected_ids[0]]
-            st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%,d"),"금액": st.column_config.NumberColumn("금액", format="%,d")})
+            st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%,.0f"),"금액": st.column_config.NumberColumn("금액", format="%,.0f")})
             
             buf = make_order_sheet_excel(target_df, include_price=False, title=f"발주서 ({selected_ids[0]})")
             st.download_button("이 발주서 다운로드", data=buf, file_name=f"발주서_{selected_ids[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
@@ -487,7 +500,7 @@ def page_store_master_view(master_df: pd.DataFrame):
     cols = ["품목코드", "품목명", "분류", "단위", "단가"]
     view = master_df[[c for c in cols if c in master_df.columns]].copy()
     view["단가"] = pd.to_numeric(view.get("단가", 0), errors="coerce").fillna(0).astype(int)
-    st.dataframe(view, use_container_width=True, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가(원)", format="%,d")})
+    st.dataframe(view, use_container_width=True, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가(원)", format="%,.0f")})
 
 # ──────────────────────────────────────────────
 # 🗂️ 발주요청조회 · 수정 (관리자)
@@ -541,7 +554,7 @@ def page_admin_items_price(master_df: pd.DataFrame):
     
     with st.form("master_edit_form"):
         edited = st.data_editor(master_df.assign(삭제=False), hide_index=True, num_rows="dynamic", use_container_width=True,
-            column_config={"단가": st.column_config.NumberColumn("단가(원)", format="%,d")}) # 컬럼명 수정
+            column_config={"단가": st.column_config.NumberColumn("단가(원)", format="%,.0f")}) # 컬럼명 및 포맷 수정
         if st.form_submit_button("변경사항 저장", type="primary", use_container_width=True):
             final_df = edited[~edited["삭제"]].drop(columns=["삭제"])
             if write_master_df(final_df):
