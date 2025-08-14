@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v4.0 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v4.1 - 최종 안정화판)
 # - 주요 개선사항:
-#   - UI/UX 전면 통일 및 '박스 안 박스' 문제 해결
-#   - 누락 기능 전체 복원 및 버튼 로직(전체선택 등) 수정
-#   - 알림 UI 강화 (st.success) 및 버튼 클릭 반응성 최적화
+#   - NameError 해결: 누락되었던 유틸리티 함수(make_order_sheet_excel) 복원
+#   - 전체 기능 및 로직 최종 검토 및 안정화
 # =============================================================================
 
 from io import BytesIO
@@ -47,7 +46,6 @@ html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; col
 .stTabs [data-baseweb="tab-highlight"] {{ display:none !important; }}
 .login-title {{ text-align:center; font-size:42px; font-weight:800; margin:16px 0 12px; }}
 .stButton > button[data-testid="baseButton-primary"] {{ background: #1C6758 !important; color: #fff !important; border: 1px solid #1C6758 !important; border-radius: 10px !important; height: 34px !important; }}
-/* [UI 수정] 박스 안의 박스 문제 해결용 CSS */
 .flat-container [data-testid="stDataFrame"] {{ border: none; box-shadow: none; }}
 </style>
 """, unsafe_allow_html=True)
@@ -168,8 +166,7 @@ def append_orders(rows: List[Dict[str, Any]]) -> bool:
     except Exception as e: st.error(f"발주 추가 실패: {e}"); return False
 
 def update_order_status(selected_ids: List[str], new_status: str, handler: str) -> bool:
-    df = load_orders_df()
-    now = now_kst_str()
+    df = load_orders_df(); now = now_kst_str()
     mask = df["발주번호"].astype(str).isin([str(x) for x in selected_ids])
     df.loc[mask, "상태"] = new_status
     df.loc[mask, "처리일시"] = now
@@ -207,9 +204,27 @@ def _find_account(uid_or_name: str):
     return None, None
 
 # =============================================================================
-# 6) 유틸
+# 6) 유틸 - [누락된 함수 복원]
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
+
+def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *, title: str = "산카쿠 납품내역서") -> BytesIO:
+    buf = BytesIO()
+    cols = ["발주번호","주문일시","납품요청일","지점명","품목코드","품목명","단위","수량","비고","상태"]
+    if include_price: cols += ["단가","금액"]
+    
+    export = df_note[cols].copy().sort_values(["발주번호","품목코드"])
+    for col in ["수량", "단가", "금액"]:
+        if col in export.columns:
+            export[col] = pd.to_numeric(export[col], errors="coerce").fillna(0)
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
+        export.to_excel(w, index=False, sheet_name="내역", startrow=2)
+        wb, ws = w.book, w.sheets["내역"]
+        fmt = { "title": wb.add_format({"bold": True, "font_size": 16, "align":"center"}), "th": wb.add_format({"bold": True, "bg_color":"#F2F2F2", "border":1}) }
+        ws.merge_range(0, 0, 0, len(export.columns)-1, title, fmt["title"])
+    buf.seek(0)
+    return buf
 
 # =============================================================================
 # 🛒 장바구니 유틸(전역)
@@ -264,7 +279,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         df_view = master_df.copy()
         if keyword: df_view = df_view[df_view.apply(lambda row: keyword.strip().lower() in str(row["품목명"]).lower() or keyword.strip().lower() in str(row["품목코드"]).lower(), axis=1)]
         if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
-        
         st.markdown("<div class='flat-container'>", unsafe_allow_html=True)
         with st.form(key="add_to_cart_form"):
             df_edit = df_view[["품목코드","품목명","단위","단가"]].copy(); df_edit["수량"] = ""
@@ -272,7 +286,10 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 column_config={"단가": st.column_config.NumberColumn("단가", format="%d"), "수량": st.column_config.TextColumn("수량")})
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
                 items_to_add = coerce_cart_df(edited_disp)
-                add_to_cart(items_to_add); st.session_state.store_editor_ver += 1; st.rerun()
+                if not items_to_add[items_to_add["수량"] > 0].empty:
+                    add_to_cart(items_to_add)
+                    st.session_state.store_editor_ver += 1
+                st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
     v_spacer(16)
     with st.container(border=True):
@@ -285,7 +302,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             st.session_state.cart_selected_codes = edited_cart[edited_cart["선택"]]["품목코드"].tolist()
             st.session_state.cart = coerce_cart_df(edited_cart.drop(columns=["선택"]))
             c1, c2, c3, _ = st.columns([1.2,1,1,4])
-            is_all_selected = set(st.session_state.cart_selected_codes) == set(cart["품목코드"]) and not cart.empty
+            is_all_selected = set(st.session_state.cart_selected_codes) == set(cart["품목코드"].tolist()) and not cart.empty
             if c1.button("전체 해제" if is_all_selected else "전체 선택", use_container_width=True):
                 st.session_state.cart_selected_codes = [] if is_all_selected else cart["품목코드"].tolist(); st.rerun()
             if c2.button("선택 삭제", use_container_width=True, disabled=not st.session_state.cart_selected_codes):
@@ -449,7 +466,7 @@ def page_admin_items_price(master_df: pd.DataFrame):
 # =============================================================================
 if __name__ == "__main__":
     if not require_login(): st.stop()
-    init_session_state() # 모든 세션 상태 변수 초기화
+    init_session_state()
     st.title("📦 식자재 발주 시스템")
     user, master = st.session_state.auth, load_master_df()
     if user["role"] == "admin":
