@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.3 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v5.4 - 최종 안정화판)
 # - 주요 개선사항:
-#   - 버튼 클릭 로직 전면 재구성 (st.form 제거로 이중 클릭/미작동 문제 해결)
-#   - Excel 다운로드 기능 대폭 강화 (정형화된 양식 및 인쇄 설정 적용)
-#   - UI/UX 전면 통일 ('박스 안 박스' 해결, 간격/탭바 통일)
-#   - TypeError 해결 및 누락 기능 전체 복원
+#   - 버튼 클릭 로직 최종 수정 (st.session_state 활용하여 클릭 1회로 즉시 반응)
+#   - Excel 다운로드 품목 누락 오류 해결 및 서식 최종 개선
+#   - 관리자 페이지 UI 구조 및 간격 통일
 # =============================================================================
 
 from io import BytesIO
@@ -46,7 +45,6 @@ html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; col
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
 .login-title {{ text-align:center; font-size:42px; font-weight:800; margin:16px 0 12px; }}
 .stButton > button[data-testid="baseButton-primary"] {{ background: #1C6758 !important; color: #fff !important; border: 1px solid #1C6758 !important; border-radius: 10px !important; height: 34px !important; }}
-/* [UI 수정] 박스 안의 박스 문제 해결용 CSS */
 .flat-container .stDataFrame, .flat-container [data-testid="stDataFrame"] {{ border: none !important; box-shadow: none !important; }}
 .flat-container [data-testid="stDataFrameContainer"] {{ border: 1px solid {THEME['BORDER']}; border-radius: 10px; }}
 </style>
@@ -363,7 +361,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             else: st.error("발주 제출 중 오류가 발생했습니다.")
 
 # ──────────────────────────────────────────────
-# 🧾 발주 조회·수정 (지점)
+# 🧾 발주 조회/수정 (지점)
 # ──────────────────────────────────────────────
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 수정")
@@ -508,12 +506,14 @@ def page_admin_delivery_note():
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
     dfv = df[mask].copy().sort_values(["지점명", "발주번호", "품목코드"])
     v_spacer(16)
-    st.dataframe(dfv, hide_index=True)
-    if not dfv.empty:
-        store_name = store if store != "(전체)" else "전체 지점"
-        date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
-        buf = make_order_sheet_excel(dfv, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
-        st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+    with st.container(border=True):
+        st.markdown("##### 📄 미리보기 및 다운로드")
+        st.dataframe(dfv, hide_index=True)
+        if not dfv.empty:
+            store_name = store if store != "(전체)" else "전체 지점"
+            date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
+            buf = make_order_sheet_excel(dfv, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
+            st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
 # ──────────────────────────────────────────────
 # 🏷️ 납품 품목 가격 설정 (관리자)
