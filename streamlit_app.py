@@ -2,7 +2,7 @@
 # =============================================================================
 # 📦 Streamlit 식자재 발주 시스템 (v5.4 - 최종 안정화판)
 # - 주요 개선사항:
-#   - 버튼 클릭 로직 최종 최적화 (st.form 제거 및 session_state 직접 참조)
+#   - 버튼 클릭 로직 최종 수정 (st.form 제거로 이중 클릭/미작동 문제 해결)
 #   - Excel 다운로드 품목 누락 오류 해결 (데이터 쓰기 방식 변경)
 #   - 관리자 페이지 UI 구조 및 간격 통일
 # =============================================================================
@@ -511,13 +511,13 @@ def page_admin_delivery_note():
     dfv = df[mask].copy().sort_values(["지점명", "발주번호", "품목코드"])
     v_spacer(16)
     with st.container(border=True):
-      st.markdown("##### 📄 미리보기 및 다운로드")
-      st.dataframe(dfv, hide_index=True)
-      if not dfv.empty:
-          store_name = store if store != "(전체)" else "전체 지점"
-          date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
-          buf = make_order_sheet_excel(dfv, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
-          st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+        st.markdown("##### 📄 미리보기 및 다운로드")
+        st.dataframe(dfv, hide_index=True)
+        if not dfv.empty:
+            store_name = store if store != "(전체)" else "전체 지점"
+            date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
+            buf = make_order_sheet_excel(dfv, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
+            st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
 # ──────────────────────────────────────────────
 # 🏷️ 납품 품목 가격 설정 (관리자)
