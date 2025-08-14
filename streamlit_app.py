@@ -224,7 +224,8 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
 
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         wb = writer.book
-        ws = writer.sheets["내역"] = wb.add_worksheet("내역")
+        ws = wb.add_worksheet("내역")
+        writer.sheets["내역"] = ws
 
         fmt = {
             "title": wb.add_format({"bold": True, "font_size": 18, "align": "center", "valign": "vcenter", "border": 1}),
@@ -362,7 +363,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             else: st.error("발주 제출 중 오류가 발생했습니다.")
 
 # ──────────────────────────────────────────────
-# 🧾 발주 조회/수정 (지점)
+# 🧾 발주 조회·수정 (지점)
 # ──────────────────────────────────────────────
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 수정")
@@ -435,10 +436,10 @@ def page_store_master_view(master_df: pd.DataFrame):
     st.dataframe(master_df[["품목코드", "품목명", "분류", "단위", "단가"]], use_container_width=True, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d")})
 
 # ──────────────────────────────────────────────
-# 🗂️ 발주요청조회 · 수정 (관리자)
+# 🗂️ 발주요청 조회, 수정 (관리자)
 # ──────────────────────────────────────────────
 def page_admin_unified_management():
-    st.subheader("🗂️ 발주요청조회 · 수정")
+    st.subheader("🗂️ 발주요청 조회, 수정")
     display_feedback()
     df_all = load_orders_df()
     if df_all.empty: st.info("발주 데이터가 없습니다."); return
@@ -539,12 +540,12 @@ if __name__ == "__main__":
     st.title("📦 식자재 발주 시스템")
     user, master = st.session_state.auth, load_master_df()
     if user["role"] == "admin":
-        tabs = st.tabs(["🗂️ 발주요청조회·수정", "📑 출고 내역서 다운로드", "🏷️ 납품 품목 가격 설정"])
+        tabs = st.tabs(["🗂️ 발주요청 조회, 수정", "📑 출고 내역서 다운로드", "🏷️ 납품 품목 가격 설정"])
         with tabs[0]: page_admin_unified_management()
         with tabs[1]: page_admin_delivery_note()
         with tabs[2]: page_admin_items_price(master)
     else:
-        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회·수정", "📑 발주서 다운로드", "🏷️ 발주 품목 가격 조회"])
+        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회 · 수정", "📑 발주서 다운로드", "🏷️ 발주 품목 가격 조회"])
         with tabs[0]: page_store_register_confirm(master)
         with tabs[1]: page_store_orders_change()
         with tabs[2]: page_store_order_form_download()
