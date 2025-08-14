@@ -59,6 +59,11 @@ def v_spacer(height: int):
 KST = ZoneInfo("Asia/Seoul")
 def now_kst_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str: return datetime.now(KST).strftime(fmt)
 
+def display_feedback():
+    if "success_message" in st.session_state and st.session_state.success_message:
+        st.success(st.session_state.success_message)
+        st.session_state.success_message = ""
+
 # =============================================================================
 # 1) Users 로더
 # =============================================================================
@@ -218,15 +223,14 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
         export[col] = pd.to_numeric(export[col], errors="coerce").fillna(0)
 
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        export.to_excel(writer, index=False, sheet_name="내역", startrow=5, header=False)
         wb = writer.book
-        ws = writer.sheets["내역"]
+        ws = writer.sheets["내역"] = wb.add_worksheet("내역")
 
         fmt = {
             "title": wb.add_format({"bold": True, "font_size": 18, "align": "center", "valign": "vcenter", "border": 1}),
             "subtitle": wb.add_format({"font_size": 11, "align": "right"}),
             "header": wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"}),
-            "text": wb.add_format({"border": 1}),
+            "text": wb.add_format({"border": 1}), "date": wb.add_format({"num_format": "yyyy-mm-dd", "border": 1}),
             "money": wb.add_format({"num_format": "#,##0", "border": 1}),
             "total_label": wb.add_format({"bold": True, "bg_color": "#DDEBF7", "border": 1, "align": "center"}),
             "total_money": wb.add_format({"bold": True, "num_format": "#,##0", "border": 1, "bg_color": "#DDEBF7"})
@@ -238,10 +242,14 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
         for col_num, value in enumerate(export.columns):
             ws.write(5, col_num, value, fmt["header"])
             
-        for row_num, row_data in enumerate(export.values):
-            for col_num, cell_data in enumerate(row_data):
-                cell_format = fmt["money"] if col_num >= 4 else fmt["text"]
-                ws.write(row_num + 6, col_num, cell_data, cell_format)
+        for row_num, row_data in enumerate(export.itertuples(index=False)):
+            ws.write(row_num + 6, 0, row_data.납품요청일, fmt["date"])
+            ws.write(row_num + 6, 1, row_data.품목코드, fmt["text"])
+            ws.write(row_num + 6, 2, row_data.품목명, fmt["text"])
+            ws.write(row_num + 6, 3, row_data.단위, fmt["text"])
+            ws.write(row_num + 6, 4, row_data.수량, fmt["money"])
+            ws.write(row_num + 6, 5, row_data.단가, fmt["money"])
+            ws.write(row_num + 6, 6, row_data.금액, fmt["money"])
 
         ws.set_column("A:A", 12); ws.set_column("B:B", 12); ws.set_column("C:C", 35); ws.set_column("D:D", 10);
         ws.set_column("E:E", 15); ws.set_column("F:F", 18); ws.set_column("G:G", 20)
@@ -260,7 +268,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
 # 🛒 장바구니 유틸(전역)
 # =============================================================================
 def init_session_state():
-    defaults = { "cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "cart_selected_codes": [], "store_selected_orders": [], "admin_pending_selection": [], "admin_shipped_selection": [] }
+    defaults = { "cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "cart_selected_codes": [], "store_selected_orders": [], "admin_pending_selection": [], "admin_shipped_selection": [], "success_message": "" }
     for key, value in defaults.items():
         if key not in st.session_state: st.session_state[key] = value
 
@@ -349,7 +357,8 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             user, order_id = st.session_state.auth, make_order_id(st.session_state.auth["user_id"])
             rows = [{"주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], "납품요청일": f"{납품요청일:%Y-%m-%d}", "비고": memo, "상태": "접수", **r.to_dict()} for _, r in cart_now.iterrows()]
             if append_orders(rows):
-                st.success("발주가 성공적으로 제출되었습니다."); st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
+                st.session_state.success_message = "발주가 성공적으로 제출되었습니다."
+                st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
             else: st.error("발주 제출 중 오류가 발생했습니다.")
 
 # ──────────────────────────────────────────────
@@ -357,6 +366,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 # ──────────────────────────────────────────────
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 수정")
+    display_feedback()
     df_all, user = load_orders_df(), st.session_state.auth
     df_user = df_all[df_all["지점ID"] == user["user_id"]]
     if df_user.empty: st.info("발주 데이터가 없습니다."); return
@@ -375,7 +385,8 @@ def page_store_orders_change():
         is_deletable = any(pid in pending["발주번호"].tolist() for pid in selected_ids)
         if st.button("선택 발주 삭제", disabled=not is_deletable):
             if write_orders_df(df_all[~df_all["발주번호"].isin(selected_ids)]):
-                st.success("선택한 발주가 삭제되었습니다."); st.session_state.store_selected_orders = []; st.rerun()
+                st.session_state.success_message = "선택한 발주가 삭제되었습니다."
+                st.session_state.store_selected_orders = []; st.rerun()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주품목조회")
@@ -428,6 +439,7 @@ def page_store_master_view(master_df: pd.DataFrame):
 # ──────────────────────────────────────────────
 def page_admin_unified_management():
     st.subheader("🗂️ 발주요청조회 · 수정")
+    display_feedback()
     df_all = load_orders_df()
     if df_all.empty: st.info("발주 데이터가 없습니다."); return
     v_spacer(10)
@@ -446,24 +458,32 @@ def page_admin_unified_management():
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
     with tab1:
         disp_df = pending.copy(); disp_df.insert(0, "선택", False)
-        edited_df = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        selected_ids = edited_df[edited_df["선택"]]["발주번호"].tolist()
-        if st.button("✅ 선택 발주 출고", type="primary", disabled=not selected_ids):
-            if update_order_status(selected_ids, "출고완료", st.session_state.auth["name"]):
-                st.success(f"{len(selected_ids)}건이 출고 처리되었습니다."); st.rerun()
+        edited_pending = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+        selected_pending_ids = edited_pending[edited_pending["선택"]]["발주번호"].tolist()
+        st.session_state.admin_pending_selection = selected_pending_ids
+        if st.button("✅ 선택 발주 출고", type="primary", disabled=not selected_pending_ids):
+            if update_order_status(selected_pending_ids, "출고완료", st.session_state.auth["name"]):
+                st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."; st.session_state.admin_pending_selection = []; st.rerun()
     with tab2:
         disp_df = shipped.copy(); disp_df.insert(0, "선택", False)
-        edited_df = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        selected_ids = edited_df[edited_df["선택"]]["발주번호"].tolist()
-        if st.button("↩️ 접수 상태로 변경", disabled=not selected_ids):
-            if update_order_status(selected_ids, "접수", st.session_state.auth["name"]):
-                st.success(f"{len(selected_ids)}건이 접수 상태로 변경되었습니다."); st.rerun()
+        edited_shipped = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+        selected_shipped_ids = edited_shipped[edited_shipped["선택"]]["발주번호"].tolist()
+        st.session_state.admin_shipped_selection = selected_shipped_ids
+        if st.button("↩️ 접수 상태로 변경", disabled=not selected_shipped_ids):
+            if update_order_status(selected_shipped_ids, "접수", st.session_state.auth["name"]):
+                st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."; st.session_state.admin_shipped_selection = []; st.rerun()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주품목확인")
-        # This part requires a more complex state management to show details after form submission.
-        # For simplicity, we keep the info message.
-        st.info("상세 내용을 보려면 위 목록에서 발주를 선택하고, 버튼을 누르기 전에 확인하세요.")
+        total_selection = st.session_state.admin_pending_selection + st.session_state.admin_shipped_selection
+        if len(total_selection) == 1:
+            target_df = df_all[df_all["발주번호"] == total_selection[0]]
+            st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
+            store_name = target_df['지점명'].iloc[0]
+            date_range = f"{pd.to_datetime(target_df['납품요청일'].iloc[0]):%Y-%m-%d}"
+            buf = make_order_sheet_excel(target_df, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
+            st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{total_selection[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
+        else: st.info("상세 내용을 보려면 위 목록에서 발주를 하나만 선택하세요.")
 
 # ──────────────────────────────────────────────
 # 📑 출고 내역서 다운로드 (관리자)
@@ -505,10 +525,10 @@ def page_admin_items_price(master_df: pd.DataFrame):
         edited = st.data_editor(master_df.assign(삭제=False), hide_index=True, num_rows="dynamic", use_container_width=True,
             column_config={"단가": st.column_config.NumberColumn("단가", format="%d")})
         if st.form_submit_button("변경사항 저장", type="primary", use_container_width=True):
-            edited['삭제'] = edited['삭제'].astype(bool)
+            edited['삭제'] = edited['삭제'].fillna(False).astype(bool)
             final_df = edited[~edited["삭제"]].drop(columns=["삭제"])
             if write_master_df(final_df):
-                st.success("상품마스터가 저장되었습니다."); st.rerun()
+                st.session_state.success_message = "상품마스터가 저장되었습니다."; st.rerun()
 
 # =============================================================================
 # 라우팅
