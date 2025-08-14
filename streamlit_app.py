@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.7 - Excel 서식 개편)
+# 📦 Streamlit 식자재 발주 시스템 (v5.8 - 필터 강화 및 서식 수정)
 # - 주요 개선사항:
-#   - make_order_sheet_excel 함수를 발주번호별 그룹화, 소계/총계 기능이 포함된
-#     새로운 서식으로 전면 개편
+#   - Excel 서식에서 '납품요청일' 열 제거
+#   - 지점/관리자 다운로드 페이지에 '상태' 필터 추가
 # =============================================================================
 
 from io import BytesIO
@@ -213,7 +213,7 @@ def _find_account(uid_or_name: str):
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
 # =============================================================================
-# 🌟 [수정됨] Excel 생성 함수 (v5.7 신규 서식)
+# 🌟 [수정됨] Excel 생성 함수 (v5.8 - 납품요청일 제거)
 # =============================================================================
 def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, date_range: str) -> BytesIO:
     buf = BytesIO()
@@ -228,17 +228,17 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
         "TH": workbook.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"}),
         "TEXT_L": workbook.add_format({"border": 1, "align": "left"}),
         "TEXT_C": workbook.add_format({"border": 1, "align": "center"}),
-        "DATE": workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1, "align": "center"}),
         "MONEY": workbook.add_format({"num_format": "#,##0", "border": 1}),
         "SUBTOTAL_LABEL": workbook.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center"}),
         "SUBTOTAL_MONEY": workbook.add_format({"bold": True, "num_format": "#,##0", "bg_color": "#F2F2F2", "border": 1}),
         "TOTAL_LABEL": workbook.add_format({"bold": True, "bg_color": "#D0CECE", "border": 1, "align": "center"}),
         "TOTAL_MONEY": workbook.add_format({"bold": True, "num_format": "#,##0", "bg_color": "#D0CECE", "border": 1}),
     }
+    # [수정] '납품요청일' 컬럼 정보 제거
     cols_info = [
-        ("No", 5, fmt["TEXT_C"]), ("납품요청일", 12, fmt["DATE"]), ("품목코드", 12, fmt["TEXT_C"]),
-        ("품목명", 35, fmt["TEXT_L"]), ("단위", 8, fmt["TEXT_C"]), ("수량", 10, fmt["MONEY"]),
-        ("단가", 12, fmt["MONEY"]), ("금액", 15, fmt["MONEY"])
+        ("No", 5, fmt["TEXT_C"]), ("품목코드", 12, fmt["TEXT_C"]), ("품목명", 35, fmt["TEXT_L"]),
+        ("단위", 8, fmt["TEXT_C"]), ("수량", 10, fmt["MONEY"]), ("단가", 12, fmt["MONEY"]),
+        ("금액", 15, fmt["MONEY"])
     ]
     col_headers = [c[0] for c in cols_info]
     num_cols = len(col_headers)
@@ -255,7 +255,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     # --- 데이터 처리 ---
     df = df_note.copy()
     df['주문일시_dt'] = pd.to_datetime(df['주문일시'], errors='coerce')
-    df['납품요청일_dt'] = pd.to_datetime(df['납품요청일'], errors='coerce')
     df = df.sort_values(by=['주문일시_dt', '품목명'])
 
     row_num = 5
@@ -265,51 +264,39 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     for order_id, group in df.groupby('발주번호'):
         if group.empty: continue
         
-        # 그룹 헤더
         first_row = group.iloc[0]
         group_header_text = f"■ 지점명: {first_row['지점명']} / 발주날짜: {first_row['주문일시_dt'].strftime('%Y-%m-%d')} / 발주번호: {order_id}"
         ws.merge_range(row_num, 0, row_num, num_cols - 1, group_header_text, fmt["GROUP_HEADER"])
         row_num += 1
 
-        # 테이블 헤더
         for i, header in enumerate(col_headers):
             ws.write(row_num, i, header, fmt["TH"])
         row_num += 1
 
-        # 데이터 행
         item_num = 1
         for _, item in group.iterrows():
+            # [수정] '납품요청일' 관련 로직 제거 및 인덱스 조정
             ws.write(row_num, 0, item_num, cols_info[0][2])
-            
-            date_val = item['납품요청일_dt']
-            if pd.isna(date_val):
-                ws.write(row_num, 1, "", cols_info[1][2])
-            else:
-                 ws.write_datetime(row_num, 1, date_val.date(), cols_info[1][2])
-
-            ws.write(row_num, 2, item['품목코드'], cols_info[2][2])
-            ws.write(row_num, 3, item['품목명'], cols_info[3][2])
-            ws.write(row_num, 4, item['단위'], cols_info[4][2])
-            ws.write(row_num, 5, item['수량'], cols_info[5][2])
-            ws.write(row_num, 6, item['단가'], cols_info[6][2])
-            ws.write(row_num, 7, item['금액'], cols_info[7][2])
+            ws.write(row_num, 1, item['품목코드'], cols_info[1][2])
+            ws.write(row_num, 2, item['품목명'], cols_info[2][2])
+            ws.write(row_num, 3, item['단위'], cols_info[3][2])
+            ws.write(row_num, 4, item['수량'], cols_info[4][2])
+            ws.write(row_num, 5, item['단가'], cols_info[5][2])
+            ws.write(row_num, 6, item['금액'], cols_info[6][2])
             row_num += 1
             item_num += 1
 
-        # 소계
         subtotal = group['금액'].sum()
         total_sum += subtotal
         ws.merge_range(row_num, 0, row_num, num_cols - 2, "공급가액 합계 (소계)", fmt["SUBTOTAL_LABEL"])
         ws.write(row_num, num_cols - 1, subtotal, fmt["SUBTOTAL_MONEY"])
-        row_num += 2 # 그룹 간 간격
+        row_num += 2
 
-    # --- 총계 ---
     if not df.empty:
         ws.merge_range(row_num, 0, row_num, num_cols - 2, "총 공급가액 합계", fmt["TOTAL_LABEL"])
         ws.write(row_num, num_cols - 1, total_sum, fmt["TOTAL_MONEY"])
         row_num += 1
 
-    # --- 인쇄 설정 ---
     ws.set_portrait()
     ws.set_paper(9) # A4
     ws.fit_to_pages(1, 0)
@@ -319,6 +306,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     workbook.close()
     buf.seek(0)
     return buf
+
 
 # =============================================================================
 # 🛒 장바구니 유틸(전역)
@@ -450,7 +438,6 @@ def page_store_orders_change():
             target_df = df_user[df_user["발주번호"] == st.session_state.store_selected_orders[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
             
-            # [수정] 다운로드 시 사용될 파라미터 재구성
             first_item = target_df.iloc[0]
             date_range = f"{pd.to_datetime(first_item['납품요청일']):%Y-%m-%d}"
             store_name = first_item['지점명']
@@ -470,21 +457,26 @@ def page_store_order_form_download():
     v_spacer(10)
     with st.container(border=True):
         st.markdown("##### 🔎 조회 조건")
+        # [수정] '상태' 필터 추가 및 레이아웃 조정
         c1, c2, c3 = st.columns(3)
         dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="store_dl_from")
         dt_to = c2.date_input("종료일", date.today(), key="store_dl_to")
+        status = c3.selectbox("상태", ["(전체)", "접수", "출고완료"], key="store_dl_status")
+        
         order_ids = ["(전체)"] + sorted(df["발주번호"].dropna().unique().tolist(), reverse=True)
-        target_order = c3.selectbox("발주번호", order_ids, key="store_dl_orderid")
+        target_order = st.selectbox("발주번호", order_ids, key="store_dl_orderid")
+        
+    # [수정] 필터링 로직에 '상태' 추가
     mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
+    if status != "(전체)": mask &= (df["상태"] == status)
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
-    dfv = df[mask].copy() # 정렬은 Excel 함수에서 하므로 제거
+    dfv = df[mask].copy()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 미리보기 및 다운로드")
         st.dataframe(dfv, use_container_width=True, height=420, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
         if not dfv.empty:
             date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
-            # [수정] store_name을 현재 사용자 이름으로 고정
             buf = make_order_sheet_excel(dfv, title="산카쿠 발주내역서", store_name=user['name'], date_range=date_range)
             st.download_button("발주내역서 다운로드", data=buf, file_name=f"발주서_{user['name']}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
@@ -546,7 +538,6 @@ def page_admin_unified_management():
             target_df = df_all[df_all["발주번호"] == total_selection[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
             
-            # [수정] 다운로드 시 사용될 파라미터 재구성
             first_item = target_df.iloc[0]
             store_name = first_item['지점명']
             date_range = f"{pd.to_datetime(first_item['납품요청일']):%Y-%m-%d}"
@@ -565,17 +556,24 @@ def page_admin_delivery_note():
     v_spacer(10)
     with st.container(border=True):
         st.markdown("##### 🔎 조회 조건")
-        c1, c2, c3, c4 = st.columns(4)
+        # [수정] '상태' 필터 추가 및 레이아웃 조정
+        c1, c2, c3 = st.columns(3)
         dt_from = c1.date_input("시작일", date.today()-timedelta(days=7), key="admin_dl_from")
         dt_to = c2.date_input("종료일", date.today(), key="admin_dl_to")
+        status = c3.selectbox("상태", ["(전체)", "접수", "출고완료"], key="admin_dl_status")
+
+        c4, c5 = st.columns(2)
         stores = ["(전체)"] + sorted(df["지점명"].dropna().unique().tolist())
-        store = c3.selectbox("지점", stores, key="admin_dl_store")
+        store = c4.selectbox("지점", stores, key="admin_dl_store")
         order_ids = ["(전체)"] + sorted(df["발주번호"].dropna().unique().tolist(), reverse=True)
-        target_order = c4.selectbox("발주번호", order_ids, key="admin_dl_orderid")
+        target_order = c5.selectbox("발주번호", order_ids, key="admin_dl_orderid")
+
+    # [수정] 필터링 로직에 '상태' 추가
     mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
+    if status != "(전체)": mask &= (df["상태"] == status)
     if store != "(전체)": mask &= (df["지점명"]==store)
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
-    dfv = df[mask].copy() # 정렬은 Excel 함수에서 하므로 제거
+    dfv = df[mask].copy()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 미리보기 및 다운로드")
