@@ -571,4 +571,4 @@ if __name__ == "__main__":
         with tabs[1]: page_store_orders_change()
         with tabs[2]: page_store_order_form_download()
         with tabs[3]: page_store_master_view(master)
-�
+
