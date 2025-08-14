@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.8 - 필터 강화 및 서식 수정)
+# 📦 Streamlit 식자재 발주 시스템 (v5.9 - UI 개선 및 서식 수정)
 # - 주요 개선사항:
-#   - Excel 서식에서 '납품요청일' 열 제거
-#   - 지점/관리자 다운로드 페이지에 '상태' 필터 추가
+#   - Excel 서식에 '출고' 상태 열(O/X) 추가
+#   - 다운로드 페이지 조회 조건을 한 줄로 변경하여 UI 개선
 # =============================================================================
 
 from io import BytesIO
@@ -213,7 +213,7 @@ def _find_account(uid_or_name: str):
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
 # =============================================================================
-# 🌟 [수정됨] Excel 생성 함수 (v5.8 - 납품요청일 제거)
+# 🌟 [수정됨] Excel 생성 함수 (v5.9 - '출고' 열 추가)
 # =============================================================================
 def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, date_range: str) -> BytesIO:
     buf = BytesIO()
@@ -234,25 +234,22 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
         "TOTAL_LABEL": workbook.add_format({"bold": True, "bg_color": "#D0CECE", "border": 1, "align": "center"}),
         "TOTAL_MONEY": workbook.add_format({"bold": True, "num_format": "#,##0", "bg_color": "#D0CECE", "border": 1}),
     }
-    # [수정] '납품요청일' 컬럼 정보 제거
+    # [수정] '출고' 컬럼 정보 추가
     cols_info = [
         ("No", 5, fmt["TEXT_C"]), ("품목코드", 12, fmt["TEXT_C"]), ("품목명", 35, fmt["TEXT_L"]),
         ("단위", 8, fmt["TEXT_C"]), ("수량", 10, fmt["MONEY"]), ("단가", 12, fmt["MONEY"]),
-        ("금액", 15, fmt["MONEY"])
+        ("금액", 15, fmt["MONEY"]), ("출고", 8, fmt["TEXT_C"])
     ]
     col_headers = [c[0] for c in cols_info]
     num_cols = len(col_headers)
 
-    # --- 컬럼 너비 설정 ---
     for i, c in enumerate(cols_info):
         ws.set_column(i, i, c[1])
 
-    # --- 문서 최상단 ---
     ws.merge_range(0, 0, 0, num_cols - 1, title, fmt["H1"])
     ws.merge_range(2, 0, 2, num_cols - 1, f"■ 조회 지점: {store_name}", fmt["H2"])
     ws.merge_range(3, 0, 3, num_cols - 1, f"■ 조회 기간: {date_range}", fmt["H2"])
     
-    # --- 데이터 처리 ---
     df = df_note.copy()
     df['주문일시_dt'] = pd.to_datetime(df['주문일시'], errors='coerce')
     df = df.sort_values(by=['주문일시_dt', '품목명'])
@@ -260,7 +257,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     row_num = 5
     total_sum = 0
     
-    # 발주번호로 그룹화하여 처리
     for order_id, group in df.groupby('발주번호'):
         if group.empty: continue
         
@@ -275,7 +271,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
 
         item_num = 1
         for _, item in group.iterrows():
-            # [수정] '납품요청일' 관련 로직 제거 및 인덱스 조정
             ws.write(row_num, 0, item_num, cols_info[0][2])
             ws.write(row_num, 1, item['품목코드'], cols_info[1][2])
             ws.write(row_num, 2, item['품목명'], cols_info[2][2])
@@ -283,6 +278,9 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
             ws.write(row_num, 4, item['수량'], cols_info[4][2])
             ws.write(row_num, 5, item['단가'], cols_info[5][2])
             ws.write(row_num, 6, item['금액'], cols_info[6][2])
+            # [수정] '출고' 상태(O/X) 추가
+            shipped_status = 'O' if item['상태'] == '출고완료' else 'X'
+            ws.write(row_num, 7, shipped_status, cols_info[7][2])
             row_num += 1
             item_num += 1
 
@@ -306,7 +304,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     workbook.close()
     buf.seek(0)
     return buf
-
 
 # =============================================================================
 # 🛒 장바구니 유틸(전역)
@@ -457,16 +454,15 @@ def page_store_order_form_download():
     v_spacer(10)
     with st.container(border=True):
         st.markdown("##### 🔎 조회 조건")
-        # [수정] '상태' 필터 추가 및 레이아웃 조정
-        c1, c2, c3 = st.columns(3)
+        # [수정] 모든 필터를 한 줄로 배치
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1.5])
         dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="store_dl_from")
         dt_to = c2.date_input("종료일", date.today(), key="store_dl_to")
         status = c3.selectbox("상태", ["(전체)", "접수", "출고완료"], key="store_dl_status")
         
         order_ids = ["(전체)"] + sorted(df["발주번호"].dropna().unique().tolist(), reverse=True)
-        target_order = st.selectbox("발주번호", order_ids, key="store_dl_orderid")
+        target_order = c4.selectbox("발주번호", order_ids, key="store_dl_orderid")
         
-    # [수정] 필터링 로직에 '상태' 추가
     mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
     if status != "(전체)": mask &= (df["상태"] == status)
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
@@ -556,19 +552,16 @@ def page_admin_delivery_note():
     v_spacer(10)
     with st.container(border=True):
         st.markdown("##### 🔎 조회 조건")
-        # [수정] '상태' 필터 추가 및 레이아웃 조정
-        c1, c2, c3 = st.columns(3)
+        # [수정] 모든 필터를 한 줄로 배치
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1.2, 1.5])
         dt_from = c1.date_input("시작일", date.today()-timedelta(days=7), key="admin_dl_from")
         dt_to = c2.date_input("종료일", date.today(), key="admin_dl_to")
         status = c3.selectbox("상태", ["(전체)", "접수", "출고완료"], key="admin_dl_status")
-
-        c4, c5 = st.columns(2)
         stores = ["(전체)"] + sorted(df["지점명"].dropna().unique().tolist())
         store = c4.selectbox("지점", stores, key="admin_dl_store")
         order_ids = ["(전체)"] + sorted(df["발주번호"].dropna().unique().tolist(), reverse=True)
         target_order = c5.selectbox("발주번호", order_ids, key="admin_dl_orderid")
 
-    # [수정] 필터링 로직에 '상태' 추가
     mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
     if status != "(전체)": mask &= (df["상태"] == status)
     if store != "(전체)": mask &= (df["지점명"]==store)
