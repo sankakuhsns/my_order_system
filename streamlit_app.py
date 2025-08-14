@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.6 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v5.7 - Excel 서식 개편)
 # - 주요 개선사항:
-#   - TypeError 해결: Excel 생성 시 날짜 타입 변환 로직 추가
-#   - 깨진 이모티콘(🗂️)을 호환성 높은 이모티콘(📋)으로 변경
+#   - make_order_sheet_excel 함수를 발주번호별 그룹화, 소계/총계 기능이 포함된
+#     새로운 서식으로 전면 개편
 # =============================================================================
 
 from io import BytesIO
@@ -212,54 +212,110 @@ def _find_account(uid_or_name: str):
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
+# =============================================================================
+# 🌟 [수정됨] Excel 생성 함수 (v5.7 신규 서식)
+# =============================================================================
 def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, date_range: str) -> BytesIO:
     buf = BytesIO()
-    workbook = xlsxwriter.Workbook(buf, {'in_memory': True})
-    ws = workbook.add_worksheet("내역")
+    workbook = xlsxwriter.Workbook(buf, {'in_memory': True, 'default_date_format': 'yyyy-mm-dd'})
+    ws = workbook.add_worksheet("출고내역서")
 
+    # --- 서식 정의 ---
     fmt = {
-        "title": workbook.add_format({"bold": True, "font_size": 18, "align": "center", "valign": "vcenter", "border": 1}),
-        "subtitle": workbook.add_format({"font_size": 11, "align": "right"}),
-        "header": workbook.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"}),
-        "text": workbook.add_format({"border": 1}), "date": workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1}),
-        "money": workbook.add_format({"num_format": "#,##0", "border": 1}),
-        "total_label": workbook.add_format({"bold": True, "bg_color": "#DDEBF7", "border": 1, "align": "center"}),
-        "total_money": workbook.add_format({"bold": True, "num_format": "#,##0", "border": 1, "bg_color": "#DDEBF7"})
+        "H1": workbook.add_format({"bold": True, "font_size": 20, "align": "center", "valign": "vcenter"}),
+        "H2": workbook.add_format({"font_size": 11, "align": "left", "valign": "vcenter"}),
+        "GROUP_HEADER": workbook.add_format({"bold": True, "font_size": 12, "bg_color": "#DDEBF7", "border": 1, "align": "left", "valign": "vcenter"}),
+        "TH": workbook.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center", "valign": "vcenter"}),
+        "TEXT_L": workbook.add_format({"border": 1, "align": "left"}),
+        "TEXT_C": workbook.add_format({"border": 1, "align": "center"}),
+        "DATE": workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1, "align": "center"}),
+        "MONEY": workbook.add_format({"num_format": "#,##0", "border": 1}),
+        "SUBTOTAL_LABEL": workbook.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1, "align": "center"}),
+        "SUBTOTAL_MONEY": workbook.add_format({"bold": True, "num_format": "#,##0", "bg_color": "#F2F2F2", "border": 1}),
+        "TOTAL_LABEL": workbook.add_format({"bold": True, "bg_color": "#D0CECE", "border": 1, "align": "center"}),
+        "TOTAL_MONEY": workbook.add_format({"bold": True, "num_format": "#,##0", "bg_color": "#D0CECE", "border": 1}),
     }
+    cols_info = [
+        ("No", 5, fmt["TEXT_C"]), ("납품요청일", 12, fmt["DATE"]), ("품목코드", 12, fmt["TEXT_C"]),
+        ("품목명", 35, fmt["TEXT_L"]), ("단위", 8, fmt["TEXT_C"]), ("수량", 10, fmt["MONEY"]),
+        ("단가", 12, fmt["MONEY"]), ("금액", 15, fmt["MONEY"])
+    ]
+    col_headers = [c[0] for c in cols_info]
+    num_cols = len(col_headers)
+
+    # --- 컬럼 너비 설정 ---
+    for i, c in enumerate(cols_info):
+        ws.set_column(i, i, c[1])
+
+    # --- 문서 최상단 ---
+    ws.merge_range(0, 0, 0, num_cols - 1, title, fmt["H1"])
+    ws.merge_range(2, 0, 2, num_cols - 1, f"■ 조회 지점: {store_name}", fmt["H2"])
+    ws.merge_range(3, 0, 3, num_cols - 1, f"■ 조회 기간: {date_range}", fmt["H2"])
     
-    ws.merge_range("A1:G2", title, fmt["title"])
-    ws.merge_range("A4:G4", f"■ 지점명: {store_name} / 발주기간: {date_range}", fmt["subtitle"])
+    # --- 데이터 처리 ---
+    df = df_note.copy()
+    df['주문일시_dt'] = pd.to_datetime(df['주문일시'], errors='coerce')
+    df['납품요청일_dt'] = pd.to_datetime(df['납품요청일'], errors='coerce')
+    df = df.sort_values(by=['주문일시_dt', '품목명'])
+
+    row_num = 5
+    total_sum = 0
     
-    cols = ["납품요청일","품목코드","품목명","단위","수량","단가","금액"]
-    for col_num, value in enumerate(cols):
-        ws.write(5, col_num, value, fmt["header"])
+    # 발주번호로 그룹화하여 처리
+    for order_id, group in df.groupby('발주번호'):
+        if group.empty: continue
         
-    df_note['납품요청일'] = pd.to_datetime(df_note['납품요청일'], errors='coerce').dt.date
-    export = df_note[cols].copy().sort_values(["납품요청일", "품목코드"])
-    
-    for row_num, row_data in enumerate(export.itertuples(index=False)):
-        date_val = row_data.납품요청일
-        if pd.isna(date_val):
-            ws.write(row_num + 6, 0, "", fmt["text"])
-        else:
-            ws.write(row_num + 6, 0, date_val, fmt["date"])
-        ws.write(row_num + 6, 1, row_data.품목코드, fmt["text"])
-        ws.write(row_num + 6, 2, row_data.품목명, fmt["text"])
-        ws.write(row_num + 6, 3, row_data.단위, fmt["text"])
-        ws.write(row_num + 6, 4, row_data.수량, fmt["money"])
-        ws.write(row_num + 6, 5, row_data.단가, fmt["money"])
-        ws.write(row_num + 6, 6, row_data.금액, fmt["money"])
+        # 그룹 헤더
+        first_row = group.iloc[0]
+        group_header_text = f"■ 지점명: {first_row['지점명']} / 발주날짜: {first_row['주문일시_dt'].strftime('%Y-%m-%d')} / 발주번호: {order_id}"
+        ws.merge_range(row_num, 0, row_num, num_cols - 1, group_header_text, fmt["GROUP_HEADER"])
+        row_num += 1
 
-    ws.set_column("A:A", 12); ws.set_column("B:B", 12); ws.set_column("C:C", 35); ws.set_column("D:D", 10);
-    ws.set_column("E:E", 15); ws.set_column("F:F", 18); ws.set_column("G:G", 20)
+        # 테이블 헤더
+        for i, header in enumerate(col_headers):
+            ws.write(row_num, i, header, fmt["TH"])
+        row_num += 1
 
-    last_row = len(export) + 6
-    total_value = export["금액"].sum()
-    ws.merge_range(f"A{last_row+1}:F{last_row+1}", "공급가액 합계", fmt["total_label"])
-    ws.write(f"G{last_row+1}", total_value, fmt["total_money"])
+        # 데이터 행
+        item_num = 1
+        for _, item in group.iterrows():
+            ws.write(row_num, 0, item_num, cols_info[0][2])
+            
+            date_val = item['납품요청일_dt']
+            if pd.isna(date_val):
+                ws.write(row_num, 1, "", cols_info[1][2])
+            else:
+                 ws.write_datetime(row_num, 1, date_val.date(), cols_info[1][2])
 
-    ws.set_portrait(); ws.set_paper(9); ws.fit_to_pages(1, 0); ws.print_area(0, 0, last_row + 1, 6)
-    
+            ws.write(row_num, 2, item['품목코드'], cols_info[2][2])
+            ws.write(row_num, 3, item['품목명'], cols_info[3][2])
+            ws.write(row_num, 4, item['단위'], cols_info[4][2])
+            ws.write(row_num, 5, item['수량'], cols_info[5][2])
+            ws.write(row_num, 6, item['단가'], cols_info[6][2])
+            ws.write(row_num, 7, item['금액'], cols_info[7][2])
+            row_num += 1
+            item_num += 1
+
+        # 소계
+        subtotal = group['금액'].sum()
+        total_sum += subtotal
+        ws.merge_range(row_num, 0, row_num, num_cols - 2, "공급가액 합계 (소계)", fmt["SUBTOTAL_LABEL"])
+        ws.write(row_num, num_cols - 1, subtotal, fmt["SUBTOTAL_MONEY"])
+        row_num += 2 # 그룹 간 간격
+
+    # --- 총계 ---
+    if not df.empty:
+        ws.merge_range(row_num, 0, row_num, num_cols - 2, "총 공급가액 합계", fmt["TOTAL_LABEL"])
+        ws.write(row_num, num_cols - 1, total_sum, fmt["TOTAL_MONEY"])
+        row_num += 1
+
+    # --- 인쇄 설정 ---
+    ws.set_portrait()
+    ws.set_paper(9) # A4
+    ws.fit_to_pages(1, 0)
+    if row_num > 5:
+        ws.print_area(0, 0, row_num - 1, num_cols - 1)
+
     workbook.close()
     buf.seek(0)
     return buf
@@ -393,8 +449,13 @@ def page_store_orders_change():
         if len(st.session_state.store_selected_orders) == 1:
             target_df = df_user[df_user["발주번호"] == st.session_state.store_selected_orders[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
-            date_range = f"{pd.to_datetime(target_df['납품요청일'].iloc[0]):%Y-%m-%d}"
-            buf = make_order_sheet_excel(target_df, title="산카쿠 발주내역서", store_name=user['name'], date_range=date_range)
+            
+            # [수정] 다운로드 시 사용될 파라미터 재구성
+            first_item = target_df.iloc[0]
+            date_range = f"{pd.to_datetime(first_item['납품요청일']):%Y-%m-%d}"
+            store_name = first_item['지점명']
+            
+            buf = make_order_sheet_excel(target_df, title="산카쿠 발주내역서", store_name=store_name, date_range=date_range)
             st.download_button("발주내역서 다운로드", data=buf, file_name=f"발주서_{user['name']}_{st.session_state.store_selected_orders[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
         else: st.info("상세 내용을 보려면 위 목록에서 발주를 하나만 선택하세요.")
 
@@ -416,13 +477,14 @@ def page_store_order_form_download():
         target_order = c3.selectbox("발주번호", order_ids, key="store_dl_orderid")
     mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
-    dfv = df[mask].copy().sort_values(["발주번호", "품목코드"])
+    dfv = df[mask].copy() # 정렬은 Excel 함수에서 하므로 제거
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 미리보기 및 다운로드")
         st.dataframe(dfv, use_container_width=True, height=420, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
         if not dfv.empty:
             date_range = f"{dt_from:%Y-%m-%d} ~ {dt_to:%Y-%m-%d}"
+            # [수정] store_name을 현재 사용자 이름으로 고정
             buf = make_order_sheet_excel(dfv, title="산카쿠 발주내역서", store_name=user['name'], date_range=date_range)
             st.download_button("발주내역서 다운로드", data=buf, file_name=f"발주서_{user['name']}_{dt_from}~{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
 
@@ -435,7 +497,7 @@ def page_store_master_view(master_df: pd.DataFrame):
     st.dataframe(master_df[["품목코드", "품목명", "분류", "단위", "단가"]], use_container_width=True, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d")})
 
 # ──────────────────────────────────────────────
-# 🗂️ 발주요청 조회·수정 (관리자)
+# 📋 발주요청 조회·수정 (관리자)
 # ──────────────────────────────────────────────
 def page_admin_unified_management():
     st.subheader("📋 발주요청 조회·수정")
@@ -483,8 +545,12 @@ def page_admin_unified_management():
         if len(total_selection) == 1:
             target_df = df_all[df_all["발주번호"] == total_selection[0]]
             st.dataframe(target_df[ORDERS_COLUMNS[5:12]], hide_index=True, use_container_width=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d"),"금액": st.column_config.NumberColumn("금액", format="%d")})
-            store_name = target_df['지점명'].iloc[0]
-            date_range = f"{pd.to_datetime(target_df['납품요청일'].iloc[0]):%Y-%m-%d}"
+            
+            # [수정] 다운로드 시 사용될 파라미터 재구성
+            first_item = target_df.iloc[0]
+            store_name = first_item['지점명']
+            date_range = f"{pd.to_datetime(first_item['납품요청일']):%Y-%m-%d}"
+
             buf = make_order_sheet_excel(target_df, title="산카쿠 출고내역서", store_name=store_name, date_range=date_range)
             st.download_button("출고내역서 다운로드", data=buf, file_name=f"출고내역서_{store_name}_{total_selection[0]}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
         else: st.info("상세 내용을 보려면 위 목록에서 발주를 하나만 선택하세요.")
@@ -509,7 +575,7 @@ def page_admin_delivery_note():
     mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)
     if store != "(전체)": mask &= (df["지점명"]==store)
     if target_order != "(전체)": mask &= (df["발주번호"] == target_order)
-    dfv = df[mask].copy().sort_values(["지점명", "발주번호", "품목코드"])
+    dfv = df[mask].copy() # 정렬은 Excel 함수에서 하므로 제거
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 미리보기 및 다운로드")
