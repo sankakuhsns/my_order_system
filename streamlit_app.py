@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.4 - 최종 안정화판)
+# 📦 Streamlit 식자재 발주 시스템 (v5.3 - 최종 안정화판)
 # - 주요 개선사항:
-#   - 버튼 클릭 로직 최종 수정 (st.session_state 활용하여 클릭 1회로 즉시 반응)
-#   - Excel 다운로드 품목 누락 오류 해결 및 서식 최종 개선
-#   - 관리자 페이지 UI 구조 및 간격 통일
+#   - 버튼 클릭 로직 전면 재구성 (st.form 제거로 이중 클릭/미작동 문제 해결)
+#   - Excel 다운로드 기능 대폭 강화 (정형화된 양식 및 인쇄 설정 적용)
+#   - UI/UX 전면 통일 ('박스 안 박스' 해결, 간격/탭바 통일)
+#   - TypeError 해결 및 누락 기능 전체 복원
 # =============================================================================
 
 from io import BytesIO
@@ -45,6 +46,7 @@ html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; col
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
 .login-title {{ text-align:center; font-size:42px; font-weight:800; margin:16px 0 12px; }}
 .stButton > button[data-testid="baseButton-primary"] {{ background: #1C6758 !important; color: #fff !important; border: 1px solid #1C6758 !important; border-radius: 10px !important; height: 34px !important; }}
+/* [UI 수정] 박스 안의 박스 문제 해결용 CSS */
 .flat-container .stDataFrame, .flat-container [data-testid="stDataFrame"] {{ border: none !important; box-shadow: none !important; }}
 .flat-container [data-testid="stDataFrameContainer"] {{ border: 1px solid {THEME['BORDER']}; border-radius: 10px; }}
 </style>
@@ -223,8 +225,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         wb = writer.book
         ws = wb.add_worksheet("내역")
-        writer.sheets["내역"] = ws
-
+        
         fmt = {
             "title": wb.add_format({"bold": True, "font_size": 18, "align": "center", "valign": "vcenter", "border": 1}),
             "subtitle": wb.add_format({"font_size": 11, "align": "right"}),
@@ -264,7 +265,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
     return buf
 
 # =============================================================================
-# 🛒 장바구니 유틸(전역)
+# � 장바구니 유틸(전역)
 # =============================================================================
 def init_session_state():
     defaults = { "cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "cart_selected_codes": [], "store_selected_orders": [], "admin_pending_selection": [], "admin_shipped_selection": [], "success_message": "" }
@@ -434,10 +435,10 @@ def page_store_master_view(master_df: pd.DataFrame):
     st.dataframe(master_df[["품목코드", "품목명", "분류", "단위", "단가"]], use_container_width=True, hide_index=True, column_config={"단가": st.column_config.NumberColumn("단가", format="%d")})
 
 # ──────────────────────────────────────────────
-# 🗂️ 발주요청 조회, 수정 (관리자)
+# 🗂️ 발주요청 조회·수정 (관리자)
 # ──────────────────────────────────────────────
 def page_admin_unified_management():
-    st.subheader("🗂️ 발주요청 조회, 수정")
+    st.subheader("🗂️ 발주요청 조회·수정")
     display_feedback()
     df_all = load_orders_df()
     if df_all.empty: st.info("발주 데이터가 없습니다."); return
@@ -456,21 +457,25 @@ def page_admin_unified_management():
     v_spacer(16)
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
     with tab1:
-        disp_df = pending.copy(); disp_df.insert(0, "선택", False)
-        edited_pending = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        selected_pending_ids = edited_pending[edited_pending["선택"]]["발주번호"].tolist()
-        st.session_state.admin_pending_selection = selected_pending_ids
-        if st.button("✅ 선택 발주 출고", type="primary", disabled=not selected_pending_ids):
-            if update_order_status(selected_pending_ids, "출고완료", st.session_state.auth["name"]):
-                st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."; st.session_state.admin_pending_selection = []; st.rerun()
+        with st.container(border=True):
+            st.markdown("##### 발주 요청 접수")
+            disp_df = pending.copy(); disp_df.insert(0, "선택", False)
+            edited_pending = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+            selected_pending_ids = edited_pending[edited_pending["선택"]]["발주번호"].tolist()
+            st.session_state.admin_pending_selection = selected_pending_ids
+            if st.button("✅ 선택 발주 출고", type="primary", disabled=not selected_pending_ids):
+                if update_order_status(selected_pending_ids, "출고완료", st.session_state.auth["name"]):
+                    st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."; st.session_state.admin_pending_selection = []; st.rerun()
     with tab2:
-        disp_df = shipped.copy(); disp_df.insert(0, "선택", False)
-        edited_shipped = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
-        selected_shipped_ids = edited_shipped[edited_shipped["선택"]]["발주번호"].tolist()
-        st.session_state.admin_shipped_selection = selected_shipped_ids
-        if st.button("↩️ 접수 상태로 변경", disabled=not selected_shipped_ids):
-            if update_order_status(selected_shipped_ids, "접수", st.session_state.auth["name"]):
-                st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."; st.session_state.admin_shipped_selection = []; st.rerun()
+        with st.container(border=True):
+            st.markdown("##### 출고 완료")
+            disp_df = shipped.copy(); disp_df.insert(0, "선택", False)
+            edited_shipped = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%d")})
+            selected_shipped_ids = edited_shipped[edited_shipped["선택"]]["발주번호"].tolist()
+            st.session_state.admin_shipped_selection = selected_shipped_ids
+            if st.button("↩️ 접수 상태로 변경", disabled=not selected_shipped_ids):
+                if update_order_status(selected_shipped_ids, "접수", st.session_state.auth["name"]):
+                    st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."; st.session_state.admin_shipped_selection = []; st.rerun()
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주품목확인")
@@ -540,12 +545,12 @@ if __name__ == "__main__":
     st.title("📦 식자재 발주 시스템")
     user, master = st.session_state.auth, load_master_df()
     if user["role"] == "admin":
-        tabs = st.tabs(["🗂️ 발주요청 조회, 수정", "📑 출고 내역서 다운로드", "🏷️ 납품 품목 가격 설정"])
+        tabs = st.tabs(["🗂️ 발주요청 조회·수정", "📑 출고 내역서 다운로드", "🏷️ 납품 품목 가격 설정"])
         with tabs[0]: page_admin_unified_management()
         with tabs[1]: page_admin_delivery_note()
         with tabs[2]: page_admin_items_price(master)
     else:
-        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회 · 수정", "📑 발주서 다운로드", "🏷️ 발주 품목 가격 조회"])
+        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회·수정", "📑 발주서 다운로드", "🏷️ 발주 품목 가격 조회"])
         with tabs[0]: page_store_register_confirm(master)
         with tabs[1]: page_store_orders_change()
         with tabs[2]: page_store_order_form_download()
