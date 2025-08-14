@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v5.9 - UI 개선 및 서식 수정)
+# 📦 Streamlit 식자재 발주 시스템 (v5.10 - 합계 서식 수정)
 # - 주요 개선사항:
-#   - Excel 서식에 '출고' 상태 열(O/X) 추가
-#   - 다운로드 페이지 조회 조건을 한 줄로 변경하여 UI 개선
+#   - Excel 서식에서 소계/총계 금액 표시부를 '금액'과 '출고' 열을 병합하여
+#     숫자 깨짐(###) 문제 해결
 # =============================================================================
 
 from io import BytesIO
@@ -213,7 +213,7 @@ def _find_account(uid_or_name: str):
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
 # =============================================================================
-# 🌟 [수정됨] Excel 생성 함수 (v5.9 - '출고' 열 추가)
+# 🌟 [수정됨] Excel 생성 함수 (v5.10 - 합계 셀 병합)
 # =============================================================================
 def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, date_range: str) -> BytesIO:
     buf = BytesIO()
@@ -234,7 +234,7 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
         "TOTAL_LABEL": workbook.add_format({"bold": True, "bg_color": "#D0CECE", "border": 1, "align": "center"}),
         "TOTAL_MONEY": workbook.add_format({"bold": True, "num_format": "#,##0", "bg_color": "#D0CECE", "border": 1}),
     }
-    # [수정] '출고' 컬럼 정보 추가
+
     cols_info = [
         ("No", 5, fmt["TEXT_C"]), ("품목코드", 12, fmt["TEXT_C"]), ("품목명", 35, fmt["TEXT_L"]),
         ("단위", 8, fmt["TEXT_C"]), ("수량", 10, fmt["MONEY"]), ("단가", 12, fmt["MONEY"]),
@@ -278,7 +278,6 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
             ws.write(row_num, 4, item['수량'], cols_info[4][2])
             ws.write(row_num, 5, item['단가'], cols_info[5][2])
             ws.write(row_num, 6, item['금액'], cols_info[6][2])
-            # [수정] '출고' 상태(O/X) 추가
             shipped_status = 'O' if item['상태'] == '출고완료' else 'X'
             ws.write(row_num, 7, shipped_status, cols_info[7][2])
             row_num += 1
@@ -286,13 +285,15 @@ def make_order_sheet_excel(df_note: pd.DataFrame, title: str, store_name: str, d
 
         subtotal = group['금액'].sum()
         total_sum += subtotal
-        ws.merge_range(row_num, 0, row_num, num_cols - 2, "공급가액 합계 (소계)", fmt["SUBTOTAL_LABEL"])
-        ws.write(row_num, num_cols - 1, subtotal, fmt["SUBTOTAL_MONEY"])
+        # [수정] 소계 레이블과 금액 표시부 셀 병합 로직 수정
+        ws.merge_range(row_num, 0, row_num, num_cols - 3, "공급가액 합계 (소계)", fmt["SUBTOTAL_LABEL"])
+        ws.merge_range(row_num, num_cols - 2, row_num, num_cols - 1, subtotal, fmt["SUBTOTAL_MONEY"])
         row_num += 2
 
     if not df.empty:
-        ws.merge_range(row_num, 0, row_num, num_cols - 2, "총 공급가액 합계", fmt["TOTAL_LABEL"])
-        ws.write(row_num, num_cols - 1, total_sum, fmt["TOTAL_MONEY"])
+        # [수정] 총계 레이블과 금액 표시부 셀 병합 로직 수정
+        ws.merge_range(row_num, 0, row_num, num_cols - 3, "총 공급가액 합계", fmt["TOTAL_LABEL"])
+        ws.merge_range(row_num, num_cols - 2, row_num, num_cols - 1, total_sum, fmt["TOTAL_MONEY"])
         row_num += 1
 
     ws.set_portrait()
