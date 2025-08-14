@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v3.6 - 최종 완성판)
+# 📦 Streamlit 식자재 발주 시스템 (v3.7 - 최종 완성판)
 # - 주요 개선사항:
-#   - 누락 기능 전체 복원 (다운로드, 필터 등)
-#   - 버튼 클릭 반응성 문제 해결 (rerun 재적용)
-#   - 알림 가시성 개선 (toast -> success)
-#   - 사용자 요청 UI/데이터 표시 방식 전체 반영
+#   - KeyError 근본 해결: '금액'과 '총금액' 컬럼명 혼용 문제를 해결하여 로직 재구성
+#   - 전체 코드 재검토 및 안정성 강화
 # =============================================================================
 
 from io import BytesIO
@@ -103,6 +101,7 @@ USERS = load_users_from_secrets()
 # =============================================================================
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
+CART_COLUMNS = ["품목코드","품목명","단위","단가","수량","금액"]
 ORDERS_COLUMNS = ["주문일시","발주번호","지점ID","지점명","납품요청일","품목코드","품목명","단위","수량","단가","금액","비고","상태","처리일시","처리자"]
 
 # =============================================================================
@@ -253,24 +252,27 @@ def make_order_sheet_excel(df_note: pd.DataFrame, include_price: bool, *, title:
     return buf
 
 # =============================================================================
-# 🛒 장바구니 유틸(전역)
+# 🛒 장바구니 유틸(전역) - [로직 재구성]
 # =============================================================================
 def _ensure_cart():
-    if "cart" not in st.session_state: st.session_state.cart = pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량","금액"])
+    if "cart" not in st.session_state: st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
 
-def _coerce_price_qty(df: pd.DataFrame) -> pd.DataFrame:
-    if not isinstance(df, pd.DataFrame) or df.empty: return pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량","금액"])
+def _coerce_cart_df(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame) or df.empty: return pd.DataFrame(columns=CART_COLUMNS)
     out = df.copy()
-    required_cols = ["품목코드","품목명","단위","단가","수량","금액"]
-    for col in required_cols:
+    
+    # 필수 컬럼 보장
+    for col in CART_COLUMNS:
         if col not in out.columns: out[col] = "" if col in ["품목코드","품목명","단위"] else 0
+
     for c in ["단가","수량"]:
         if c in out.columns: out[c] = pd.to_numeric(out[c].astype(str).str.replace(",", "").str.strip(), errors="coerce").fillna(0).astype(int)
-    out["금액"] = out.get("단가", 0) * out.get("수량", 0)
-    return out[required_cols]
+    
+    out["금액"] = out["단가"] * out["수량"]
+    return out[CART_COLUMNS]
 
 def normalize_cart(df: pd.DataFrame) -> pd.DataFrame:
-    df = _coerce_price_qty(df)
+    df = _coerce_cart_df(df)
     return df[df["수량"] > 0].reset_index(drop=True)
 
 def _add_to_cart(rows_df: pd.DataFrame):
@@ -280,7 +282,7 @@ def _add_to_cart(rows_df: pd.DataFrame):
     cart = st.session_state.cart.copy()
     merged = pd.concat([cart, add]).groupby("품목코드", as_index=False).agg({"품목명": "last", "단위": "last", "단가": "last", "수량": "sum"})
     merged["금액"] = merged["단가"] * merged["수량"]
-    st.session_state.cart = merged
+    st.session_state.cart = merged[CART_COLUMNS]
 
 def _remove_from_cart(codes: list[str]):
     _ensure_cart()
@@ -288,7 +290,7 @@ def _remove_from_cart(codes: list[str]):
 
 def _clear_cart():
     _ensure_cart()
-    st.session_state.cart = pd.DataFrame(columns=["품목코드","품목명","단위","단가","수량","금액"])
+    st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
 
 # =============================================================================
 # 🛒 발주(지점) 화면
@@ -341,9 +343,10 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
                 items_to_add = normalize_cart(edited_disp)
-                if items_to_add.empty: st.warning("수량이 0보다 큰 품목이 없습니다.")
-                else:
-                    _add_to_cart(items_to_add); st.session_state.store_editor_ver += 1; st.rerun()
+                if not items_to_add.empty: 
+                    _add_to_cart(items_to_add)
+                    st.session_state.store_editor_ver += 1
+                st.rerun()
 
     v_spacer(16)
 
@@ -353,7 +356,11 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if not cart.empty:
             cart_disp = cart.copy(); cart_disp.insert(0, "선택", cart_disp["품목코드"].isin(st.session_state.cart_selected_codes))
             cart_disp["수량"] = cart_disp["수량"].astype(str)
-            edited_cart = st.data_editor(cart_disp, key="cart_editor", hide_index=True, disabled=["품목코드","품목명","단위","금액"], column_config={"단가": st.column_config.NumberColumn("단가", format="%,.0f")})
+            edited_cart = st.data_editor(cart_disp, key="cart_editor", hide_index=True, disabled=["품목코드","품목명","단위","금액"], 
+                column_config={
+                    "단가": st.column_config.NumberColumn("단가", format="%,.0f"),
+                    "금액": st.column_config.NumberColumn("총금액", format="%,.0f") # 표시만 '총금액'
+                })
             st.session_state.cart_selected_codes = edited_cart[edited_cart["선택"]]["품목코드"].tolist()
             st.session_state.cart = normalize_cart(edited_cart.drop(columns=["선택"]))
             
@@ -386,27 +393,21 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 def page_store_orders_change():
     st.subheader("🧾 발주 조회 · 수정")
     if "store_selected_orders" not in st.session_state: st.session_state.store_selected_orders = []
-
     df_all = load_orders_df()
     df_user = df_all[df_all["지점ID"] == st.session_state["auth"]["user_id"]]
     if df_user.empty: st.info("발주 데이터가 없습니다."); return
-
     orders = df_user.groupby("발주번호").agg(주문일시=("주문일시", "first"), 건수=("품목코드", "count"), 금액=("금액", lambda x: pd.to_numeric(x, 'coerce').sum()), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
     pending = orders[orders["상태"] == "접수"]; done = orders[orders["상태"] == "출고완료"]
-    
     with st.container(border=True):
         st.markdown("##### 📦 발주 리스트")
-        st.caption("삭제를 원하는 '접수' 상태의 발주를 선택하세요. 상세 내용을 보려면 하나만 선택하세요.")
         disp_df = pd.concat([pending, done]).copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.store_selected_orders))
-        edited_df = st.data_editor(disp_df, key="store_orders_editor", hide_index=True, use_container_width=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%,.0f원")})
+        edited_df = st.data_editor(disp_df, key="store_orders_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("총금액", format="%,.0f")})
         st.session_state.store_selected_orders = edited_df[edited_df["선택"]]["발주번호"].tolist()
-        
         is_deletable = any(pid in pending["발주번호"].tolist() for pid in st.session_state.store_selected_orders)
         if st.button("선택 발주 삭제", disabled=not is_deletable):
             if write_orders_df(df_all[~df_all["발주번호"].isin(st.session_state.store_selected_orders)]):
                 st.success("선택한 발주가 삭제되었습니다."); st.session_state.store_selected_orders = []; st.rerun()
             else: st.error("삭제 실패")
-
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주품목조회")
@@ -424,16 +425,13 @@ def page_store_order_form_download():
     st.subheader("📑 발주서 다운로드")
     df = load_orders_df()[load_orders_df()["지점ID"] == st.session_state["auth"]["user_id"]]
     if df.empty: st.info("발주 데이터가 없습니다."); return
-
     with st.container(border=True):
         st.markdown("### 🔎 조회 조건")
         c1, c2 = st.columns(2)
         dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="store_dl_from")
         dt_to = c2.date_input("종료일", date.today(), key="store_dl_to")
-    
     dt_series = pd.to_datetime(df["주문일시"], errors="coerce").dt.date
     dfv = df[(dt_series >= dt_from) & (dt_series <= dt_to)].copy().sort_values(["발주번호", "품목코드"])
-
     with st.container(border=True):
         st.markdown("### 📄 미리보기 및 다운로드")
         st.dataframe(dfv, use_container_width=True, height=420, column_config={"단가": st.column_config.NumberColumn("단가", format="%,.0f"),"금액": st.column_config.NumberColumn("금액", format="%,.0f")})
@@ -461,7 +459,6 @@ def page_admin_unified_management():
     
     df_all = load_orders_df()
     if df_all.empty: st.info("발주 데이터가 없습니다."); return
-
     with st.container(border=True):
         st.markdown("### 🔎 조회 조건")
         c1, c2, c3 = st.columns([1,1,2])
@@ -469,27 +466,23 @@ def page_admin_unified_management():
         dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
         stores = ["(전체)"] + sorted(df_all["지점명"].dropna().unique().tolist())
         store = c3.selectbox("지점", stores, key="admin_mng_store")
-
     dt_series = pd.to_datetime(df_all["주문일시"], errors="coerce").dt.date
     mask = (dt_series >= dt_from) & (dt_series <= dt_to)
     if store != "(전체)": mask &= (df_all["지점명"] == store)
     df = df_all[mask].copy()
-    
     orders = df.groupby("발주번호").agg(주문일시=("주문일시", "first"), 지점명=("지점명", "first"), 건수=("품목코드", "count"), 금액=("금액", lambda x: pd.to_numeric(x, 'coerce').sum()), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
     pending = orders[orders["상태"] == "접수"]; shipped = orders[orders["상태"] == "출고완료"]
-
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
-    
     with tab1:
         disp_df = pending.copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.admin_pending_selection))
-        edited_df = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%,.0f원")})
+        edited_df = st.data_editor(disp_df, key="admin_pending_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("총금액", format="%,.0f")})
         st.session_state.admin_pending_selection = edited_df[edited_df["선택"]]["발주번호"].tolist()
         if st.button("✅ 선택 발주 출고", type="primary", disabled=not st.session_state.admin_pending_selection):
             if update_order_status(st.session_state.admin_pending_selection, "출고완료", st.session_state.auth["name"]):
                 st.success(f"{len(st.session_state.admin_pending_selection)}건이 출고 처리되었습니다."); st.session_state.admin_pending_selection = []; st.rerun()
     with tab2:
         disp_df = shipped.copy(); disp_df.insert(0, "선택", disp_df["발주번호"].isin(st.session_state.admin_shipped_selection))
-        edited_df = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("금액", format="%,.0f원")})
+        edited_df = st.data_editor(disp_df, key="admin_shipped_editor", hide_index=True, disabled=orders.columns, column_config={"금액": st.column_config.NumberColumn("총금액", format="%,.0f")})
         st.session_state.admin_shipped_selection = edited_df[edited_df["선택"]]["발주번호"].tolist()
         if st.button("↩️ 접수 상태로 변경", disabled=not st.session_state.admin_shipped_selection):
             if update_order_status(st.session_state.admin_shipped_selection, "접수", st.session_state.auth["name"]):
@@ -509,7 +502,6 @@ def page_admin_delivery_note():
         dt_to = c2.date_input("종료일", date.today(), key="admin_dl_to")
         stores = ["(전체)"] + sorted(df["지점명"].dropna().unique().tolist())
         store = c3.selectbox("지점", stores, key="admin_dl_store")
-
     dt_series = pd.to_datetime(df["주문일시"], errors="coerce").dt.date
     mask = (dt_series >= dt_from) & (dt_series <= dt_to)
     if store != "(전체)": mask &= (df["지점명"]==store)
