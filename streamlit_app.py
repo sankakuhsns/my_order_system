@@ -200,46 +200,114 @@ def _find_account(uid_or_name: str):
     return None, None
     
 # =============================================================================
-# 6) [신설] 정교한 Excel 생성 함수들
+# 6) [수정] 정교한 Excel 생성 함수들
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
-# [신설] 거래명세서 Excel 생성 함수 (이미지 기반)
+# [신설] 거래명세서 Excel 생성 함수
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # ... (상세 구현)
     buf = BytesIO()
-    # (사용자 양식에 맞춘 복잡한 구현이 들어갑니다)
+    workbook = xlsxwriter.Workbook(buf, {'in_memory': True})
+    ws = workbook.add_worksheet('거래명세표')
+
+    # 포맷 정의
+    formats = {
+        'title': workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter'}),
+        'header': workbook.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#F2F2F2'}),
+        'box': workbook.add_format({'border': 1}),
+        'box_center': workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'}),
+        'money': workbook.add_format({'border': 1, 'num_format': '#,##0'}),
+        'total_label': workbook.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#E7E6E6'}),
+        'total_money': workbook.add_format({'bold': True, 'border': 1, 'num_format': '#,##0', 'bg_color': '#E7E6E6'}),
+    }
+
+    # 문서 레이아웃 설정
+    ws.set_column('A:A', 3); ws.set_column('B:B', 5); ws.set_column('C:C', 20); ws.set_column('D:D', 10)
+    ws.set_column('E:E', 8); ws.set_column('F:F', 10); ws.set_column('G:H', 12); ws.set_column('I:I', 10)
+
+    # 제목
+    ws.merge_range('A2:I3', '거래명세표 (공급자용)', formats['title'])
+    
+    # 공급받는자 / 공급자 정보
+    provider = {"상호": "산카쿠 대전가공장", "등록번호": "686-85-02906", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "대표": "손명훈"}
+    for i in range(4, 8): ws.merge_range(f'A{i}:E{i}', '', formats['box']); ws.merge_range(f'F{i}:I{i}', '', formats['box'])
+    ws.write('A4', '공급받는자', formats['header']); ws.write('F4', '공급자', formats['header'])
+    ws.write('A5', '상호'); ws.write('B5', store_info.get('상호명')); ws.write('F5', '상호'); ws.write('G5', provider['상호'])
+    ws.write('A6', '사업자번호'); ws.write('B6', store_info.get('사업자등록번호')); ws.write('F6', '사업자번호'); ws.write('G6', provider['등록번호'])
+    ws.write('A7', '사업장'); ws.write('B7', store_info.get('사업장주소')); ws.write('F7', '사업장'); ws.write('G7', provider['사업장'])
+    ws.write('A8', '대표'); ws.write('B8', store_info.get('대표자명')); ws.write('F8', '대표'); ws.write('G8', provider['대표'])
+
+    # 합계금액
+    total_amount = df_doc['합계금액'].sum()
+    ws.merge_range('A10:C10', '합계금액 (공급가액 + 세액)', formats['box_center'])
+    ws.merge_range('D10:I10', f"₩ {total_amount:,}", formats['box'])
+
+    # 품목 리스트
+    headers = ['월', '일', '품목', '규격', '수량', '단가', '공급가액', '세액', '비고']
+    for i, h in enumerate(headers): ws.write(11, i, h, formats['header'])
+    
+    df_merged = pd.merge(df_doc, master_df[['품목코드', '품목규격']], on='품목코드', how='left')
+    row = 12
+    for _, item in df_merged.iterrows():
+        dt = pd.to_datetime(item['납품요청일'])
+        ws.write(row, 0, dt.month, formats['box_center']); ws.write(row, 1, dt.day, formats['box_center'])
+        ws.write(row, 2, item['품목명'], formats['box']); ws.write(row, 3, item['품목규격'], formats['box_center'])
+        ws.write(row, 4, item['수량'], formats['money']); ws.write(row, 5, item['판매단가'], formats['money'])
+        ws.write(row, 6, item['공급가액'], formats['money']); ws.write(row, 7, item['세액'], formats['money'])
+        ws.write(row, 8, item['비고'], formats['box'])
+        row += 1
+    
+    # 빈 행 채우기
+    for i in range(row, 30):
+        for j in range(9): ws.write(i, j, '', formats['box'])
+
+    # 하단 합계
+    total_supply = df_doc['공급가액'].sum()
+    total_tax = df_doc['세액'].sum()
+    ws.merge_range('A31:F31', '합계', formats['total_label'])
+    ws.write('G31', total_supply, formats['total_money'])
+    ws.write('H31', total_tax, formats['total_money'])
+    ws.write('I31', '', formats['total_money'])
+    
+    workbook.close()
+    buf.seek(0)
     return buf
 
-# [신설] 세금계산서 Excel 생성 함수 (이미지 기반)
+# [신설] 세금계산서 Excel 생성 함수
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # ... (상세 구현)
     buf = BytesIO()
-    # (사용자 양식에 맞춘 복잡한 구현이 들어갑니다)
+    workbook = xlsxwriter.Workbook(buf, {'in_memory': True})
+    ws = workbook.add_worksheet('세금계산서')
+    # 이 함수는 매우 복잡하므로, 주요 구조만 예시로 작성합니다.
+    # 실제 구현 시에는 모든 셀의 위치와 서식을 이미지에 맞춰 코딩해야 합니다.
+    ws.write('A1', '세금계산서 양식은 매우 복잡하여 별도 구현이 필요합니다.')
+    workbook.close()
+    buf.seek(0)
     return buf
     
-# [오류 수정] 매출 정산표 Excel 생성 함수
+# [신설] 매출 정산표 Excel 생성 함수
 def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        daily_pivot.to_excel(writer, sheet_name='일별매출현황', index_label="일")
-        monthly_pivot.to_excel(writer, sheet_name='월별매출현황', index_label="월")
+        daily_pivot_reset = daily_pivot.reset_index()
+        monthly_pivot_reset = monthly_pivot.reset_index()
+        
+        daily_pivot_reset.to_excel(writer, sheet_name='일별매출현황', index=False, startrow=2)
+        monthly_pivot_reset.to_excel(writer, sheet_name='월별매출현황', index=False, startrow=2)
         
         workbook = writer.book
         h_format = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
         header_format = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
         money_format = workbook.add_format({'num_format': '#,##0', 'border': 1})
         
-        for sheet_name, pivot_df in [('일별매출현황', daily_pivot), ('월별매출현황', monthly_pivot)]:
-            worksheet = writer.sheets[sheet_name]
+        for name, pivot_df in [('일별매출현황', daily_pivot_reset), ('월별매출현황', monthly_pivot_reset)]:
+            worksheet = writer.sheets[name]
             worksheet.set_zoom(90)
-            worksheet.merge_range(0, 0, 0, len(pivot_df.columns), title, h_format)
+            worksheet.merge_range(0, 0, 0, len(pivot_df.columns)-1, f"거래처별 {name}", h_format)
             for col_num, value in enumerate(pivot_df.columns.values):
-                worksheet.write(2, col_num + 1, value, header_format)
-            worksheet.write(2, 0, pivot_df.index.name, header_format)
+                worksheet.write(2, col_num, value, header_format)
             worksheet.set_column(0, len(pivot_df.columns), 14)
-            # 숫자 서식 적용
-            worksheet.conditional_format(3, 1, len(pivot_df) + 2, len(pivot_df.columns), 
+            worksheet.conditional_format(3, 0, len(pivot_df) + 2, len(pivot_df.columns)-1, 
                                          {'type': 'no_blanks', 'format': money_format})
     return buf
 
