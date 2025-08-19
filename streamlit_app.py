@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v8.1 - 최종 기능 완성)
+# 📦 Streamlit 식자재 발주 시스템 (v8.2 - 최종 기능 완성)
 #
 # - 주요 개선사항:
-#   - 매출 정산표 Excel 다운로드 오류(AttributeError) 해결
-#   - 매출 조회 대시보드의 지점별 순위 표시 오류(ProgressColumn) 수정
+#   - 상세 보기 다운로드 KeyError 및 매출 조회 숫자 표시 오류 해결
+#   - 지점/관리자 '발주 조회' UI를 필터, 정렬, 기능 면에서 동일하게 통일
 #   - 관리자 '발주 조회' 상세 보기에서 거래명세서 다운로드 기능 추가
-#   - 지점 '발주 조회' UI를 관리자 페이지와 동일하게 통일 (발주번호 검색 추가)
+#   - 매출 조회 대시보드 기능 대폭 강화 (상세 분석 탭, 정산표 다운로드)
 # =============================================================================
 
 from io import BytesIO
@@ -21,13 +21,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-# Google Sheets & Drive
+# Google Sheets
 import gspread
 from google.oauth2 import service_account
 
 # Excel
 import xlsxwriter
 from openpyxl import load_workbook
+
 # -----------------------------------------------------------------------------
 # 페이지/테마/스타일
 # -----------------------------------------------------------------------------
@@ -58,9 +59,8 @@ def display_feedback():
         st.success(st.session_state.success_message)
         st.session_state.success_message = ""
 
-# ... (이전과 동일한 함수들은 여기에 위치합니다) ...
 # =============================================================================
-# 1) Users 로더 (이전과 동일)
+# 1) Users 로더
 # =============================================================================
 @st.cache_data
 def load_users_from_secrets() -> Dict[str, Dict[str, Any]]:
@@ -83,7 +83,7 @@ def _normalize_account(uid: str, payload: Mapping) -> dict:
 USERS = load_users_from_secrets()
 
 # =============================================================================
-# 2) 시트/스키마 정의 (이전과 동일)
+# 2) 시트/스키마 정의
 # =============================================================================
 SHEET_NAME_STORES = "지점마스터"
 SHEET_NAME_MASTER = "상품마스터"
@@ -95,14 +95,14 @@ CART_COLUMNS = ["품목코드", "품목명", "단위", "판매단가", "수량",
 LOG_COLUMNS = ["변경일시", "변경자", "대상시트", "품목코드", "변경항목", "이전값", "새로운값"]
 
 # =============================================================================
-# 3) Google Sheets 연결 (이전과 동일)
+# 3) Google Sheets 연결
 # =============================================================================
 @st.cache_resource(show_spinner=False)
 def get_gs_client():
     google = st.secrets.get("google", {})
     creds_info = dict(google)
     if "\\n" in str(creds_info.get("private_key", "")): creds_info["private_key"] = str(creds_info["private_key"]).replace("\\n", "\n")
-    scopes = ["https.www.googleapis.com/auth/spreadsheets", "https.www.googleapis.com/auth/drive"]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
     return gspread.authorize(creds)
 
@@ -114,7 +114,7 @@ def open_spreadsheet():
     except Exception as e: st.error(f"스프레드시트 열기 실패: {e}"); st.stop()
 
 # =============================================================================
-# 4) 데이터 I/O 함수 (이전과 동일)
+# 4) 데이터 I/O 함수
 # =============================================================================
 @st.cache_data(ttl=3600)
 def load_store_info_df() -> pd.DataFrame:
@@ -172,7 +172,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     return True
 
 # =============================================================================
-# 5) 로그인 (이전과 동일)
+# 5) 로그인
 # =============================================================================
 def require_login():
     if st.session_state.get("auth", {}).get("login"): return True
@@ -215,9 +215,9 @@ def _load_local_template(filename: str):
     return None
 
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
-    total_tax    = int(pd.to_numeric(df_doc["세액"], errors="coerce").fillna(0).sum())
-    total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
+    total_supply = int(df_doc["공급가액"].sum())
+    total_tax    = int(df_doc["세액"].sum())
+    total_amount = int(df_doc["합계금액"].sum())
 
     try:
         base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0])
@@ -228,8 +228,8 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     if wb is None:
         st.error("거래명세표.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
 
-    ws = wb[wb.sheetnames[0]]
-
+    ws = wb.active
+    
     ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
     ws.cell(10, 6).value = total_amount
 
@@ -284,7 +284,7 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
     if wb is None:
         st.error("세금계산서.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
 
-    ws = wb[wb.sheetnames[0]]
+    ws = wb.active
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
     buyer = {"등록번호": str(store_info.get("사업자등록번호", "")), "상호": str(store_info.get("상호명", "")), "사업장": str(store_info.get("사업장주소", "")), "업태": str(store_info.get("업태", ""))}
@@ -335,8 +335,31 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
     out.seek(0)
     return out
 
+def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        daily_pivot.to_excel(writer, sheet_name='일별매출현황')
+        monthly_pivot.to_excel(writer, sheet_name='월별매출현황')
+        
+        workbook = writer.book
+        h_format = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
+        header_format = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
+        money_format = workbook.add_format({'num_format': '#,##0', 'border': 1})
+        
+        for name, pivot_df in [('일별매출현황', daily_pivot), ('월별매출현황', monthly_pivot)]:
+            worksheet = writer.sheets[name]
+            worksheet.set_zoom(90)
+            worksheet.merge_range(0, 0, 0, len(pivot_df.columns), f"거래처별 {name}", h_format)
+            for col_num, value in enumerate(pivot_df.columns.values):
+                worksheet.write(2, col_num + 1, value, header_format)
+            worksheet.write(2, 0, pivot_df.index.name, header_format)
+            worksheet.set_column(0, len(pivot_df.columns), 14)
+            worksheet.conditional_format(3, 1, len(pivot_df) + 2, len(pivot_df.columns), 
+                                         {'type': 'no_blanks', 'format': money_format})
+    return buf
+
 # =============================================================================
-# 7) 장바구니 유틸 (이전과 동일)
+# 7) 장바구니 유틸
 # =============================================================================
 def init_session_state():
     defaults = {"cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "success_message": ""}
@@ -719,7 +742,6 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
             store_sales = df_sales.groupby("지점명")["합계금액"].sum().nlargest(10).reset_index()
             store_sales.rename(columns={"합계금액": "매출액(원)"}, inplace=True)
             max_val = int(store_sales['매출액(원)'].max()) if not store_sales.empty else 1
-            # [오류 수정] ProgressColumn을 NumberColumn으로 변경
             st.dataframe(store_sales, use_container_width=True, hide_index=True, column_config={"지점명": "지점", "매출액(원)": st.column_config.NumberColumn()})
         with col2:
             st.markdown("##### 🍔 **품목별 판매 순위 (Top 10)**")
