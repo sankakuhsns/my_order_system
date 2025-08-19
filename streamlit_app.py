@@ -485,7 +485,9 @@ def page_store_master_view(master_df: pd.DataFrame):
 def page_admin_unified_management(df_all: pd.DataFrame):
     st.subheader("📋 발주요청 조회·수정")
     display_feedback()
-    if df_all.empty: st.info("발주 데이터가 없습니다."); return
+    if df_all.empty:
+        st.info("발주 데이터가 없습니다.")
+        return
 
     c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
@@ -499,39 +501,66 @@ def page_admin_unified_management(df_all: pd.DataFrame):
         df = df[df["발주번호"].str.contains(order_id_search, na=False)]
     else:
         df = df[(pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)]
-        if store != "(전체)": df = df[df["지점명"] == store]
+        if store != "(전체)":
+            df = df[df["지점명"] == store]
 
-    orders = df.groupby("발주번호").agg(주문일시=("주문일시", "first"), 지점명=("지점명", "first"), 건수=("품목코드", "count"), 합계금액=("합계금액", "sum"), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
+    orders = df.groupby("발주번호").agg(
+        주문일시=("주문일시", "first"),
+        지점명=("지점명", "first"),
+        건수=("품목코드", "count"),
+        합계금액=("합계금액", "sum"),
+        상태=("상태", "first")
+    ).reset_index().sort_values("주문일시", ascending=False)
     orders.rename(columns={"합계금액": "합계금액(원)"}, inplace=True)
-    
-    pending = orders[orders["상태"] == "접수"].copy(); shipped = orders[orders["상태"] == "출고완료"].copy()
-    pending.insert(0, "선택", False); shipped.insert(0, "선택", False)
+
+    pending = orders[orders["상태"] == "접수"].copy()
+    shipped = orders[orders["상태"] == "출고완료"].copy()
+    pending.insert(0, "선택", False)
+    shipped.insert(0, "선택", False)
 
     if 'admin_pending_selection' not in st.session_state: st.session_state.admin_pending_selection = {}
     if 'admin_shipped_selection' not in st.session_state: st.session_state.admin_shipped_selection = {}
-    
+
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
+
     with tab1:
         st.session_state.admin_shipped_selection = {}
         pending['선택'] = pending['발주번호'].apply(lambda x: st.session_state.admin_pending_selection.get(x, False))
-        edited_pending = st.data_editor(pending, key="admin_pending_editor", hide_index=True, disabled=orders.columns.drop("선택"), column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0")})
+        # [오류 수정] disabled 속성에서 'orders.columns' 대신 'pending.columns'를 사용하도록 수정
+        edited_pending = st.data_editor(
+            pending,
+            key="admin_pending_editor",
+            hide_index=True,
+            disabled=pending.columns.drop("선택"),
+            column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0")}
+        )
         st.session_state.admin_pending_selection = dict(zip(edited_pending['발주번호'], edited_pending['선택']))
         selected_pending_ids = [k for k, v in st.session_state.admin_pending_selection.items() if v]
 
         if st.button("✅ 선택 발주 출고", disabled=not selected_pending_ids, key="admin_ship_btn"):
             if update_order_status(selected_pending_ids, "출고완료", st.session_state.auth["name"]):
-                st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."; st.rerun()
+                st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."
+                st.rerun()
+
     with tab2:
         st.session_state.admin_pending_selection = {}
         shipped['선택'] = shipped['발주번호'].apply(lambda x: st.session_state.admin_shipped_selection.get(x, False))
-        edited_shipped = st.data_editor(shipped, key="admin_shipped_editor", hide_index=True, disabled=orders.columns.drop("선택"), column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0")})
+        # [오류 수정] disabled 속성에서 'orders.columns' 대신 'shipped.columns'를 사용하도록 수정
+        edited_shipped = st.data_editor(
+            shipped,
+            key="admin_shipped_editor",
+            hide_index=True,
+            disabled=shipped.columns.drop("선택"),
+            column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0")}
+        )
         st.session_state.admin_shipped_selection = dict(zip(edited_shipped['발주번호'], edited_shipped['선택']))
         selected_shipped_ids = [k for k, v in st.session_state.admin_shipped_selection.items() if v]
 
         if st.button("↩️ 접수 상태로 변경", disabled=not selected_shipped_ids, key="admin_revert_btn"):
             if update_order_status(selected_shipped_ids, "접수", st.session_state.auth["name"]):
-                st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."; st.rerun()
-    
+                st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."
+                st.rerun()
+
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
@@ -542,7 +571,17 @@ def page_admin_unified_management(df_all: pd.DataFrame):
             target_df = df_all[df_all["발주번호"] == target_id]
             display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
             target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"}, inplace=True)
-            st.dataframe(target_df[display_cols], hide_index=True, use_container_width=True, column_config={"판매단가(원)": st.column_config.NumberColumn(format="#,##0"), "공급가액(원)": st.column_config.NumberColumn(format="#,##0"), "세액(원)": st.column_config.NumberColumn(format="#,##0"), "합계금액(원)": st.column_config.NumberColumn(format="#,##0")})
+            st.dataframe(
+                target_df[display_cols],
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "판매단가(원)": st.column_config.NumberColumn(format="#,##0"),
+                    "공급가액(원)": st.column_config.NumberColumn(format="#,##0"),
+                    "세액(원)": st.column_config.NumberColumn(format="#,##0"),
+                    "합계금액(원)": st.column_config.NumberColumn(format="#,##0")
+                }
+            )
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
