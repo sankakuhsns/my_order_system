@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v9.0 - Google Drive 연동)
+# 📦 Streamlit 식자재 발주 시스템 (v9.1 - 가격 로직 수정)
 #
 # - 주요 개선사항:
-#   - 로컬/GitHub 템플릿 파일 의존성 제거
-#   - 서비스 계정 인증을 통해 Google Drive에서 템플릿을 안전하게 다운로드
-#   - Google API (Sheets, Drive) 인증 로직 통합 및 최적화
+#   - 가격 정책을 '단가(VAT 제외)' 중심으로 변경
+#   - 단가 * 수량 = 공급가액, 공급가액 + 세액 = 합계금액 순으로 계산
+#   - 코드 및 UI의 '판매단가'를 '단가'로 변경하여 명확성 증대
 # =============================================================================
 
 from io import BytesIO
@@ -75,17 +75,7 @@ st.set_page_config(page_title="산카쿠 식자재 발주 시스템", page_icon=
 
 THEME = { "BORDER": "#e8e8ee", "PRIMARY": "#1C6758", "BG": "#f7f8fa", "CARD_BG": "#ffffff", "TEXT": "#222", "MUTED": "#777" }
 
-st.markdown(f"""
-<style>
-html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; color: {THEME['TEXT']}; }}
-.block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}
-[data-testid="stAppViewContainer"] .main .block-container {{ max-width: 1050px; margin: 0 auto; padding: 0 12px; }}
-.stTabs [role="tablist"] {{ display:flex !important; gap:12px !important; flex-wrap:wrap !important; margin:8px 0 24px !important; border-bottom:none !important; }}
-.stTabs button[role="tab"] {{ border:1px solid {THEME['BORDER']} !important; border-radius:12px !important; background:#fff !important; padding:10px 14px !important; box-shadow:0 1px 6px rgba(0,0,0,0.04) !important; }}
-.stTabs button[role="tab"][aria-selected="true"] {{ border-color:{THEME['PRIMARY']} !important; color:{THEME['PRIMARY']} !important; box-shadow:0 6px 16px rgba(28,103,88,0.18) !important; font-weight:700; }}
-.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
-</style>
-""", unsafe_allow_html=True)
+st.markdown(f"""<br><style><br>html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; color: {THEME['TEXT']}; }}<br>.block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}<br>[data-testid="stAppViewContainer"] .main .block-container {{ max-width: 1050px; margin: 0 auto; padding: 0 12px; }}<br>.stTabs [role="tablist"] {{ display:flex !important; gap:12px !important; flex-wrap:wrap !important; margin:8px 0 24px !important; border-bottom:none !important; }}<br>.stTabs button[role="tab"] {{ border:1px solid {THEME['BORDER']} !important; border-radius:12px !important; background:#fff !important; padding:10px 14px !important; box-shadow:0 1px 6px rgba(0,0,0,0.04) !important; }}<br>.stTabs button[role="tab"][aria-selected="true"] {{ border-color:{THEME['PRIMARY']} !important; color:{THEME['PRIMARY']} !important; box-shadow:0 6px 16px rgba(28,103,88,0.18) !important; font-weight:700; }}<br>.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}<br></style><br>""", unsafe_allow_html=True)
 
 def v_spacer(height: int):
     st.markdown(f"<div style='height:{height}px'></div>", unsafe_allow_html=True)
@@ -128,9 +118,9 @@ SHEET_NAME_STORES = "지점마스터"
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
 SHEET_NAME_LOG = "변경로그"
-MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "판매단가", "과세구분", "활성"]
-ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "납품요청일", "품목코드", "품목명", "단위", "수량", "판매단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
-CART_COLUMNS = ["품목코드", "품목명", "단위", "판매단가", "수량", "합계금액"]
+MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
+ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "납품요청일", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
+CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"] # 여기서 합계금액은 공급가액을 임시 저장
 LOG_COLUMNS = ["변경일시", "변경자", "대상시트", "품목코드", "변경항목", "이전값", "새로운값"]
 
 # =============================================================================
@@ -207,7 +197,7 @@ def load_master_df() -> pd.DataFrame:
         df = pd.DataFrame(ws.get_all_records(empty2zero=False))
         mask = df["활성"].astype(str).str.lower().isin(["1", "true", "y", "yes", ""])
         df = df[mask | df["활성"].isna()]
-        df["판매단가"] = pd.to_numeric(df["판매단가"], errors="coerce").fillna(0).astype(int)
+        df["단가"] = pd.to_numeric(df["단가"], errors="coerce").fillna(0).astype(int)
         return df
     except gspread.WorksheetNotFound:
         st.error(f"'{SHEET_NAME_MASTER}' 시트를 찾을 수 없습니다."); return pd.DataFrame()
@@ -223,7 +213,7 @@ def load_orders_df() -> pd.DataFrame:
         df = pd.DataFrame(ws.get_all_records(empty2zero=False))
         for c in ORDERS_COLUMNS:
             if c not in df.columns: df[c] = ""
-        money_cols = ["수량", "판매단가", "공급가액", "세액", "합계금액"]
+        money_cols = ["수량", "단가", "공급가액", "세액", "합계금액"]
         for c in money_cols: df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
         df = df.sort_values(by="주문일시", ascending=False)
         return df[ORDERS_COLUMNS].copy()
@@ -320,7 +310,7 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     # 품목 표 좌표(실측) — Z/AE는 수식으로 복원
     COL_YEAR, COL_MONTH, COL_DAY = 2, 3, 4   # B,C,D
     COL_ITEM, COL_SPEC            = 5, 13    # E,M
-    COL_QTY,  COL_UNIT            = 18, 22   # R,V
+    COL_QTY,  COL_UNIT            = 18, 22   # R,V (COL_UNIT은 단가를 의미)
     COL_SUP,  COL_TAX             = 26, 31   # Z,AE
 
     start_row = 13
@@ -337,7 +327,7 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         _safe_set(ws, r, COL_ITEM,  str(row["품목명"]))
         _safe_set(ws, r, COL_SPEC,  str(row.get("품목규격", "") or ""))
         _safe_set(ws, r, COL_QTY,   int(pd.to_numeric(row["수량"], errors="coerce") or 0))
-        _safe_set(ws, r, COL_UNIT,  int(pd.to_numeric(row["판매단가"], errors="coerce") or 0))
+        _safe_set(ws, r, COL_UNIT,  int(pd.to_numeric(row["단가"], errors="coerce") or 0))
 
         # 🔧 수식 복원(표가 비어 보이는 원인 제거)
         ws.cell(r, COL_SUP).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_QTY)}{r}*{get_column_letter(COL_UNIT)}{r})'
@@ -468,19 +458,19 @@ def init_session_state():
 def coerce_cart_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for col in CART_COLUMNS:
-        if col not in out.columns: out[col] = 0 if col in ["판매단가", "수량", "합계금액"] else ""
+        if col not in out.columns: out[col] = 0 if col in ["단가", "수량", "합계금액"] else ""
     out["수량"] = pd.to_numeric(out["수량"], errors="coerce").fillna(0).astype(int)
-    out["판매단가"] = pd.to_numeric(out["판매단가"], errors="coerce").fillna(0).astype(int)
-    out["합계금액"] = out["판매단가"] * out["수량"]
+    out["단가"] = pd.to_numeric(out["단가"], errors="coerce").fillna(0).astype(int)
+    out["합계금액"] = out["단가"] * out["수량"] # 공급가액 계산
     return out
 
 def add_to_cart(rows_df: pd.DataFrame):
     add = rows_df[rows_df["수량"] > 0].copy()
     if add.empty: return
-    add["합계금액"] = add["판매단가"] * add["수량"]
+    add["합계금액"] = add["단가"] * add["수량"] # 공급가액 계산
     cart = st.session_state.cart.copy()
-    merged = pd.concat([cart, add]).groupby("품목코드", as_index=False).agg({"품목명": "last", "단위": "last", "판매단가": "last", "수량": "sum"})
-    merged["합계금액"] = merged["판매단가"] * merged["수량"]
+    merged = pd.concat([cart, add]).groupby("품목코드", as_index=False).agg({"품목명": "last", "단위": "last", "단가": "last", "수량": "sum"})
+    merged["합계금액"] = merged["단가"] * merged["수량"] # 공급가액 계산
     st.session_state.cart = merged[CART_COLUMNS]
 
 # =============================================================================
@@ -508,12 +498,12 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if keyword: df_view = df_view[df_view.apply(lambda row: keyword.strip().lower() in str(row["품목명"]).lower() or keyword.strip().lower() in str(row["품목코드"]).lower(), axis=1)]
         if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
         with st.form(key="add_to_cart_form"):
-            df_edit = df_view[["품목코드", "품목명", "단위", "판매단가"]].copy(); df_edit["수량"] = 0
-            df_edit.rename(columns={"판매단가": "판매단가(원)"}, inplace=True)
-            edited_disp = st.data_editor(df_edit, key=f"editor_v{st.session_state.store_editor_ver}", hide_index=True, disabled=["품목코드", "품목명", "단위", "판매단가(원)"], use_container_width=True, 
-                                         column_config={"판매단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0)})
+            df_edit = df_view[["품목코드", "품목명", "단위", "단가"]].copy(); df_edit["수량"] = 0
+            df_edit.rename(columns={"단가": "단가(원)"}, inplace=True)
+            edited_disp = st.data_editor(df_edit, key=f"editor_v{st.session_state.store_editor_ver}", hide_index=True, disabled=["품목코드", "품목명", "단위", "단가(원)"], use_container_width=True, 
+                                         column_config={"단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0)})
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-                edited_disp.rename(columns={"판매단가(원)": "판매단가"}, inplace=True)
+                edited_disp.rename(columns={"단가(원)": "단가"}, inplace=True)
                 items_to_add = coerce_cart_df(edited_disp)
                 if not items_to_add[items_to_add["수량"] > 0].empty:
                     add_to_cart(items_to_add); st.session_state.store_editor_ver += 1
@@ -523,18 +513,18 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         st.markdown("##### 🧺 장바구니")
         cart = st.session_state.cart
         if not cart.empty:
-            cart_display = cart.rename(columns={"판매단가": "판매단가(원)", "합계금액": "합계금액(원)"})
-            edited_cart = st.data_editor(cart_display, key="cart_editor", hide_index=True, disabled=["품목코드", "품목명", "단위", "판매단가(원)", "합계금액(원)"], 
-                                         column_config={"판매단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0), "합계금액(원)": st.column_config.NumberColumn()})
-            edited_cart.rename(columns={"판매단가(원)": "판매단가", "합계금액(원)": "합계금액"}, inplace=True)
+            cart_display = cart.rename(columns={"단가": "단가(원)", "합계금액": "공급가액(원)"})
+            edited_cart = st.data_editor(cart_display, key="cart_editor", hide_index=True, disabled=["품목코드", "품목명", "단위", "단가(원)", "공급가액(원)"], 
+                                         column_config={"단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0), "공급가액(원)": st.column_config.NumberColumn()})
+            edited_cart.rename(columns={"단가(원)": "단가", "공급가액(원)": "합계금액"}, inplace=True)
             st.session_state.cart = coerce_cart_df(edited_cart)
             if st.button("장바구니 비우기", use_container_width=True): st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
         else: st.info("장바구니가 비어 있습니다.")
     v_spacer(16)
     with st.form("submit_form"):
         cart_now = st.session_state.cart
-        total_amount_sum = cart_now['합계금액'].sum()
-        st.markdown(f"**최종 확인:** 총 {len(cart_now)}개 품목, 합계 {total_amount_sum:,}원")
+        total_supply_sum = cart_now['합계금액'].sum() # 장바구니의 '합계금액'은 공급가액임
+        st.markdown(f"**최종 확인:** 총 {len(cart_now)}개 품목, 공급가액 합계 {total_supply_sum:,.0f}원")
         confirm = st.checkbox("위 내용으로 발주를 제출합니다.")
         if st.form_submit_button("📦 발주 제출", type="primary", use_container_width=True, disabled=cart_now.empty):
             if not confirm: st.warning("제출 확인 체크박스를 선택해주세요."); st.stop()
@@ -542,10 +532,22 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             cart_with_master = pd.merge(cart_now, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
             rows = []
             for _, r in cart_with_master.iterrows():
-                total = r['합계금액']; tax_type = r.get('과세구분', '과세')
-                supply = math.ceil(total / 1.1) if tax_type == '과세' else total
-                tax = total - supply if tax_type == '과세' else 0
-                rows.append({"주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], "납품요청일": f"{납품요청일:%Y-%m-%d}", "품목코드": r["품목코드"], "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"], "판매단가": r["판매단가"], "공급가액": supply, "세액": tax, "합계금액": total, "비고": memo, "상태": "접수"})
+                unit_price = r['단가']
+                quantity = r['수량']
+                tax_type = r.get('과세구분', '과세')
+                
+                # 공급가액, 세액, 합계금액 순차 계산
+                supply_price = unit_price * quantity
+                tax = math.ceil(supply_price * 0.1) if tax_type == '과세' else 0
+                total_amount = supply_price + tax
+
+                rows.append({
+                    "주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], 
+                    "납품요청일": f"{납품요청일:%Y-%m-%d}", "품목코드": r["품목코드"], "품목명": r["품목명"], 
+                    "단위": r["단위"], "수량": quantity, "단가": unit_price, "공급가액": supply_price, "세액": tax, 
+                    "합계금액": total_amount, "비고": memo, "상태": "접수"
+                })
+
             if append_orders(rows):
                 st.session_state.success_message = "발주가 성공적으로 제출되었습니다."; st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
             else: st.error("발주 제출 중 오류가 발생했습니다.")
@@ -610,12 +612,12 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             target_df = df_user[df_user["발주번호"] == target_id]
             target_status = target_df.iloc[0]["상태"]
             
-            df_display = target_df.copy().rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
-            display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
+            df_display = target_df.copy().rename(columns={"단가": "단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
+            display_cols = ["품목코드", "품목명", "단위", "수량", "단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
             
             st.dataframe(df_display[display_cols], hide_index=True, use_container_width=True, 
                          column_config={
-                             "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
+                             "단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
                              "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
                          })
             
@@ -668,9 +670,9 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             st.error(f"'{SHEET_NAME_STORES}' 시트에서 현재 로그인된 지점 ID '{user['user_id']}'와 일치하는 데이터를 찾을 수 없습니다. '지점ID'를 확인해주세요.")
 
 def page_store_master_view(master_df: pd.DataFrame):
-    st.subheader("🏷️ 품목 가격 조회")
-    master_df_display = master_df.rename(columns={"판매단가": "판매단가(원)"})
-    st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "판매단가(원)"]], use_container_width=True, hide_index=True, column_config={"판매단가(원)": st.column_config.NumberColumn()})
+    st.subheader("🏷️ 품목 단가 조회")
+    master_df_display = master_df.rename(columns={"단가": "단가(원)"})
+    st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "단가(원)"]], use_container_width=True, hide_index=True, column_config={"단가(원)": st.column_config.NumberColumn()})
 
 # =============================================================================
 # 9) 관리자(Admin) 페이지
@@ -739,11 +741,11 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
             target_df = df_all[df_all["발주번호"] == target_id]
             target_status = target_df.iloc[0]["상태"]
             
-            df_display = target_df.copy().rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
-            display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
+            df_display = target_df.copy().rename(columns={"단가": "단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
+            display_cols = ["품목코드", "품목명", "단위", "수량", "단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
             st.dataframe(df_display[display_cols], hide_index=True, use_container_width=True, 
                          column_config={
-                             "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
+                             "단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
                              "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
                          })
             
@@ -795,14 +797,14 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         else: st.error("지점 정보를 찾을 수 없어 서류를 생성할 수 없습니다.")
 
 def page_admin_items_price(master_df: pd.DataFrame):
-    st.subheader("🏷️ 품목 가격 설정")
-    st.caption("가격을 수정하거나 품목을 추가/삭제한 후 '변경사항 저장' 버튼을 누르세요. 모든 변경 내역은 로그에 기록됩니다.")
+    st.subheader("🏷️ 품목 단가 설정")
+    st.caption("단가(VAT 제외)를 수정하거나 품목을 추가/삭제한 후 '변경사항 저장' 버튼을 누르세요. 모든 변경 내역은 로그에 기록됩니다.")
     original_df = master_df.copy()
     with st.form("master_edit_form"):
-        df_display = master_df.rename(columns={"판매단가": "판매단가(원)"})
-        edited = st.data_editor(df_display.assign(삭제=False), hide_index=True, num_rows="dynamic", use_container_width=True, column_config={"판매단가(원)": st.column_config.NumberColumn()})
+        df_display = master_df.rename(columns={"단가": "단가(원)"})
+        edited = st.data_editor(df_display.assign(삭제=False), hide_index=True, num_rows="dynamic", use_container_width=True, column_config={"단가(원)": st.column_config.NumberColumn()})
         if st.form_submit_button("변경사항 저장", type="primary", use_container_width=True):
-            edited.rename(columns={"판매단가(원)": "판매단가"}, inplace=True)
+            edited.rename(columns={"단가(원)": "단가"}, inplace=True)
             edited['삭제'] = edited['삭제'].fillna(False).astype(bool)
             final_df = edited[~edited["삭제"]].drop(columns=["삭제"])
             if write_master_df(final_df, original_df):
@@ -881,13 +883,13 @@ if __name__ == "__main__":
     orders_df = load_orders_df()
 
     if user["role"] == "admin":
-        tabs = st.tabs(["📋 발주요청 조회·수정", "📈 매출 조회", "📑 증빙서류 다운로드", "🏷️ 품목 가격 설정"])
+        tabs = st.tabs(["📋 발주요청 조회·수정", "📈 매출 조회", "📑 증빙서류 다운로드", "🏷️ 품목 단가 설정"])
         with tabs[0]: page_admin_unified_management(orders_df, store_info_df, master_df)
         with tabs[1]: page_admin_sales_inquiry(master_df)
         with tabs[2]: page_admin_documents(store_info_df, master_df)
         with tabs[3]: page_admin_items_price(master_df)
     else: # store
-        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회·수정", "📑 증빙서류 다운로드", "🏷️ 품목 가격 조회"])
+        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회·수정", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
         with tabs[0]: page_store_register_confirm(master_df)
         with tabs[1]: page_store_orders_change(store_info_df, master_df)
         with tabs[2]: page_store_documents(store_info_df, master_df)
