@@ -233,11 +233,15 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
     ws.cell(10, 6).value = total_amount
 
-    # [오류 수정] '지점마스터'에 있는 '상호명'을 우선 사용하고, 없을 경우 안전하게 빈 값 처리
-    ws["F5"].value = store_info.get("상호명", "")
-    ws["F6"].value = store_info.get("사업자등록번호", "")
-    ws["F7"].value = store_info.get("사업장주소", "")
-    ws["F8"].value = store_info.get("대표자명", "")
+    # [오류 수정] 안정적인 데이터 접근을 위해 try-except 구문 사용
+    try:
+        ws["F5"].value = store_info["상호명"]
+        ws["F6"].value = store_info["사업자등록번호"]
+        ws["F7"].value = store_info["사업장주소"]
+        ws["F8"].value = store_info["대표자명"]
+    except (KeyError, TypeError):
+        st.error("지점 정보(store_info)의 형식이 올바르지 않아 명세서를 생성할 수 없습니다.")
+        return BytesIO()
 
     COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO = 2, 3, 4, 12, 15, 18, 21, 26, 31
     start_row = 13
@@ -260,7 +264,7 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
 
     for rr in range(r, start_row + 20):
         for cc in (COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO):
-            if cc: # None이 아닌 경우에만 셀 접근
+            if cc:
                 ws.cell(rr, cc).value = None
 
     ws.cell(43, 4).value  = total_supply
@@ -289,7 +293,18 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
     ws = wb.active
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
-    buyer = {"등록번호": str(store_info.get("사업자등록번호", "")), "상호": str(store_info.get("상호명", "")), "사업장": str(store_info.get("사업장주소", "")), "업태": str(store_info.get("업태", ""))}
+    
+    # [오류 수정] 안정적인 데이터 접근을 위해 try-except 구문 사용
+    try:
+        buyer = {
+            "등록번호": str(store_info["사업자등록번호"]),
+            "상호": str(store_info["상호명"]),
+            "사업장": str(store_info["사업장주소"]),
+            "업태": str(store_info.get("업태", "")),
+        }
+    except (KeyError, TypeError):
+        st.error("지점 정보(store_info)의 형식이 올바르지 않아 세금계산서를 생성할 수 없습니다.")
+        return BytesIO()
 
     blocks = [{"year_row": 16, "sum_row": 23}, {"year_row": 40, "sum_row": 47}]
 
@@ -336,30 +351,7 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
     wb.save(out)
     out.seek(0)
     return out
-
-def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        daily_pivot.to_excel(writer, sheet_name='일별매출현황')
-        monthly_pivot.to_excel(writer, sheet_name='월별매출현황')
-        
-        workbook = writer.book
-        h_format = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
-        header_format = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
-        money_format = workbook.add_format({'num_format': '#,##0', 'border': 1})
-        
-        for name, pivot_df in [('일별매출현황', daily_pivot), ('월별매출현황', monthly_pivot)]:
-            worksheet = writer.sheets[name]
-            worksheet.set_zoom(90)
-            worksheet.merge_range(0, 0, 0, len(pivot_df.columns), f"거래처별 {name}", h_format)
-            for col_num, value in enumerate(pivot_df.columns.values):
-                worksheet.write(2, col_num + 1, value, header_format)
-            worksheet.write(2, 0, pivot_df.index.name, header_format)
-            worksheet.set_column(0, len(pivot_df.columns), 14)
-            worksheet.conditional_format(3, 1, len(pivot_df) + 2, len(pivot_df.columns), 
-                                         {'type': 'no_blanks', 'format': money_format})
-    return buf
-
+    
 # =============================================================================
 # 7) 장바구니 유틸
 # =============================================================================
