@@ -215,9 +215,9 @@ def _load_local_template(filename: str):
     return None
 
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    total_supply = int(df_doc["공급가액"].sum())
-    total_tax    = int(df_doc["세액"].sum())
-    total_amount = int(df_doc["합계금액"].sum())
+    total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
+    total_tax    = int(pd.to_numeric(df_doc["세액"], errors="coerce").fillna(0).sum())
+    total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
 
     try:
         base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0])
@@ -229,11 +229,12 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         st.error("거래명세표.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
 
     ws = wb.active
-    
+
     ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
     ws.cell(10, 6).value = total_amount
 
-    ws["F5"].value = store_info.get("상호명", store_info.get("지점명", ""))
+    # [오류 수정] '지점마스터'에 있는 '상호명'을 우선 사용하고, 없을 경우 안전하게 빈 값 처리
+    ws["F5"].value = store_info.get("상호명", "")
     ws["F6"].value = store_info.get("사업자등록번호", "")
     ws["F7"].value = store_info.get("사업장주소", "")
     ws["F8"].value = store_info.get("대표자명", "")
@@ -259,7 +260,8 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
 
     for rr in range(r, start_row + 20):
         for cc in (COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO):
-            ws.cell(rr, cc).value = None
+            if cc: # None이 아닌 경우에만 셀 접근
+                ws.cell(rr, cc).value = None
 
     ws.cell(43, 4).value  = total_supply
     ws.cell(43, 11).value = total_tax
