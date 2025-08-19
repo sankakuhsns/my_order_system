@@ -203,12 +203,20 @@ def _find_account(uid_or_name: str):
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
 def _load_local_template(filename: str):
-    p = Path(filename)
-    if p.exists():
-        return load_workbook(str(p))
-    p2 = Path("templates") / filename
+    # 현재 스크립트 파일이 위치한 디렉토리를 기준으로 경로를 설정합니다.
+    script_dir = Path(__file__).parent
+    
+    # 1. 스크립트와 동일한 위치에서 파일을 찾습니다. (e.g., /app/my_order_system/거래명세서.xlsx)
+    p1 = script_dir / filename
+    if p1.exists():
+        return load_workbook(p1)
+        
+    # 2. 'templates' 하위 폴더에서 파일을 찾습니다. (e.g., /app/my_order_system/templates/거래명세서.xlsx)
+    p2 = script_dir / "templates" / filename
     if p2.exists():
-        return load_workbook(str(p2))
+        return load_workbook(p2)
+        
+    # 두 경로 모두에서 파일을 찾지 못한 경우 None을 반환합니다.
     return None
 
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
