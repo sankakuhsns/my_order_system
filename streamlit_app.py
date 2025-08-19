@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v8.1.1 - 오류 해결 및 안정화)
+# 📦 Streamlit 식자재 발주 시스템 (v8.2 - 최종 기능 완성)
 #
 # - 주요 개선사항:
-#   - 상세 보기 다운로드 AttributeError 해결
-#   - 코드 안정성 및 일관성 강화
+#   - 상세 보기 다운로드 KeyError 및 매출 조회 숫자 표시 오류 해결
+#   - 지점/관리자 '발주 조회' UI를 필터, 정렬, 기능 면에서 동일하게 통일
+#   - 관리자 '발주 조회' 상세 보기에서 거래명세서 다운로드 기능 추가
+#   - 매출 조회 대시보드 기능 대폭 강화 (상세 분석 탭, 정산표 다운로드)
 # =============================================================================
 
 from io import BytesIO
@@ -231,7 +233,7 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
     ws.cell(10, 6).value = total_amount
 
-    # [오류 수정] 안정적인 데이터 접근을 위해 AttributeError 포함
+    # [오류 수정] 안정적인 데이터 접근을 위해 try-except 구문 사용
     try:
         ws["F5"].value = store_info["상호명"]
         ws["F6"].value = store_info["사업자등록번호"]
@@ -262,7 +264,7 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
 
     for rr in range(r, start_row + 20):
         for cc in (COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO):
-            if cc:
+            if cc: # None이 아닌 경우에만 셀 접근
                 ws.cell(rr, cc).value = None
 
     ws.cell(43, 4).value  = total_supply
@@ -292,7 +294,7 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
     
-    # [오류 수정] 안정적인 데이터 접근을 위해 AttributeError 포함
+    # [오류 수정] 안정적인 데이터 접근을 위해 try-except 구문 사용
     try:
         buyer = {
             "등록번호": str(store_info["사업자등록번호"]),
@@ -349,7 +351,7 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
     wb.save(out)
     out.seek(0)
     return out
-    
+
 def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
@@ -388,7 +390,7 @@ def coerce_cart_df(df: pd.DataFrame) -> pd.DataFrame:
     out["수량"] = pd.to_numeric(out["수량"], errors="coerce").fillna(0).astype(int)
     out["판매단가"] = pd.to_numeric(out["판매단가"], errors="coerce").fillna(0).astype(int)
     out["합계금액"] = out["판매단가"] * out["수량"]
-    return out[CART_COLUMNS]
+    return out
 
 def add_to_cart(rows_df: pd.DataFrame):
     add = rows_df[rows_df["수량"] > 0].copy()
@@ -526,7 +528,6 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             target_df = df_user[df_user["발주번호"] == target_id]
             target_status = target_df.iloc[0]["상태"]
             
-            # [KeyError 수정] 원본 df를 수정하지 않고, 표시용 df를 따로 생성
             df_display = target_df.copy().rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
             display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
             
@@ -581,7 +582,8 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             else:
                 buf = make_tax_invoice_excel(dfv, store_info, master_df)
             st.download_button(f"{doc_type} 다운로드", data=buf, file_name=f"{doc_type}_{user['name']}_{now_kst_str('%Y%m%d')}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
-        else: st.error("지점 정보를 찾을 수 없어 서류를 생성할 수 없습니다.")
+        else: 
+            st.error(f"'{SHEET_NAME_STORES}' 시트에서 현재 로그인된 지점 ID '{user['user_id']}'와 일치하는 데이터를 찾을 수 없습니다. '지점ID'를 확인해주세요.")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 가격 조회")
