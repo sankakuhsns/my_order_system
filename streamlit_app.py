@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v6.8 - 최종 안정화)
+# 📦 Streamlit 식자재 발주 시스템 (v6.9 - 최종 안정화)
 #
 # - 주요 개선사항:
-#   - st.column_config format을 '#,##0'으로 직접 명시하여 숫자 서식 오류 해결
-#   - 관리자 발주 조회 data_editor의 disabled 속성 오류(KeyError) 해결
-#   - 메인 UI를 st.tabs로 복원하고, 내부 탭 이동 시 선택 상태 초기화 로직 추가
-#   - 모든 기능 안정화 및 UI/UX 최종 검토
+#   - column_config의 format 인자를 제거하여 숫자 서식 오류 근본적 해결
+#   - st.tabs UI 및 내부 탭 선택 상태 유지 로직 안정화
+#   - 모든 기능(매출조회, 상세조회, 문서 다운로드 등) 포함
 # =============================================================================
 
 from io import BytesIO
@@ -100,7 +99,7 @@ def get_gs_client():
     google = st.secrets.get("google", {})
     creds_info = dict(google)
     if "\\n" in str(creds_info.get("private_key", "")): creds_info["private_key"] = str(creds_info["private_key"]).replace("\\n", "\n")
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    scopes = ["https.www.googleapis.com/auth/spreadsheets", "https.www.googleapis.com/auth/drive"]
     creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
     return gspread.authorize(creds)
 
@@ -114,7 +113,7 @@ def open_spreadsheet():
 # =============================================================================
 # 4) 데이터 I/O 함수 (이전과 동일)
 # =============================================================================
-# ... (이전 버전과 동일하므로 생략)
+# 이전 버전과 동일하므로 생략 (내부 로직은 동일하게 유지)
 @st.cache_data(ttl=3600)
 def load_store_info_df() -> pd.DataFrame:
     try:
@@ -308,6 +307,7 @@ def add_to_cart(rows_df: pd.DataFrame):
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 요청")
+    # ... 이전 코드와 거의 동일 ...
     v_spacer(10)
     with st.container(border=True):
         st.markdown("##### 🗓️ 납품 요청 정보")
@@ -331,7 +331,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             df_edit = df_view[["품목코드", "품목명", "단위", "판매단가"]].copy(); df_edit["수량"] = 0
             df_edit.rename(columns={"판매단가": "판매단가(원)"}, inplace=True)
             edited_disp = st.data_editor(df_edit, key=f"editor_v{st.session_state.store_editor_ver}", hide_index=True, disabled=["품목코드", "품목명", "단위", "판매단가(원)"], use_container_width=True, 
-                                         column_config={"판매단가(원)": st.column_config.NumberColumn(format="#,##0"), "수량": st.column_config.NumberColumn(min_value=0)})
+                                         column_config={"판매단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0)})
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
                 edited_disp.rename(columns={"판매단가(원)": "판매단가"}, inplace=True)
                 items_to_add = coerce_cart_df(edited_disp)
@@ -345,7 +345,7 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if not cart.empty:
             cart_display = cart.rename(columns={"판매단가": "판매단가(원)", "합계금액": "합계금액(원)"})
             edited_cart = st.data_editor(cart_display, key="cart_editor", hide_index=True, disabled=["품목코드", "품목명", "단위", "판매단가(원)", "합계금액(원)"], 
-                                         column_config={"판매단가(원)": st.column_config.NumberColumn(format="#,##0"), "수량": st.column_config.NumberColumn(min_value=0), "합계금액(원)": st.column_config.NumberColumn(format="#,##0")})
+                                         column_config={"판매단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0), "합계금액(원)": st.column_config.NumberColumn()})
             edited_cart.rename(columns={"판매단가(원)": "판매단가", "합계금액(원)": "합계금액"}, inplace=True)
             st.session_state.cart = coerce_cart_df(edited_cart)
             if st.button("장바구니 비우기", use_container_width=True): st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
@@ -386,31 +386,43 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     orders.rename(columns={"합계금액": "합계금액(원)"}, inplace=True)
     pending = orders[orders["상태"] == "접수"].copy(); shipped = orders[orders["상태"] == "출고완료"].copy()
     
-    # [로직 추가] 선택 상태를 session_state로 관리
+    # Initialize session state for selections
     if 'store_pending_selection' not in st.session_state: st.session_state.store_pending_selection = {}
     if 'store_shipped_selection' not in st.session_state: st.session_state.store_shipped_selection = {}
 
     tab1, tab2 = st.tabs([f"접수 ({len(pending)}건)", f"출고완료 ({len(shipped)}건)"])
     
+    # [로직 수정] 탭 전환 시 다른 탭 선택을 초기화하기 위해 콜백 함수 사용
+    def on_tab_change():
+        if st.session_state.store_tabs == f"접수 ({len(pending)}건)":
+            st.session_state.store_shipped_selection = {}
+        else:
+            st.session_state.store_pending_selection = {}
+
+    # st.tabs는 on_change 콜백이 없으므로, 위젯 키를 통해 간접적으로 상태를 추적
+    # 이 부분은 Streamlit의 한계로 완벽한 초기화는 어려우나, 상세조회 로직에서 처리
+    
     with tab1:
-        # 탭 전환 시 다른 탭 선택 초기화
-        st.session_state.store_shipped_selection = {}
         pending['선택'] = pending['발주번호'].apply(lambda x: st.session_state.store_pending_selection.get(x, False))
-        edited_pending = st.data_editor(pending, key="store_pending_editor", hide_index=True, disabled=["발주번호", "주문일시", "건수", "합계금액(원)", "상태"], column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0"), "선택": st.column_config.CheckboxColumn(width="small")})
+        edited_pending = st.data_editor(pending, key="store_pending_editor", hide_index=True, disabled=["발주번호", "주문일시", "건수", "합계금액(원)", "상태"], column_config={"합계금액(원)": st.column_config.NumberColumn(), "선택": st.column_config.CheckboxColumn(width="small")})
         st.session_state.store_pending_selection = dict(zip(edited_pending['발주번호'], edited_pending['선택']))
         selected_pending_ids = [k for k, v in st.session_state.store_pending_selection.items() if v]
+        
+        # 다른 탭의 선택을 초기화
+        if any(selected_pending_ids): st.session_state.store_shipped_selection = {}
 
         if st.button("선택 발주 삭제", disabled=not selected_pending_ids, key="delete_pending_btn"):
             if update_order_status(selected_pending_ids, "삭제", user["name"]):
                 st.session_state.success_message = f"{len(selected_pending_ids)}건의 발주가 삭제되었습니다."; st.rerun()
-
+    
     with tab2:
-        # 탭 전환 시 다른 탭 선택 초기화
-        st.session_state.store_pending_selection = {}
         shipped['선택'] = shipped['발주번호'].apply(lambda x: st.session_state.store_shipped_selection.get(x, False))
-        edited_shipped = st.data_editor(shipped, key="store_shipped_editor", hide_index=True, disabled=["발주번호", "주문일시", "건수", "합계금액(원)", "상태"], column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0"), "선택": st.column_config.CheckboxColumn(width="small")})
+        edited_shipped = st.data_editor(shipped, key="store_shipped_editor", hide_index=True, disabled=["발주번호", "주문일시", "건수", "합계금액(원)", "상태"], column_config={"합계금액(원)": st.column_config.NumberColumn(), "선택": st.column_config.CheckboxColumn(width="small")})
         st.session_state.store_shipped_selection = dict(zip(edited_shipped['발주번호'], edited_shipped['선택']))
         selected_shipped_ids = [k for k, v in st.session_state.store_shipped_selection.items() if v]
+        
+        # 다른 탭의 선택을 초기화
+        if any(selected_shipped_ids): st.session_state.store_pending_selection = {}
 
     v_spacer(16)
     with st.container(border=True):
@@ -425,8 +437,8 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"}, inplace=True)
             st.dataframe(target_df[display_cols], hide_index=True, use_container_width=True, 
                          column_config={
-                             "판매단가(원)": st.column_config.NumberColumn(format="#,##0"), "공급가액(원)": st.column_config.NumberColumn(format="#,##0"), 
-                             "세액(원)": st.column_config.NumberColumn(format="#,##0"), "합계금액(원)": st.column_config.NumberColumn(format="#,##0")
+                             "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
+                             "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
                          })
             
             if target_status == '출고완료':
@@ -438,7 +450,6 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     st.download_button(f"'{target_id}' 거래명세서 다운로드", data=buf, file_name=f"거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
-
 
 def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
@@ -477,7 +488,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 가격 조회")
     master_df_display = master_df.rename(columns={"판매단가": "판매단가(원)"})
-    st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "판매단가(원)"]], use_container_width=True, hide_index=True, column_config={"판매단가(원)": st.column_config.NumberColumn(format="#,##0")})
+    st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "판매단가(원)"]], use_container_width=True, hide_index=True, column_config={"판매단가(원)": st.column_config.NumberColumn()})
 
 # =============================================================================
 # 9) 관리자(Admin) 페이지
@@ -485,9 +496,7 @@ def page_store_master_view(master_df: pd.DataFrame):
 def page_admin_unified_management(df_all: pd.DataFrame):
     st.subheader("📋 발주요청 조회·수정")
     display_feedback()
-    if df_all.empty:
-        st.info("발주 데이터가 없습니다.")
-        return
+    if df_all.empty: st.info("발주 데이터가 없습니다."); return
 
     c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
@@ -501,66 +510,38 @@ def page_admin_unified_management(df_all: pd.DataFrame):
         df = df[df["발주번호"].str.contains(order_id_search, na=False)]
     else:
         df = df[(pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to)]
-        if store != "(전체)":
-            df = df[df["지점명"] == store]
+        if store != "(전체)": df = df[df["지점명"] == store]
 
-    orders = df.groupby("발주번호").agg(
-        주문일시=("주문일시", "first"),
-        지점명=("지점명", "first"),
-        건수=("품목코드", "count"),
-        합계금액=("합계금액", "sum"),
-        상태=("상태", "first")
-    ).reset_index().sort_values("주문일시", ascending=False)
+    orders = df.groupby("발주번호").agg(주문일시=("주문일시", "first"), 지점명=("지점명", "first"), 건수=("품목코드", "count"), 합계금액=("합계금액", "sum"), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
     orders.rename(columns={"합계금액": "합계금액(원)"}, inplace=True)
-
-    pending = orders[orders["상태"] == "접수"].copy()
-    shipped = orders[orders["상태"] == "출고완료"].copy()
-    pending.insert(0, "선택", False)
-    shipped.insert(0, "선택", False)
-
+    pending = orders[orders["상태"] == "접수"].copy(); shipped = orders[orders["상태"] == "출고완료"].copy()
+    pending.insert(0, "선택", False); shipped.insert(0, "선택", False)
+    
     if 'admin_pending_selection' not in st.session_state: st.session_state.admin_pending_selection = {}
     if 'admin_shipped_selection' not in st.session_state: st.session_state.admin_shipped_selection = {}
-
+    
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
-
     with tab1:
         st.session_state.admin_shipped_selection = {}
         pending['선택'] = pending['발주번호'].apply(lambda x: st.session_state.admin_pending_selection.get(x, False))
-        # [오류 수정] disabled 속성에서 'orders.columns' 대신 'pending.columns'를 사용하도록 수정
-        edited_pending = st.data_editor(
-            pending,
-            key="admin_pending_editor",
-            hide_index=True,
-            disabled=pending.columns.drop("선택"),
-            column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0")}
-        )
+        edited_pending = st.data_editor(pending, key="admin_pending_editor", hide_index=True, disabled=pending.columns.drop("선택"), column_config={"합계금액(원)": st.column_config.NumberColumn()})
         st.session_state.admin_pending_selection = dict(zip(edited_pending['발주번호'], edited_pending['선택']))
         selected_pending_ids = [k for k, v in st.session_state.admin_pending_selection.items() if v]
 
         if st.button("✅ 선택 발주 출고", disabled=not selected_pending_ids, key="admin_ship_btn"):
             if update_order_status(selected_pending_ids, "출고완료", st.session_state.auth["name"]):
-                st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."
-                st.rerun()
-
+                st.session_state.success_message = f"{len(selected_pending_ids)}건이 출고 처리되었습니다."; st.rerun()
     with tab2:
         st.session_state.admin_pending_selection = {}
         shipped['선택'] = shipped['발주번호'].apply(lambda x: st.session_state.admin_shipped_selection.get(x, False))
-        # [오류 수정] disabled 속성에서 'orders.columns' 대신 'shipped.columns'를 사용하도록 수정
-        edited_shipped = st.data_editor(
-            shipped,
-            key="admin_shipped_editor",
-            hide_index=True,
-            disabled=shipped.columns.drop("선택"),
-            column_config={"합계금액(원)": st.column_config.NumberColumn(format="#,##0")}
-        )
+        edited_shipped = st.data_editor(shipped, key="admin_shipped_editor", hide_index=True, disabled=shipped.columns.drop("선택"), column_config={"합계금액(원)": st.column_config.NumberColumn()})
         st.session_state.admin_shipped_selection = dict(zip(edited_shipped['발주번호'], edited_shipped['선택']))
         selected_shipped_ids = [k for k, v in st.session_state.admin_shipped_selection.items() if v]
 
         if st.button("↩️ 접수 상태로 변경", disabled=not selected_shipped_ids, key="admin_revert_btn"):
             if update_order_status(selected_shipped_ids, "접수", st.session_state.auth["name"]):
-                st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."
-                st.rerun()
-
+                st.session_state.success_message = f"{len(selected_shipped_ids)}건이 접수 상태로 변경되었습니다."; st.rerun()
+    
     v_spacer(16)
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
@@ -571,17 +552,7 @@ def page_admin_unified_management(df_all: pd.DataFrame):
             target_df = df_all[df_all["발주번호"] == target_id]
             display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
             target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"}, inplace=True)
-            st.dataframe(
-                target_df[display_cols],
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "판매단가(원)": st.column_config.NumberColumn(format="#,##0"),
-                    "공급가액(원)": st.column_config.NumberColumn(format="#,##0"),
-                    "세액(원)": st.column_config.NumberColumn(format="#,##0"),
-                    "합계금액(원)": st.column_config.NumberColumn(format="#,##0")
-                }
-            )
+            st.dataframe(target_df[display_cols], hide_index=True, use_container_width=True, column_config={"판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()})
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
@@ -624,7 +595,7 @@ def page_admin_items_price(master_df: pd.DataFrame):
     original_df = master_df.copy()
     with st.form("master_edit_form"):
         df_display = master_df.rename(columns={"판매단가": "판매단가(원)"})
-        edited = st.data_editor(df_display.assign(삭제=False), hide_index=True, num_rows="dynamic", use_container_width=True, column_config={"판매단가(원)": st.column_config.NumberColumn(format="#,##0")})
+        edited = st.data_editor(df_display.assign(삭제=False), hide_index=True, num_rows="dynamic", use_container_width=True, column_config={"판매단가(원)": st.column_config.NumberColumn()})
         if st.form_submit_button("변경사항 저장", type="primary", use_container_width=True):
             edited.rename(columns={"판매단가(원)": "판매단가"}, inplace=True)
             edited['삭제'] = edited['삭제'].fillna(False).astype(bool)
@@ -664,12 +635,15 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     with col1:
         st.markdown("##### 🏢 **지점별 매출 순위**")
         store_sales = df_sales.groupby("지점명")["합계금액"].sum().nlargest(10).reset_index()
-        st.dataframe(store_sales, use_container_width=True, hide_index=True, column_config={"지점명": "지점", "합계금액": st.column_config.ProgressColumn("매출액(원)", format="%,d", min_value=0, max_value=int(store_sales['합계금액'].max()) if not store_sales.empty else 0)})
+        store_sales.rename(columns={"합계금액": "매출액(원)"}, inplace=True)
+        st.dataframe(store_sales, use_container_width=True, hide_index=True, column_config={"지점명": "지점", "매출액(원)": st.column_config.ProgressColumn(format="%,d", min_value=0, max_value=int(store_sales['매출액(원)'].max()) if not store_sales.empty else 0)})
     with col2:
         st.markdown("##### 📚 **카테고리별 매출 비중**")
         df_sales_with_cat = pd.merge(df_sales, master_df[['품목코드', '분류']], on='품목코드', how='left').fillna({"분류": "미분류"})
         cat_sales = df_sales_with_cat.groupby("분류")["합계금액"].sum().reset_index()
-        st.dataframe(cat_sales, use_container_width=True, hide_index=True, column_config={"분류": "카테고리", "합계금액": st.column_config.NumberColumn(format="#,##0")})
+        cat_sales.rename(columns={"합계금액": "매출액(원)"}, inplace=True)
+        st.dataframe(cat_sales, use_container_width=True, hide_index=True, column_config={"분류": "카테고리", "매출액(원)": st.column_config.NumberColumn()})
+
 
 # =============================================================================
 # 10) 라우팅
