@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v9.2 - UI, 가격 표시, 오류 수정)
+# 📦 Streamlit 식자재 발주 시스템 (v9.3 - data_editor 오류 수정)
 #
 # - 주요 개선사항:
-#   - 탭(Tab) UI 깨짐 현상 복원
-#   - VAT 포함된 최종 합계금액을 명확히 표시하도록 UI 개선
-#   - 데이터 필터링 시 발생하던 KeyError 오류 수정
+#   - 장바구니 표시 로직을 안정화하여 st.data_editor에서 발생하던 오류 해결
 # =============================================================================
 
 from io import BytesIO
@@ -75,7 +73,7 @@ st.set_page_config(page_title="산카쿠 식자재 발주 시스템", page_icon=
 
 THEME = { "BORDER": "#e8e8ee", "PRIMARY": "#1C6758", "BG": "#f7f8fa", "CARD_BG": "#ffffff", "TEXT": "#222", "MUTED": "#777" }
 
-# [수정] 탭 UI 복원을 위한 CSS (Streamlit 최신 버전 호환)
+# 탭 UI 복원을 위한 CSS (Streamlit 최신 버전 호환)
 st.markdown(f"""<br><style>
     .stTabs [data-baseweb="tab-list"] {{
         gap: 12px;
@@ -239,8 +237,9 @@ def load_master_df() -> pd.DataFrame:
         st.error(f"'{SHEET_NAME_MASTER}' 시트를 찾을 수 없습니다."); return pd.DataFrame()
 
 def write_master_df(df: pd.DataFrame, original_df: pd.DataFrame) -> bool:
-    # ... (생략)
-    return True
+    # ... (생략된 함수)
+    st.error("write_master_df 함수가 구현되지 않았습니다.")
+    return False
 
 @st.cache_data(ttl=60)
 def load_orders_df() -> pd.DataFrame:
@@ -257,20 +256,24 @@ def load_orders_df() -> pd.DataFrame:
         return pd.DataFrame(columns=ORDERS_COLUMNS)
 
 def write_orders_df(df: pd.DataFrame) -> bool:
-    # ... (생략)
-    return True
+    # ... (생략된 함수)
+    st.error("write_orders_df 함수가 구현되지 않았습니다.")
+    return False
 
 def append_orders(rows: List[Dict[str, Any]]) -> bool:
-    # ... (생략)
-    return True
+    # ... (생략된 함수)
+    st.error("append_orders 함수가 구현되지 않았습니다.")
+    return False
 
 def append_change_log(log_entries: List[Dict[str, Any]]):
-    # ... (생략)
+    # ... (생략된 함수)
+    st.error("append_change_log 함수가 구현되지 않았습니다.")
     return True
 
 def update_order_status(selected_ids: List[str], new_status: str, handler: str) -> bool:
-    # ... (생략)
-    return True
+    # ... (생략된 함수)
+    st.error("update_order_status 함수가 구현되지 않았습니다.")
+    return False
 
 # =============================================================================
 # 5) 로그인
@@ -306,7 +309,6 @@ def _find_account(uid_or_name: str):
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
-# [수정] KeyError 방지를 위해 iloc 사용 및 안전장치 추가
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
     if df_doc.empty:
         st.warning("거래명세서를 생성할 데이터가 없습니다.")
@@ -372,7 +374,6 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     out = BytesIO(); wb.save(out); out.seek(0)
     return out
 
-# [수정] KeyError 방지를 위해 iloc 사용 및 안전장치 추가
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
     if df_doc.empty:
         st.warning("세금계산서를 생성할 데이터가 없습니다.")
@@ -497,9 +498,8 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if keyword: df_view = df_view[df_view.apply(lambda row: keyword.strip().lower() in str(row["품목명"]).lower() or keyword.strip().lower() in str(row["품목코드"]).lower(), axis=1)]
         if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
         with st.form(key="add_to_cart_form"):
-            df_edit = df_view[["품목코드", "품목명", "단위", "단가", "과세구분"]].copy() # [수정] 과세구분 추가
+            df_edit = df_view[["품목코드", "품목명", "단위", "단가", "과세구분"]].copy()
             
-            # [수정] VAT 포함된 단가 컬럼 추가
             df_edit["단가(VAT포함)"] = df_edit.apply(lambda row: row['단가'] * 1.1 if row['과세구분'] == '과세' else row['단가'], axis=1).astype(int)
             df_edit["수량"] = 0
             
@@ -524,11 +524,14 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         st.markdown("##### 🧺 장바구니")
         cart = st.session_state.cart
         if not cart.empty:
-            # [수정] 장바구니 표시에 합계금액(VAT포함) 추가
+            # [수정] data_editor 오류 해결을 위해 데이터프레임 생성 로직 간소화
             cart_display = pd.merge(cart, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
-            cart_display['공급가액'] = cart_display['단가'] * cart_display['수량']
+            # '합계금액' 컬럼(공급가액)을 '공급가액'으로 이름 변경
+            cart_display.rename(columns={"합계금액": "공급가액"}, inplace=True)
+            
             cart_display['합계금액(VAT포함)'] = cart_display.apply(
-                lambda row: row['공급가액'] + math.ceil(row['공급가액'] * 0.1) if row['과세구분'] == '과세' else row['공급가액'], axis=1
+                lambda row: row['공급가액'] + math.ceil(row['공급가액'] * 0.1) if row.get('과세구분') == '과세' else row['공급가액'],
+                axis=1
             ).astype(int)
             
             cart_display.rename(columns={"단가": "단가(원)", "공급가액": "공급가액(원)"}, inplace=True)
@@ -542,7 +545,8 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                     "공급가액(원)": st.column_config.NumberColumn(), "합계금액(VAT포함)": st.column_config.NumberColumn()
                 }
             )
-            edited_cart.rename(columns={"단가(원)": "단가"}, inplace=True)
+            # 세션 상태 저장을 위해 컬럼명 원복
+            edited_cart.rename(columns={"단가(원)": "단가", "공급가액(원)": "합계금액"}, inplace=True)
             st.session_state.cart = coerce_cart_df(edited_cart)
             if st.button("장바구니 비우기", use_container_width=True): st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
         else: st.info("장바구니가 비어 있습니다.")
@@ -550,7 +554,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
     with st.form("submit_form"):
         cart_now = st.session_state.cart
         
-        # [수정] 최종 확인 문구 로직 변경
         cart_with_master = pd.merge(cart_now, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
         cart_with_master['공급가액'] = cart_with_master['단가'] * cart_with_master['수량']
         cart_with_master['최종합계'] = cart_with_master.apply(
@@ -712,8 +715,7 @@ def page_store_master_view(master_df: pd.DataFrame):
     st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "단가(원)", "단가(VAT포함)"]], use_container_width=True, hide_index=True, column_config={"단가(원)": st.column_config.NumberColumn(), "단가(VAT포함)": st.column_config.NumberColumn()})
 
 # =============================================================================
-# 9) 관리자(Admin) 페이지 (이하 생략된 코드는 기존과 동일)
-# ... (기존 코드의 page_admin... 함수들)
+# 9) 관리자(Admin) 페이지
 # =============================================================================
 
 def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
