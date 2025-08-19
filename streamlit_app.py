@@ -15,18 +15,19 @@ from typing import Dict, Any, List, Optional
 from collections.abc import Mapping
 from zoneinfo import ZoneInfo
 import math
-
 import hashlib
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
-# Google Sheets
+# Google Sheets & Drive
 import gspread
 from google.oauth2 import service_account
 
-# Excel export
+# Excel
 import xlsxwriter
-
+from openpyxl import load_workbook
 # -----------------------------------------------------------------------------
 # 페이지/테마/스타일
 # -----------------------------------------------------------------------------
@@ -200,116 +201,139 @@ def _find_account(uid_or_name: str):
     return None, None
     
 # =============================================================================
-# 6) [수정] 정교한 Excel 생성 함수들
+# 6) [수정] 템플릿 기반 Excel 생성 함수들
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
-# [신설] 거래명세서 Excel 생성 함수
+def _load_local_template(filename: str):
+    p = Path(filename)
+    if p.exists():
+        return load_workbook(str(p))
+    p2 = Path("templates") / filename
+    if p2.exists():
+        return load_workbook(str(p2))
+    return None
+
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    buf = BytesIO()
-    workbook = xlsxwriter.Workbook(buf, {'in_memory': True})
-    ws = workbook.add_worksheet('거래명세표')
+    total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
+    total_tax    = int(pd.to_numeric(df_doc["세액"], errors="coerce").fillna(0).sum())
+    total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
 
-    # 포맷 정의
-    formats = {
-        'title': workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter'}),
-        'header': workbook.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#F2F2F2'}),
-        'box': workbook.add_format({'border': 1}),
-        'box_center': workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'}),
-        'money': workbook.add_format({'border': 1, 'num_format': '#,##0'}),
-        'total_label': workbook.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#E7E6E6'}),
-        'total_money': workbook.add_format({'bold': True, 'border': 1, 'num_format': '#,##0', 'bg_color': '#E7E6E6'}),
-    }
+    try:
+        base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0])
+    except Exception:
+        base_dt = pd.Timestamp.now(tz=KST)
 
-    # 문서 레이아웃 설정
-    ws.set_column('A:A', 3); ws.set_column('B:B', 5); ws.set_column('C:C', 20); ws.set_column('D:D', 10)
-    ws.set_column('E:E', 8); ws.set_column('F:F', 10); ws.set_column('G:H', 12); ws.set_column('I:I', 10)
+    wb = _load_local_template("거래명세표.xlsx")
+    if wb is None:
+        st.error("거래명세표.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
 
-    # 제목
-    ws.merge_range('A2:I3', '거래명세표 (공급자용)', formats['title'])
+    ws = wb[wb.sheetnames[0]]
+
+    ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
+    ws.cell(10, 6).value = total_amount
+
+    ws["F5"].value = store_info.get("상호명", store_info.get("지점명", ""))
+    ws["F6"].value = store_info.get("사업자등록번호", "")
+    ws["F7"].value = store_info.get("사업장주소", "")
+    ws["F8"].value = store_info.get("대표자명", "")
+
+    COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO = 2, 3, 4, 12, 15, 18, 21, 26, 31
+    start_row = 13
+    df_m = pd.merge(df_doc, master_df[["품목코드", "품목규격"]], on="품목코드", how="left")
     
-    # 공급받는자 / 공급자 정보
-    provider = {"상호": "산카쿠 대전가공장", "등록번호": "686-85-02906", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "대표": "손명훈"}
-    for i in range(4, 8): ws.merge_range(f'A{i}:E{i}', '', formats['box']); ws.merge_range(f'F{i}:I{i}', '', formats['box'])
-    ws.write('A4', '공급받는자', formats['header']); ws.write('F4', '공급자', formats['header'])
-    ws.write('A5', '상호'); ws.write('B5', store_info.get('상호명')); ws.write('F5', '상호'); ws.write('G5', provider['상호'])
-    ws.write('A6', '사업자번호'); ws.write('B6', store_info.get('사업자등록번호')); ws.write('F6', '사업자번호'); ws.write('G6', provider['등록번호'])
-    ws.write('A7', '사업장'); ws.write('B7', store_info.get('사업장주소')); ws.write('F7', '사업장'); ws.write('G7', provider['사업장'])
-    ws.write('A8', '대표'); ws.write('B8', store_info.get('대표자명')); ws.write('F8', '대표'); ws.write('G8', provider['대표'])
+    r = start_row
+    for _, row in df_m.iterrows():
+        d = pd.to_datetime(row["납품요청일"], errors="coerce") or base_dt
+        ws.cell(r, COL_MONTH).value = int(d.month)
+        ws.cell(r, COL_DAY).value   = int(d.day)
+        ws.cell(r, COL_ITEM).value  = str(row["품목명"])
+        ws.cell(r, COL_SPEC).value  = str(row.get("품목규격", "") or "")
+        ws.cell(r, COL_QTY).value   = int(row["수량"])
+        ws.cell(r, COL_UNIT).value  = int(row["판매단가"])
+        ws.cell(r, COL_SUP).value   = int(row["공급가액"])
+        ws.cell(r, COL_TAX).value   = int(row["세액"])
+        if "비고" in row and pd.notna(row["비고"]):
+            ws.cell(r, COL_MEMO).value = str(row["비고"])
+        r += 1
 
-    # 합계금액
-    total_amount = df_doc['합계금액'].sum()
-    ws.merge_range('A10:C10', '합계금액 (공급가액 + 세액)', formats['box_center'])
-    ws.merge_range('D10:I10', f"₩ {total_amount:,}", formats['box'])
+    for rr in range(r, start_row + 20):
+        for cc in (COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO):
+            ws.cell(rr, cc).value = None
 
-    # 품목 리스트
-    headers = ['월', '일', '품목', '규격', '수량', '단가', '공급가액', '세액', '비고']
-    for i, h in enumerate(headers): ws.write(11, i, h, formats['header'])
-    
-    df_merged = pd.merge(df_doc, master_df[['품목코드', '품목규격']], on='품목코드', how='left')
-    row = 12
-    for _, item in df_merged.iterrows():
-        dt = pd.to_datetime(item['납품요청일'])
-        ws.write(row, 0, dt.month, formats['box_center']); ws.write(row, 1, dt.day, formats['box_center'])
-        ws.write(row, 2, item['품목명'], formats['box']); ws.write(row, 3, item['품목규격'], formats['box_center'])
-        ws.write(row, 4, item['수량'], formats['money']); ws.write(row, 5, item['판매단가'], formats['money'])
-        ws.write(row, 6, item['공급가액'], formats['money']); ws.write(row, 7, item['세액'], formats['money'])
-        ws.write(row, 8, item['비고'], formats['box'])
-        row += 1
-    
-    # 빈 행 채우기
-    for i in range(row, 30):
-        for j in range(9): ws.write(i, j, '', formats['box'])
+    ws.cell(43, 4).value  = total_supply
+    ws.cell(43, 11).value = total_tax
+    ws.cell(43, 23).value = total_amount
 
-    # 하단 합계
-    total_supply = df_doc['공급가액'].sum()
-    total_tax = df_doc['세액'].sum()
-    ws.merge_range('A31:F31', '합계', formats['total_label'])
-    ws.write('G31', total_supply, formats['total_money'])
-    ws.write('H31', total_tax, formats['total_money'])
-    ws.write('I31', '', formats['total_money'])
-    
-    workbook.close()
-    buf.seek(0)
-    return buf
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out
 
-# [신설] 세금계산서 Excel 생성 함수
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    buf = BytesIO()
-    workbook = xlsxwriter.Workbook(buf, {'in_memory': True})
-    ws = workbook.add_worksheet('세금계산서')
-    # 이 함수는 매우 복잡하므로, 주요 구조만 예시로 작성합니다.
-    # 실제 구현 시에는 모든 셀의 위치와 서식을 이미지에 맞춰 코딩해야 합니다.
-    ws.write('A1', '세금계산서 양식은 매우 복잡하여 별도 구현이 필요합니다.')
-    workbook.close()
-    buf.seek(0)
-    return buf
-    
-# [신설] 매출 정산표 Excel 생성 함수
-def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
-    buf = BytesIO()
-    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        daily_pivot_reset = daily_pivot.reset_index()
-        monthly_pivot_reset = monthly_pivot.reset_index()
-        
-        daily_pivot_reset.to_excel(writer, sheet_name='일별매출현황', index=False, startrow=2)
-        monthly_pivot_reset.to_excel(writer, sheet_name='월별매출현황', index=False, startrow=2)
-        
-        workbook = writer.book
-        h_format = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
-        header_format = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
-        money_format = workbook.add_format({'num_format': '#,##0', 'border': 1})
-        
-        for name, pivot_df in [('일별매출현황', daily_pivot_reset), ('월별매출현황', monthly_pivot_reset)]:
-            worksheet = writer.sheets[name]
-            worksheet.set_zoom(90)
-            worksheet.merge_range(0, 0, 0, len(pivot_df.columns)-1, f"거래처별 {name}", h_format)
-            for col_num, value in enumerate(pivot_df.columns.values):
-                worksheet.write(2, col_num, value, header_format)
-            worksheet.set_column(0, len(pivot_df.columns), 14)
-            worksheet.conditional_format(3, 0, len(pivot_df) + 2, len(pivot_df.columns)-1, 
-                                         {'type': 'no_blanks', 'format': money_format})
-    return buf
+    total_supply = int(df_doc["공급가액"].sum())
+    total_tax    = int(df_doc["세액"].sum())
+    total_amount = int(df_doc["합계금액"].sum())
+
+    try:
+        base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0])
+    except Exception:
+        base_dt = pd.Timestamp.now(tz=KST)
+
+    wb = _load_local_template("세금계산서.xlsx")
+    if wb is None:
+        st.error("세금계산서.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
+
+    ws = wb[wb.sheetnames[0]]
+
+    supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
+    buyer = {"등록번호": str(store_info.get("사업자등록번호", "")), "상호": str(store_info.get("상호명", "")), "사업장": str(store_info.get("사업장주소", "")), "업태": str(store_info.get("업태", ""))}
+
+    blocks = [{"year_row": 16, "sum_row": 23}, {"year_row": 40, "sum_row": 47}]
+
+    def write_amount_digits(row_idx: int, amount: int):
+        digits = list(str(amount))
+        for i, col in enumerate(range(20, 7, -1)):
+            ch = digits[-(i+1)] if i < len(digits) else " "
+            ws.cell(row_idx, col).value = ch
+
+    for blk in blocks:
+        y, s = blk["year_row"], blk["sum_row"]
+        ws.cell(y, 2).value = int(base_dt.year)
+        ws.cell(y, 4).value = int(base_dt.month)
+        ws.cell(y, 5).value = int(base_dt.day)
+        write_amount_digits(y, total_supply)
+        ws.cell(s, 2).value = total_amount
+        for c in (7, 12, 17):
+            try: ws.cell(s, c).value = 0
+            except Exception: pass
+
+    def fill_header_block(row_offset: int):
+        ws[f"F{6 + row_offset}"].value  = supplier["등록번호"]
+        ws[f"F{8 + row_offset}"].value  = supplier["상호"]
+        ws[f"F{10 + row_offset}"].value = supplier["사업장"]
+        ws[f"F{12 + row_offset}"].value = supplier["업태"]
+        ws[f"T{6 + row_offset}"].value  = buyer["등록번호"]
+        ws[f"T{8 + row_offset}"].value  = buyer["상호"]
+        ws[f"T{10 + row_offset}"].value = buyer["사업장"]
+        ws[f"T{12 + row_offset}"].value = buyer["업태"]
+
+    fill_header_block(0)
+    fill_header_block(24)
+
+    def write_item_summary(row_offset: int):
+        items_count = len(df_doc)
+        first_name = str(df_doc.iloc[0]["품목명"]) if items_count else ""
+        summary = (f"{first_name} 등 {items_count}건") if items_count >= 2 else first_name
+        ws.cell(18 + row_offset, 4).value = summary
+
+    write_item_summary(0)
+    write_item_summary(24)
+
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out
 
 # =============================================================================
 # 7) 장바구니 유틸 (이전과 동일)
