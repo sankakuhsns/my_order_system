@@ -326,23 +326,87 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     return out
 
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # ... (기존 내용 동일: 공급자/공급받는자, 날짜(B14/D14/E14 & B40/D40/E40), 요약 D18/D42)
-    # 마지막에 인쇄 설정만 추가:
+    # ── 합계 계산(표기용, 필요 시 사용)
+    total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
+    total_tax    = int(pd.to_numeric(df_doc["세액"],   errors="coerce").fillna(0).sum())
+    total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
 
-    # 인쇄영역 (상단~하단 블록 포함, 좌우 한 페이지에 맞춤)
-    ws.print_area = "$A$4:$V$48"   # 필요 시 템플릿에 맞춰 조정
+    # 기준 날짜
+    try:
+        base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
+    except Exception:
+        base_dt = None
+    if pd.isna(base_dt):
+        base_dt = pd.Timestamp.now(tz=KST)
+
+    # 템플릿 열기
+    template_id = st.secrets.get("google", {}).get("TEMPLATE_TAX_INVOICE_ID")
+    if not template_id:
+        st.error("Secrets에 세금계산서 템플릿 ID(TEMPLATE_TAX_INVOICE_ID)가 없습니다.")
+        return BytesIO()
+
+    template_bytes = download_template_from_drive(template_id)
+    if template_bytes is None:
+        return BytesIO()
+
+    wb = load_workbook(template_bytes)          # ✅ wb 보장
+    ws = wb.active                              # ✅ ws 보장 (세금계산서양식 시트)
+
+    # ── 공급자/공급받는자(병합 좌상단 좌표 사용)
+    supplier = {
+        "등록번호": "686-85-02906",
+        "상호":   "산카쿠 대전 가공장",
+        "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
+        "업태":   "제조업",
+    }
+    buyer = {
+        "등록번호": str(store_info.get("사업자등록번호", "")),
+        "상호":   str(store_info.get("상호명", "")),
+        "사업장": str(store_info.get("사업장주소", "")),
+        "업태":   str(store_info.get("업태", "")),
+    }
+
+    # 공급자(좌) F5/F7/F9/F11
+    _safe_set(ws,  5,  6, supplier["등록번호"])  # F5 (F5:F6 병합)
+    _safe_set(ws,  7,  6, supplier["상호"])      # F7 (F7:K8)
+    _safe_set(ws,  9,  6, supplier["사업장"])    # F9 (F9:Q10)
+    _safe_set(ws, 11,  6, supplier["업태"])      # F11 (F11:K12)
+
+    # 공급받는자(우) S5/S8/S10/S11
+    _safe_set(ws,  5, 19, buyer["등록번호"])     # S5 (S5:U6)
+    _safe_set(ws,  8, 19, buyer["상호"])         # S8
+    _safe_set(ws, 10, 19, buyer["사업장"])       # S10
+    _safe_set(ws, 11, 19, buyer["업태"])         # S11
+
+    # ── 날짜: 1단=14행, 2단=40행
+    for base_row in (14, 40):
+        _safe_set(ws, base_row, 2, int(base_dt.year))   # B14/B40 (B40:C40 병합 좌상단)
+        _safe_set(ws, base_row, 4, int(base_dt.month))  # D14/D40
+        _safe_set(ws, base_row, 5, int(base_dt.day))    # E14/E40
+
+    # ── 품목 요약(두 곳 동일 텍스트 사용)
+    items_count = len(df_doc)
+    first_name = str(df_doc.iloc[0]["품목명"]) if items_count else ""
+    summary = (f"{first_name} 등 {items_count}건") if items_count >= 2 else first_name
+    _safe_set(ws, 18, 4, summary)  # D18 (상단 요약)
+    _safe_set(ws, 42, 4, summary)  # D42 (하단 요약)
+
+    # ── 인쇄 설정 (A4, 세로, 한 페이지 너비 맞춤, 영역 지정)
+    ws.print_area = "$A$4:$V$48"          # 템플릿에 맞게 조정 (상/하단 모두 보이면 더 넉넉히 잡아도 됨)
     ps = ws.page_setup
-    ps.paperSize = 9               # A4
+    ps.paperSize = 9                      # A4
     ps.orientation = "portrait"
-    ps.fitToWidth, ps.fitToHeight = 1, 0
-    ps.scale = None
+    ps.fitToWidth, ps.fitToHeight = 1, 0  # 가로 1페이지 맞춤, 세로 자유
+    ps.scale = None                       # fitToWidth 우선
     ws.page_margins.left   = 0.25
     ws.page_margins.right  = 0.25
     ws.page_margins.top    = 0.5
     ws.page_margins.bottom = 0.5
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
-    out = BytesIO(); wb.save(out); out.seek(0)
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
     return out
 
 def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
