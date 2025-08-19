@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v8.2 - 최종 기능 완성)
+# 📦 Streamlit 식자재 발주 시스템 (v8.3 - 오류 수정)
 #
 # - 주요 개선사항:
 #   - 상세 보기 다운로드 KeyError 및 매출 조회 숫자 표시 오류 해결
 #   - 지점/관리자 '발주 조회' UI를 필터, 정렬, 기능 면에서 동일하게 통일
 #   - 관리자 '발주 조회' 상세 보기에서 거래명세서 다운로드 기능 추가
 #   - 매출 조회 대시보드 기능 대폭 강화 (상세 분석 탭, 정산표 다운로드)
+#   - [v8.3] make_trading_statement_excel, make_tax_invoice_excel 함수에서
+#     .get()을 사용하여 지점 정보 누락 시 발생하는 오류를 방지하고 안정성 강화
 # =============================================================================
 
 from io import BytesIO
@@ -233,15 +235,11 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
     ws.cell(10, 6).value = total_amount
 
-    # [오류 수정] 안정적인 데이터 접근을 위해 try-except 구문 사용
-    try:
-        ws["F5"].value = store_info["상호명"]
-        ws["F6"].value = store_info["사업자등록번호"]
-        ws["F7"].value = store_info["사업장주소"]
-        ws["F8"].value = store_info["대표자명"]
-    except (KeyError, TypeError, AttributeError):
-        st.error("지점 정보(store_info)의 형식이 올바르지 않아 명세서를 생성할 수 없습니다.")
-        return BytesIO()
+    # [수정] .get()을 사용하여 KeyError를 방지하고 안정적으로 지점 정보를 삽입합니다.
+    ws["F5"].value = store_info.get("상호명", "")
+    ws["F6"].value = store_info.get("사업자등록번호", "")
+    ws["F7"].value = store_info.get("사업장주소", "")
+    ws["F8"].value = store_info.get("대표자명", "")
 
     COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO = 2, 3, 4, 12, 15, 18, 21, 26, 31
     start_row = 13
@@ -264,7 +262,7 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
 
     for rr in range(r, start_row + 20):
         for cc in (COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO):
-            if cc: # None이 아닌 경우에만 셀 접근
+            if cc:
                 ws.cell(rr, cc).value = None
 
     ws.cell(43, 4).value  = total_supply
@@ -294,17 +292,13 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
     
-    # [오류 수정] 안정적인 데이터 접근을 위해 try-except 구문 사용
-    try:
-        buyer = {
-            "등록번호": str(store_info["사업자등록번호"]),
-            "상호": str(store_info["상호명"]),
-            "사업장": str(store_info["사업장주소"]),
-            "업태": str(store_info.get("업태", "")),
-        }
-    except (KeyError, TypeError, AttributeError):
-        st.error("지점 정보(store_info)의 형식이 올바르지 않아 세금계산서를 생성할 수 없습니다.")
-        return BytesIO()
+    # [수정] .get()을 사용하여 KeyError를 방지하고 안정적으로 구매자 정보를 설정합니다.
+    buyer = {
+        "등록번호": str(store_info.get("사업자등록번호", "")),
+        "상호": str(store_info.get("상호명", "")),
+        "사업장": str(store_info.get("사업장주소", "")),
+        "업태": str(store_info.get("업태", "")),
+    }
 
     blocks = [{"year_row": 16, "sum_row": 23}, {"year_row": 40, "sum_row": 47}]
 
@@ -661,8 +655,8 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
             display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
             st.dataframe(df_display[display_cols], hide_index=True, use_container_width=True, 
                          column_config={
-                            "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
-                            "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
+                             "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
+                             "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
                          })
             
             if target_status == '출고완료':
