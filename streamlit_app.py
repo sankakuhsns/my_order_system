@@ -251,71 +251,49 @@ def _find_account(uid_or_name: str):
 # 6) 템플릿 기반 Excel 생성 함수들
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
-
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # 합계(표기용): 템플릿 상단 칸에는 총금액만 찍습니다.
     total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
+    base_dt = pd.to_datetime(df_doc.get("납품요청일", [None])[0], errors="coerce")
+    if pd.isna(base_dt): base_dt = pd.Timestamp.now(tz=KST)
 
-    # 기준 날짜
-    try:
-        base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
-    except Exception:
-        base_dt = None
-    if pd.isna(base_dt):
-        base_dt = pd.Timestamp.now(tz=KST)
-
-    # 템플릿 다운로드
     template_id = st.secrets.get("google", {}).get("TEMPLATE_TRADING_STATEMENT_ID")
     if not template_id:
-        st.error("Secrets에 거래명세서 템플릿 ID(TEMPLATE_TRADING_STATEMENT_ID)가 없습니다.")
-        return BytesIO()
+        st.error("Secrets에 거래명세서 템플릿 ID(TEMPLATE_TRADING_STATEMENT_ID)가 없습니다."); return BytesIO()
     template_bytes = download_template_from_drive(template_id)
-    if template_bytes is None:
-        return BytesIO()
+    if template_bytes is None: return BytesIO()
 
     wb = load_workbook(template_bytes)
-    ws = wb.active  # 거래명세서 시트
+    ws = wb.active  # 거래명세서
 
-    # ─────────────────────────────────────────────────────────
-    # 상단 고정 정보 (병합 좌상단 좌표로 기록)
-    # 공급자(고정값 예시)
+    # ── 상단 고정 정보 (병합 좌상단만 기록)
     supplier = {
         "등록번호": "686-85-02906",
         "상호":   "산카쿠 대전 가공장",
         "성명":   "이수정",
         "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
     }
-    # 공급자: R4(등록번호), R6(상호), V6(성명), R8(사업장)
-    _safe_set(ws, 4, 18, supplier["등록번호"])  # R4:U5 병합의 좌상단 R4
-    _safe_set(ws, 6, 18, supplier["상호"])      # R6:U7 → R6
-    _safe_set(ws, 6, 22, supplier["성명"])      # V6:AA7 → V6  (※기존 Z6 금지)
-    _safe_set(ws, 8, 18, supplier["사업장"])    # R8:U9 → R8
+    _safe_set(ws, 4, 18, supplier["등록번호"])  # R4
+    _safe_set(ws, 6, 18, supplier["상호"])      # R6
+    _safe_set(ws, 6, 22, supplier["성명"])      # V6 (※Z6 아님)
+    _safe_set(ws, 8, 18, supplier["사업장"])    # R8
 
-    # 공급받는자(지점)
-    _safe_set(ws, 4,  3, str(store_info.get("상호명", "")))     # C4:F5 → C4
-    _safe_set(ws, 6,  3, str(store_info.get("사업장주소", ""))) # C6:F7 → C6
+    _safe_set(ws, 4,  3, str(store_info.get("상호명", "")))     # C4
+    _safe_set(ws, 6,  3, str(store_info.get("사업장주소", ""))) # C6
+    _safe_set(ws,10, 3, int(total_amount))                      # C10 상단 합계
 
-    # 상단 합계 금액: C10:F11 병합 → C10
-    _safe_set(ws, 10, 3, int(total_amount))  # C10
+    # ── 품목 표
+    COL_YEAR, COL_MONTH, COL_DAY = 2, 3, 4   # B,C,D
+    COL_ITEM, COL_SPEC = 5, 13               # E,M
+    COL_QTY,  COL_UNIT = 18, 22              # R,V
+    COL_SUP,  COL_TAX  = 26, 31              # Z,AE (수식)
 
-    # ─────────────────────────────────────────────────────────
-    # 품목 테이블: 열 인덱스(1-based)
-    # B:년(2) / C:월(3) / D:일(4) / E:품목(5) / M:규격(13) / R:수량(18) / V:단가(22)
-    # Z:공급가액(26, 수식) / AE:세액(31, 수식)
-    COL_YEAR, COL_MONTH, COL_DAY = 2, 3, 4
-    COL_ITEM, COL_SPEC = 5, 13
-    COL_QTY, COL_UNIT = 18, 22
-    # COL_SUP, COL_TAX = 26, 31  # 수식 존재 → 직접 쓰지 않음
-
-    # 품목 시작 행 및 마스터 병합
     start_row = 13
     df_m = pd.merge(df_doc, master_df[["품목코드", "품목규격"]], on="품목코드", how="left")
 
     r = start_row
     for _, row in df_m.iterrows():
         d = pd.to_datetime(row.get("납품요청일"), errors="coerce")
-        if pd.isna(d):
-            d = base_dt
+        if pd.isna(d): d = base_dt
 
         _safe_set(ws, r, COL_YEAR,  int(d.year))
         _safe_set(ws, r, COL_MONTH, int(d.month))
@@ -324,87 +302,47 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         _safe_set(ws, r, COL_SPEC,  str(row.get("품목규격", "") or ""))
         _safe_set(ws, r, COL_QTY,   int(pd.to_numeric(row["수량"], errors="coerce") or 0))
         _safe_set(ws, r, COL_UNIT,  int(pd.to_numeric(row["판매단가"], errors="coerce") or 0))
-        # 공급가액(Z), 세액(AE)은 템플릿의 수식이 계산
+
+        # 🔧 수식 복원 (표가 ‘비어 보이는’ 문제의 직접 원인)
+        ws.cell(r, COL_SUP).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_QTY)}{r}*{get_column_letter(COL_UNIT)}{r})'
+        ws.cell(r, COL_TAX).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_SUP)}{r}*0.1)'
+
         r += 1
 
-    out = BytesIO()
-    wb.save(out)
-    out.seek(0)
+    # ── 인쇄 설정(전에 드린 형태로 고정)
+    ws.print_area = "$B$2:$AH$53"      # 템플릿 영역 그대로
+    ps = ws.page_setup
+    ps.paperSize = 9                   # A4
+    ps.orientation = "portrait"
+    ps.fitToWidth, ps.fitToHeight = 1, 0
+    ps.scale = None                    # fitToWidth 우선
+    ws.page_margins.left   = 0.25
+    ws.page_margins.right  = 0.25
+    ws.page_margins.top    = 0.5
+    ws.page_margins.bottom = 0.5
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+    out = BytesIO(); wb.save(out); out.seek(0)
     return out
 
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # 합계/공급/세액(필요 시 계산 가능하나, 템플릿 표기칸이 별도면 생략해도 무방)
-    total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
-    total_tax    = int(pd.to_numeric(df_doc["세액"],   errors="coerce").fillna(0).sum())
-    total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
+    # ... (기존 내용 동일: 공급자/공급받는자, 날짜(B14/D14/E14 & B40/D40/E40), 요약 D18/D42)
+    # 마지막에 인쇄 설정만 추가:
 
-    try:
-        base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
-    except Exception:
-        base_dt = None
-    if pd.isna(base_dt):
-        base_dt = pd.Timestamp.now(tz=KST)
+    # 인쇄영역 (상단~하단 블록 포함, 좌우 한 페이지에 맞춤)
+    ws.print_area = "$A$4:$V$48"   # 필요 시 템플릿에 맞춰 조정
+    ps = ws.page_setup
+    ps.paperSize = 9               # A4
+    ps.orientation = "portrait"
+    ps.fitToWidth, ps.fitToHeight = 1, 0
+    ps.scale = None
+    ws.page_margins.left   = 0.25
+    ws.page_margins.right  = 0.25
+    ws.page_margins.top    = 0.5
+    ws.page_margins.bottom = 0.5
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
-    template_id = st.secrets.get("google", {}).get("TEMPLATE_TAX_INVOICE_ID")
-    if not template_id:
-        st.error("Secrets에 세금계산서 템플릿 ID(TEMPLATE_TAX_INVOICE_ID)가 없습니다.")
-        return BytesIO()
-    template_bytes = download_template_from_drive(template_id)
-    if template_bytes is None:
-        return BytesIO()
-
-    wb = load_workbook(template_bytes)
-    ws = wb.active  # 세금계산서양식
-
-    # ─────────────────────────────────────────────────────────
-    # 공급자/공급받는자 블록 (병합 좌상단 좌표로 기록)
-    supplier = {
-        "등록번호": "686-85-02906",
-        "상호":   "산카쿠 대전 가공장",
-        "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
-        "업태":   "제조업",
-    }
-    buyer = {
-        "등록번호": str(store_info.get("사업자등록번호", "")),
-        "상호":   str(store_info.get("상호명", "")),
-        "사업장": str(store_info.get("사업장주소", "")),
-        "업태":   str(store_info.get("업태", "")),
-    }
-
-    # 공급자(좌): F5/F7/F9/F11
-    _safe_set(ws,  5,  6, supplier["등록번호"])  # F5:F6 병합 → F5
-    _safe_set(ws,  7,  6, supplier["상호"])      # F7:K8 → F7
-    _safe_set(ws,  9,  6, supplier["사업장"])    # F9:Q10 → F9
-    _safe_set(ws, 11,  6, supplier["업태"])      # F11:K12 → F11
-
-    # 공급받는자(우): S5/S8/S10/S11
-    _safe_set(ws,  5, 19, buyer["등록번호"])     # S5:U6 → S5
-    _safe_set(ws,  8, 19, buyer["상호"])         # S8 (해당 행 병합 좌상단)
-    _safe_set(ws, 10, 19, buyer["사업장"])       # S10
-    _safe_set(ws, 11, 19, buyer["업태"])         # S11
-
-    # ─────────────────────────────────────────────────────────
-    # 날짜: 1단(상) = 14행,  2단(하) = 40행
-    for base_row in (14, 40):
-        _safe_set(ws, base_row, 2, int(base_dt.year))   # B14/B40 (B40:C40 병합의 좌상단)
-        _safe_set(ws, base_row, 4, int(base_dt.month))  # D14/D40
-        _safe_set(ws, base_row, 5, int(base_dt.day))    # E14/E40
-
-    # ─────────────────────────────────────────────────────────
-    # 품목 요약 텍스트 (템플릿의 요약란)
-    items_count = len(df_doc)
-    first_name = str(df_doc.iloc[0]["품목명"]) if items_count else ""
-    summary = (f"{first_name} 등 {items_count}건") if items_count >= 2 else first_name
-
-    _safe_set(ws, 18, 4, summary)  # D18 (1단 요약)
-    _safe_set(ws, 42, 4, summary)  # D42 (2단 요약)
-
-    # 필요 시 합계 숫자 표기는 템플릿 표 구조에 맞는 위치로 추가 가능
-    # (본 템플릿에선 B47은 '합계금액' 레이블; 수치칸이 별도라면 해당 좌표에 _safe_set 처리)
-
-    out = BytesIO()
-    wb.save(out)
-    out.seek(0)
+    out = BytesIO(); wb.save(out); out.seek(0)
     return out
 
 def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
