@@ -31,8 +31,9 @@ from googleapiclient.http import MediaIoBaseDownload
 import xlsxwriter
 from openpyxl import load_workbook
 
-# 병합 셀 안전 쓰기 유틸 (병합 내부에 써도 좌상단으로 자동 보정)
+# 1) 병합 셀 안전 쓰기 (이미 있으면 중복 두지 말고 그대로 사용)
 from openpyxl.cell.cell import MergedCell
+from openpyxl.utils import get_column_letter
 
 def _safe_set(ws, row: int, col: int, value):
     for mr in ws.merged_cells.ranges:
@@ -40,6 +41,33 @@ def _safe_set(ws, row: int, col: int, value):
             ws.cell(mr.min_row, mr.min_col).value = value
             return
     ws.cell(row, col).value = value
+
+# 2) 시트 안전 선택 (시트명이 바뀌거나 커버시트가 있을 때 대비)
+def _pick_sheet(wb, preferred_names: list[str], fallback_contains: list[str] = []):
+    # 선호 시트명 우선
+    for name in preferred_names:
+        if name in wb.sheetnames:
+            return wb[name]
+    # 제목에 특정 키워드 포함 시트
+    lowers = [s.lower() for s in wb.sheetnames]
+    for kw in fallback_contains:
+        for i, s in enumerate(lowers):
+            if kw.lower() in s:
+                return wb[wb.sheetnames[i]]
+    # 마지막으로 active
+    return wb.active
+
+# 3) 지점 정보 키 매핑(시트 컬럼명이 조금씩 달라도 안전하게)
+def _normalize_store_info(store_info: pd.Series) -> dict:
+    s = {k: ("" if pd.isna(v) else v) for k, v in store_info.to_dict().items()}
+    return {
+        # 사업자등록번호, 상호명, 주소, 업태(없으면 빈값)
+        "사업자등록번호": s.get("사업자등록번호") or s.get("사업자번호") or s.get("등록번호") or "",
+        "상호명":         s.get("상호명") or s.get("지점명") or s.get("상호") or "",
+        "사업장주소":     s.get("사업장주소") or s.get("주소") or "",
+        "업태":           s.get("업태") or s.get("업종") or "",
+    }
+
 # -----------------------------------------------------------------------------
 # 페이지/테마/스타일
 # -----------------------------------------------------------------------------
@@ -252,40 +280,48 @@ def _find_account(uid_or_name: str):
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
+    # 합계(표기용)
     total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
+
     base_dt = pd.to_datetime(df_doc.get("납품요청일", [None])[0], errors="coerce")
     if pd.isna(base_dt): base_dt = pd.Timestamp.now(tz=KST)
 
+    # 템플릿 열기
     template_id = st.secrets.get("google", {}).get("TEMPLATE_TRADING_STATEMENT_ID")
     if not template_id:
-        st.error("Secrets에 거래명세서 템플릿 ID(TEMPLATE_TRADING_STATEMENT_ID)가 없습니다."); return BytesIO()
+        st.error("Secrets에 거래명세서 템플릿 ID(TEMPLATE_TRADING_STATEMENT_ID)가 없습니다.")
+        return BytesIO()
     template_bytes = download_template_from_drive(template_id)
     if template_bytes is None: return BytesIO()
 
-    wb = load_workbook(template_bytes)
-    ws = wb.active  # 거래명세서
+    wb = load_workbook(template_bytes, data_only=False)
+    # 시트 안전 선택 (시트명이 다를 수 있어 대비)
+    ws = _pick_sheet(wb, ["거래명세서"], ["명세", "trading", "statement"])
 
-    # ── 상단 고정 정보 (병합 좌상단만 기록)
+    # 공급자/공급받는자
     supplier = {
         "등록번호": "686-85-02906",
         "상호":   "산카쿠 대전 가공장",
         "성명":   "이수정",
         "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
     }
+    store_norm = _normalize_store_info(store_info)
+
+    # 병합 좌상단 좌표에 기록 (템플릿 실측)
     _safe_set(ws, 4, 18, supplier["등록번호"])  # R4
     _safe_set(ws, 6, 18, supplier["상호"])      # R6
-    _safe_set(ws, 6, 22, supplier["성명"])      # V6 (※Z6 아님)
+    _safe_set(ws, 6, 22, supplier["성명"])      # V6
     _safe_set(ws, 8, 18, supplier["사업장"])    # R8
 
-    _safe_set(ws, 4,  3, str(store_info.get("상호명", "")))     # C4
-    _safe_set(ws, 6,  3, str(store_info.get("사업장주소", ""))) # C6
-    _safe_set(ws,10, 3, int(total_amount))                      # C10 상단 합계
+    _safe_set(ws, 4,  3, store_norm["상호명"])     # C4
+    _safe_set(ws, 6,  3, store_norm["사업장주소"]) # C6
+    _safe_set(ws,10, 3, int(total_amount))         # C10 (상단 합계)
 
-    # ── 품목 표
+    # 품목 표 좌표(실측) — Z/AE는 수식으로 복원
     COL_YEAR, COL_MONTH, COL_DAY = 2, 3, 4   # B,C,D
-    COL_ITEM, COL_SPEC = 5, 13               # E,M
-    COL_QTY,  COL_UNIT = 18, 22              # R,V
-    COL_SUP,  COL_TAX  = 26, 31              # Z,AE (수식)
+    COL_ITEM, COL_SPEC            = 5, 13    # E,M
+    COL_QTY,  COL_UNIT            = 18, 22   # R,V
+    COL_SUP,  COL_TAX             = 26, 31   # Z,AE
 
     start_row = 13
     df_m = pd.merge(df_doc, master_df[["품목코드", "품목규격"]], on="품목코드", how="left")
@@ -303,19 +339,19 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         _safe_set(ws, r, COL_QTY,   int(pd.to_numeric(row["수량"], errors="coerce") or 0))
         _safe_set(ws, r, COL_UNIT,  int(pd.to_numeric(row["판매단가"], errors="coerce") or 0))
 
-        # 🔧 수식 복원 (표가 ‘비어 보이는’ 문제의 직접 원인)
+        # 🔧 수식 복원(표가 비어 보이는 원인 제거)
         ws.cell(r, COL_SUP).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_QTY)}{r}*{get_column_letter(COL_UNIT)}{r})'
         ws.cell(r, COL_TAX).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_SUP)}{r}*0.1)'
 
         r += 1
 
-    # ── 인쇄 설정(전에 드린 형태로 고정)
-    ws.print_area = "$B$2:$AH$53"      # 템플릿 영역 그대로
+    # 인쇄 설정(A4/세로/가로 1페이지 맞춤 + 영역 고정)
+    ws.print_area = "$B$2:$AH$53"
     ps = ws.page_setup
-    ps.paperSize = 9                   # A4
+    ps.paperSize = 9               # A4
     ps.orientation = "portrait"
     ps.fitToWidth, ps.fitToHeight = 1, 0
-    ps.scale = None                    # fitToWidth 우선
+    ps.scale = None
     ws.page_margins.left   = 0.25
     ws.page_margins.right  = 0.25
     ws.page_margins.top    = 0.5
@@ -326,87 +362,76 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     return out
 
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # ── 합계 계산(표기용, 필요 시 사용)
+    # 합계(필요 시 사용)
     total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
     total_tax    = int(pd.to_numeric(df_doc["세액"],   errors="coerce").fillna(0).sum())
     total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
 
-    # 기준 날짜
     try:
         base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
     except Exception:
         base_dt = None
-    if pd.isna(base_dt):
-        base_dt = pd.Timestamp.now(tz=KST)
+    if pd.isna(base_dt): base_dt = pd.Timestamp.now(tz=KST)
 
-    # 템플릿 열기
     template_id = st.secrets.get("google", {}).get("TEMPLATE_TAX_INVOICE_ID")
     if not template_id:
         st.error("Secrets에 세금계산서 템플릿 ID(TEMPLATE_TAX_INVOICE_ID)가 없습니다.")
         return BytesIO()
 
     template_bytes = download_template_from_drive(template_id)
-    if template_bytes is None:
-        return BytesIO()
+    if template_bytes is None: return BytesIO()
 
-    wb = load_workbook(template_bytes)          # ✅ wb 보장
-    ws = wb.active                              # ✅ ws 보장 (세금계산서양식 시트)
+    wb = load_workbook(template_bytes, data_only=False)
+    # 시트 안전 선택 (일부 템플릿은 커버/예시 시트가 있음)
+    ws = _pick_sheet(wb, ["세금계산서양식", "세금계산서"], ["tax", "invoice", "계산서"])
 
-    # ── 공급자/공급받는자(병합 좌상단 좌표 사용)
+    # 지점 정보 정규화
+    store_norm = _normalize_store_info(store_info)
+
+    # 공급자/공급받는자 (병합 좌상단 좌표)
     supplier = {
         "등록번호": "686-85-02906",
         "상호":   "산카쿠 대전 가공장",
         "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
         "업태":   "제조업",
     }
-    buyer = {
-        "등록번호": str(store_info.get("사업자등록번호", "")),
-        "상호":   str(store_info.get("상호명", "")),
-        "사업장": str(store_info.get("사업장주소", "")),
-        "업태":   str(store_info.get("업태", "")),
-    }
+    _safe_set(ws,  5,  6, supplier["등록번호"])  # F5
+    _safe_set(ws,  7,  6, supplier["상호"])      # F7
+    _safe_set(ws,  9,  6, supplier["사업장"])    # F9
+    _safe_set(ws, 11,  6, supplier["업태"])      # F11
 
-    # 공급자(좌) F5/F7/F9/F11
-    _safe_set(ws,  5,  6, supplier["등록번호"])  # F5 (F5:F6 병합)
-    _safe_set(ws,  7,  6, supplier["상호"])      # F7 (F7:K8)
-    _safe_set(ws,  9,  6, supplier["사업장"])    # F9 (F9:Q10)
-    _safe_set(ws, 11,  6, supplier["업태"])      # F11 (F11:K12)
+    _safe_set(ws,  5, 19, store_norm["사업자등록번호"]) # S5
+    _safe_set(ws,  8, 19, store_norm["상호명"])         # S8
+    _safe_set(ws, 10, 19, store_norm["사업장주소"])     # S10
+    _safe_set(ws, 11, 19, store_norm["업태"])          # S11
 
-    # 공급받는자(우) S5/S8/S10/S11
-    _safe_set(ws,  5, 19, buyer["등록번호"])     # S5 (S5:U6)
-    _safe_set(ws,  8, 19, buyer["상호"])         # S8
-    _safe_set(ws, 10, 19, buyer["사업장"])       # S10
-    _safe_set(ws, 11, 19, buyer["업태"])         # S11
-
-    # ── 날짜: 1단=14행, 2단=40행
+    # 날짜 (1단=14행, 2단=40행)
     for base_row in (14, 40):
-        _safe_set(ws, base_row, 2, int(base_dt.year))   # B14/B40 (B40:C40 병합 좌상단)
+        _safe_set(ws, base_row, 2, int(base_dt.year))   # B14/B40
         _safe_set(ws, base_row, 4, int(base_dt.month))  # D14/D40
         _safe_set(ws, base_row, 5, int(base_dt.day))    # E14/E40
 
-    # ── 품목 요약(두 곳 동일 텍스트 사용)
+    # 품목 요약(템플릿 요약란)
     items_count = len(df_doc)
     first_name = str(df_doc.iloc[0]["품목명"]) if items_count else ""
     summary = (f"{first_name} 등 {items_count}건") if items_count >= 2 else first_name
-    _safe_set(ws, 18, 4, summary)  # D18 (상단 요약)
-    _safe_set(ws, 42, 4, summary)  # D42 (하단 요약)
+    _safe_set(ws, 18, 4, summary)  # D18
+    _safe_set(ws, 42, 4, summary)  # D42
 
-    # ── 인쇄 설정 (A4, 세로, 한 페이지 너비 맞춤, 영역 지정)
-    ws.print_area = "$A$4:$V$48"          # 템플릿에 맞게 조정 (상/하단 모두 보이면 더 넉넉히 잡아도 됨)
+    # 인쇄 설정 (A4/세로/가로 1페이지 + 영역 명시)
+    ws.print_area = "$A$4:$V$48"
     ps = ws.page_setup
-    ps.paperSize = 9                      # A4
+    ps.paperSize = 9
     ps.orientation = "portrait"
-    ps.fitToWidth, ps.fitToHeight = 1, 0  # 가로 1페이지 맞춤, 세로 자유
-    ps.scale = None                       # fitToWidth 우선
+    ps.fitToWidth, ps.fitToHeight = 1, 0
+    ps.scale = None
     ws.page_margins.left   = 0.25
     ws.page_margins.right  = 0.25
     ws.page_margins.top    = 0.5
     ws.page_margins.bottom = 0.5
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
-    out = BytesIO()
-    wb.save(out)
-    out.seek(0)
+    out = BytesIO(); wb.save(out); out.seek(0)
     return out
 
 def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, title: str) -> BytesIO:
