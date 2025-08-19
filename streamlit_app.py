@@ -231,12 +231,13 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
     ws.cell(10, 6).value = total_amount
 
+    # [오류 수정] 안정적인 데이터 접근을 위해 AttributeError 포함
     try:
         ws["F5"].value = store_info["상호명"]
         ws["F6"].value = store_info["사업자등록번호"]
         ws["F7"].value = store_info["사업장주소"]
         ws["F8"].value = store_info["대표자명"]
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, AttributeError):
         st.error("지점 정보(store_info)의 형식이 올바르지 않아 명세서를 생성할 수 없습니다.")
         return BytesIO()
 
@@ -291,6 +292,7 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
     
+    # [오류 수정] 안정적인 데이터 접근을 위해 AttributeError 포함
     try:
         buyer = {
             "등록번호": str(store_info["사업자등록번호"]),
@@ -298,7 +300,7 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
             "사업장": str(store_info["사업장주소"]),
             "업태": str(store_info.get("업태", "")),
         }
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, AttributeError):
         st.error("지점 정보(store_info)의 형식이 올바르지 않아 세금계산서를 생성할 수 없습니다.")
         return BytesIO()
 
