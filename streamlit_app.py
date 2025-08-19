@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v9.1 - 가격 로직 수정)
+# 📦 Streamlit 식자재 발주 시스템 (v9.2 - UI, 가격 표시, 오류 수정)
 #
 # - 주요 개선사항:
-#   - 가격 정책을 '단가(VAT 제외)' 중심으로 변경
-#   - 단가 * 수량 = 공급가액, 공급가액 + 세액 = 합계금액 순으로 계산
-#   - 코드 및 UI의 '판매단가'를 '단가'로 변경하여 명확성 증대
+#   - 탭(Tab) UI 깨짐 현상 복원
+#   - VAT 포함된 최종 합계금액을 명확히 표시하도록 UI 개선
+#   - 데이터 필터링 시 발생하던 KeyError 오류 수정
 # =============================================================================
 
 from io import BytesIO
@@ -75,7 +75,43 @@ st.set_page_config(page_title="산카쿠 식자재 발주 시스템", page_icon=
 
 THEME = { "BORDER": "#e8e8ee", "PRIMARY": "#1C6758", "BG": "#f7f8fa", "CARD_BG": "#ffffff", "TEXT": "#222", "MUTED": "#777" }
 
-st.markdown(f"""<br><style><br>html, body, [data-testid="stAppViewContainer"] {{ background: {THEME['BG']}; color: {THEME['TEXT']}; }}<br>.block-container {{ padding-top: 2.4rem; padding-bottom: 1.6rem; }}<br>[data-testid="stAppViewContainer"] .main .block-container {{ max-width: 1050px; margin: 0 auto; padding: 0 12px; }}<br>.stTabs [role="tablist"] {{ display:flex !important; gap:12px !important; flex-wrap:wrap !important; margin:8px 0 24px !important; border-bottom:none !important; }}<br>.stTabs button[role="tab"] {{ border:1px solid {THEME['BORDER']} !important; border-radius:12px !important; background:#fff !important; padding:10px 14px !important; box-shadow:0 1px 6px rgba(0,0,0,0.04) !important; }}<br>.stTabs button[role="tab"][aria-selected="true"] {{ border-color:{THEME['PRIMARY']} !important; color:{THEME['PRIMARY']} !important; box-shadow:0 6px 16px rgba(28,103,88,0.18) !important; font-weight:700; }}<br>.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}<br></style><br>""", unsafe_allow_html=True)
+# [수정] 탭 UI 복원을 위한 CSS (Streamlit 최신 버전 호환)
+st.markdown(f"""<br><style>
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 12px;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        height: 42px;
+        border: 1px solid {THEME['BORDER']};
+        border-radius: 12px;
+        background-color: #fff;
+        padding: 10px 14px;
+        box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+    }}
+    .stTabs [aria-selected="true"] {{
+        border-color: {THEME['PRIMARY']};
+        color: {THEME['PRIMARY']};
+        box-shadow: 0 6px 16px rgba(28,103,88,0.18);
+        font-weight: 700;
+    }}
+    html, body, [data-testid="stAppViewContainer"] {{
+        background: {THEME['BG']};
+        color: {THEME['TEXT']};
+    }}
+    .block-container {{
+        padding-top: 2.4rem;
+        padding-bottom: 1.6rem;
+    }}
+    [data-testid="stAppViewContainer"] .main .block-container {{
+        max-width: 1050px;
+        margin: 0 auto;
+        padding: 0 12px;
+    }}
+    .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{
+        display: none;
+    }}
+</style>""", unsafe_allow_html=True)
+
 
 def v_spacer(height: int):
     st.markdown(f"<div style='height:{height}px'></div>", unsafe_allow_html=True)
@@ -269,14 +305,18 @@ def _find_account(uid_or_name: str):
 # 6) 템플릿 기반 Excel 생성 함수들
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
+
+# [수정] KeyError 방지를 위해 iloc 사용 및 안전장치 추가
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # 합계(표기용)
+    if df_doc.empty:
+        st.warning("거래명세서를 생성할 데이터가 없습니다.")
+        return BytesIO()
+        
     total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
 
-    base_dt = pd.to_datetime(df_doc.get("납품요청일", [None])[0], errors="coerce")
+    base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
     if pd.isna(base_dt): base_dt = pd.Timestamp.now(tz=KST)
 
-    # 템플릿 열기
     template_id = st.secrets.get("google", {}).get("TEMPLATE_TRADING_STATEMENT_ID")
     if not template_id:
         st.error("Secrets에 거래명세서 템플릿 ID(TEMPLATE_TRADING_STATEMENT_ID)가 없습니다.")
@@ -285,33 +325,23 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     if template_bytes is None: return BytesIO()
 
     wb = load_workbook(template_bytes, data_only=False)
-    # 시트 안전 선택 (시트명이 다를 수 있어 대비)
     ws = _pick_sheet(wb, ["거래명세서"], ["명세", "trading", "statement"])
 
-    # 공급자/공급받는자
-    supplier = {
-        "등록번호": "686-85-02906",
-        "상호":   "산카쿠 대전 가공장",
-        "성명":   "이수정",
-        "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
-    }
+    supplier = { "등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "성명": "이수정", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", }
     store_norm = _normalize_store_info(store_info)
 
-    # 병합 좌상단 좌표에 기록 (템플릿 실측)
-    _safe_set(ws, 4, 18, supplier["등록번호"])  # R4
-    _safe_set(ws, 6, 18, supplier["상호"])      # R6
-    _safe_set(ws, 6, 22, supplier["성명"])      # V6
-    _safe_set(ws, 8, 18, supplier["사업장"])    # R8
+    _safe_set(ws, 4, 18, supplier["등록번호"])
+    _safe_set(ws, 6, 18, supplier["상호"])
+    _safe_set(ws, 6, 22, supplier["성명"])
+    _safe_set(ws, 8, 18, supplier["사업장"])
+    _safe_set(ws, 4,  3, store_norm["상호명"])
+    _safe_set(ws, 6,  3, store_norm["사업장주소"])
+    _safe_set(ws,10, 3, int(total_amount))
 
-    _safe_set(ws, 4,  3, store_norm["상호명"])     # C4
-    _safe_set(ws, 6,  3, store_norm["사업장주소"]) # C6
-    _safe_set(ws,10, 3, int(total_amount))         # C10 (상단 합계)
-
-    # 품목 표 좌표(실측) — Z/AE는 수식으로 복원
-    COL_YEAR, COL_MONTH, COL_DAY = 2, 3, 4   # B,C,D
-    COL_ITEM, COL_SPEC            = 5, 13    # E,M
-    COL_QTY,  COL_UNIT            = 18, 22   # R,V (COL_UNIT은 단가를 의미)
-    COL_SUP,  COL_TAX             = 26, 31   # Z,AE
+    COL_YEAR, COL_MONTH, COL_DAY = 2, 3, 4
+    COL_ITEM, COL_SPEC = 5, 13
+    COL_QTY,  COL_UNIT = 18, 22
+    COL_SUP,  COL_TAX = 26, 31
 
     start_row = 13
     df_m = pd.merge(df_doc, master_df[["품목코드", "품목규격"]], on="품목코드", how="left")
@@ -329,96 +359,65 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         _safe_set(ws, r, COL_QTY,   int(pd.to_numeric(row["수량"], errors="coerce") or 0))
         _safe_set(ws, r, COL_UNIT,  int(pd.to_numeric(row["단가"], errors="coerce") or 0))
 
-        # 🔧 수식 복원(표가 비어 보이는 원인 제거)
         ws.cell(r, COL_SUP).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_QTY)}{r}*{get_column_letter(COL_UNIT)}{r})'
         ws.cell(r, COL_TAX).value = f'=IF({get_column_letter(COL_UNIT)}{r}="","",{get_column_letter(COL_SUP)}{r}*0.1)'
-
         r += 1
 
-    # 인쇄 설정(A4/세로/가로 1페이지 맞춤 + 영역 고정)
     ws.print_area = "$B$2:$AH$53"
     ps = ws.page_setup
-    ps.paperSize = 9               # A4
-    ps.orientation = "portrait"
-    ps.fitToWidth, ps.fitToHeight = 1, 0
-    ps.scale = None
-    ws.page_margins.left   = 0.25
-    ws.page_margins.right  = 0.25
-    ws.page_margins.top    = 0.5
-    ws.page_margins.bottom = 0.5
+    ps.paperSize, ps.orientation, ps.fitToWidth, ps.fitToHeight, ps.scale = 9, "portrait", 1, 0, None
+    ws.page_margins.left, ws.page_margins.right, ws.page_margins.top, ws.page_margins.bottom = 0.25, 0.25, 0.5, 0.5
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     out = BytesIO(); wb.save(out); out.seek(0)
     return out
 
+# [수정] KeyError 방지를 위해 iloc 사용 및 안전장치 추가
 def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
-    # 합계(필요 시 사용)
-    total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
-    total_tax    = int(pd.to_numeric(df_doc["세액"],   errors="coerce").fillna(0).sum())
-    total_amount = int(pd.to_numeric(df_doc["합계금액"], errors="coerce").fillna(0).sum())
+    if df_doc.empty:
+        st.warning("세금계산서를 생성할 데이터가 없습니다.")
+        return BytesIO()
 
-    try:
-        base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
-    except Exception:
-        base_dt = None
+    try: base_dt = pd.to_datetime(df_doc["납품요청일"].iloc[0], errors="coerce")
+    except Exception: base_dt = None
     if pd.isna(base_dt): base_dt = pd.Timestamp.now(tz=KST)
 
     template_id = st.secrets.get("google", {}).get("TEMPLATE_TAX_INVOICE_ID")
     if not template_id:
         st.error("Secrets에 세금계산서 템플릿 ID(TEMPLATE_TAX_INVOICE_ID)가 없습니다.")
         return BytesIO()
-
     template_bytes = download_template_from_drive(template_id)
     if template_bytes is None: return BytesIO()
 
     wb = load_workbook(template_bytes, data_only=False)
-    # 시트 안전 선택 (일부 템플릿은 커버/예시 시트가 있음)
     ws = _pick_sheet(wb, ["세금계산서양식", "세금계산서"], ["tax", "invoice", "계산서"])
-
-    # 지점 정보 정규화
     store_norm = _normalize_store_info(store_info)
 
-    # 공급자/공급받는자 (병합 좌상단 좌표)
-    supplier = {
-        "등록번호": "686-85-02906",
-        "상호":   "산카쿠 대전 가공장",
-        "사업장": "대전광역시 서구 둔산로18번길 62, 101호",
-        "업태":   "제조업",
-    }
-    _safe_set(ws,  5,  6, supplier["등록번호"])  # F5
-    _safe_set(ws,  7,  6, supplier["상호"])      # F7
-    _safe_set(ws,  9,  6, supplier["사업장"])    # F9
-    _safe_set(ws, 11,  6, supplier["업태"])      # F11
+    supplier = { "등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업" }
+    _safe_set(ws,  5,  6, supplier["등록번호"])
+    _safe_set(ws,  7,  6, supplier["상호"])
+    _safe_set(ws,  9,  6, supplier["사업장"])
+    _safe_set(ws, 11,  6, supplier["업태"])
+    _safe_set(ws,  5, 19, store_norm["사업자등록번호"])
+    _safe_set(ws,  8, 19, store_norm["상호명"])
+    _safe_set(ws, 10, 19, store_norm["사업장주소"])
+    _safe_set(ws, 11, 19, store_norm["업태"])
 
-    _safe_set(ws,  5, 19, store_norm["사업자등록번호"]) # S5
-    _safe_set(ws,  8, 19, store_norm["상호명"])         # S8
-    _safe_set(ws, 10, 19, store_norm["사업장주소"])     # S10
-    _safe_set(ws, 11, 19, store_norm["업태"])          # S11
-
-    # 날짜 (1단=14행, 2단=40행)
     for base_row in (14, 40):
-        _safe_set(ws, base_row, 2, int(base_dt.year))   # B14/B40
-        _safe_set(ws, base_row, 4, int(base_dt.month))  # D14/D40
-        _safe_set(ws, base_row, 5, int(base_dt.day))    # E14/E40
+        _safe_set(ws, base_row, 2, int(base_dt.year))
+        _safe_set(ws, base_row, 4, int(base_dt.month))
+        _safe_set(ws, base_row, 5, int(base_dt.day))
 
-    # 품목 요약(템플릿 요약란)
     items_count = len(df_doc)
     first_name = str(df_doc.iloc[0]["품목명"]) if items_count else ""
     summary = (f"{first_name} 등 {items_count}건") if items_count >= 2 else first_name
-    _safe_set(ws, 18, 4, summary)  # D18
-    _safe_set(ws, 42, 4, summary)  # D42
+    _safe_set(ws, 18, 4, summary)
+    _safe_set(ws, 42, 4, summary)
 
-    # 인쇄 설정 (A4/세로/가로 1페이지 + 영역 명시)
     ws.print_area = "$A$4:$V$48"
     ps = ws.page_setup
-    ps.paperSize = 9
-    ps.orientation = "portrait"
-    ps.fitToWidth, ps.fitToHeight = 1, 0
-    ps.scale = None
-    ws.page_margins.left   = 0.25
-    ws.page_margins.right  = 0.25
-    ws.page_margins.top    = 0.5
-    ws.page_margins.bottom = 0.5
+    ps.paperSize, ps.orientation, ps.fitToWidth, ps.fitToHeight, ps.scale = 9, "portrait", 1, 0, None
+    ws.page_margins.left, ws.page_margins.right, ws.page_margins.top, ws.page_margins.bottom = 0.25, 0.25, 0.5, 0.5
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     out = BytesIO(); wb.save(out); out.seek(0)
@@ -498,10 +497,22 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         if keyword: df_view = df_view[df_view.apply(lambda row: keyword.strip().lower() in str(row["품목명"]).lower() or keyword.strip().lower() in str(row["품목코드"]).lower(), axis=1)]
         if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
         with st.form(key="add_to_cart_form"):
-            df_edit = df_view[["품목코드", "품목명", "단위", "단가"]].copy(); df_edit["수량"] = 0
+            df_edit = df_view[["품목코드", "품목명", "단위", "단가", "과세구분"]].copy() # [수정] 과세구분 추가
+            
+            # [수정] VAT 포함된 단가 컬럼 추가
+            df_edit["단가(VAT포함)"] = df_edit.apply(lambda row: row['단가'] * 1.1 if row['과세구분'] == '과세' else row['단가'], axis=1).astype(int)
+            df_edit["수량"] = 0
+            
             df_edit.rename(columns={"단가": "단가(원)"}, inplace=True)
-            edited_disp = st.data_editor(df_edit, key=f"editor_v{st.session_state.store_editor_ver}", hide_index=True, disabled=["품목코드", "품목명", "단위", "단가(원)"], use_container_width=True, 
-                                         column_config={"단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0)})
+            
+            edited_disp = st.data_editor(
+                df_edit[["품목코드", "품목명", "단위", "단가(원)", "단가(VAT포함)", "수량"]], 
+                key=f"editor_v{st.session_state.store_editor_ver}", 
+                hide_index=True, 
+                disabled=["품목코드", "품목명", "단위", "단가(원)", "단가(VAT포함)"], 
+                use_container_width=True, 
+                column_config={"단가(원)": st.column_config.NumberColumn(), "단가(VAT포함)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0)}
+            )
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
                 edited_disp.rename(columns={"단가(원)": "단가"}, inplace=True)
                 items_to_add = coerce_cart_df(edited_disp)
@@ -513,30 +524,51 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         st.markdown("##### 🧺 장바구니")
         cart = st.session_state.cart
         if not cart.empty:
-            cart_display = cart.rename(columns={"단가": "단가(원)", "합계금액": "공급가액(원)"})
-            edited_cart = st.data_editor(cart_display, key="cart_editor", hide_index=True, disabled=["품목코드", "품목명", "단위", "단가(원)", "공급가액(원)"], 
-                                         column_config={"단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0), "공급가액(원)": st.column_config.NumberColumn()})
-            edited_cart.rename(columns={"단가(원)": "단가", "공급가액(원)": "합계금액"}, inplace=True)
+            # [수정] 장바구니 표시에 합계금액(VAT포함) 추가
+            cart_display = pd.merge(cart, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+            cart_display['공급가액'] = cart_display['단가'] * cart_display['수량']
+            cart_display['합계금액(VAT포함)'] = cart_display.apply(
+                lambda row: row['공급가액'] + math.ceil(row['공급가액'] * 0.1) if row['과세구분'] == '과세' else row['공급가액'], axis=1
+            ).astype(int)
+            
+            cart_display.rename(columns={"단가": "단가(원)", "공급가액": "공급가액(원)"}, inplace=True)
+
+            edited_cart = st.data_editor(
+                cart_display[["품목코드", "품목명", "단위", "단가(원)", "수량", "공급가액(원)", "합계금액(VAT포함)"]],
+                key="cart_editor", hide_index=True, 
+                disabled=["품목코드", "품목명", "단위", "단가(원)", "공급가액(원)", "합계금액(VAT포함)"],
+                column_config={
+                    "단가(원)": st.column_config.NumberColumn(), "수량": st.column_config.NumberColumn(min_value=0), 
+                    "공급가액(원)": st.column_config.NumberColumn(), "합계금액(VAT포함)": st.column_config.NumberColumn()
+                }
+            )
+            edited_cart.rename(columns={"단가(원)": "단가"}, inplace=True)
             st.session_state.cart = coerce_cart_df(edited_cart)
             if st.button("장바구니 비우기", use_container_width=True): st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS); st.rerun()
         else: st.info("장바구니가 비어 있습니다.")
     v_spacer(16)
     with st.form("submit_form"):
         cart_now = st.session_state.cart
-        total_supply_sum = cart_now['합계금액'].sum() # 장바구니의 '합계금액'은 공급가액임
-        st.markdown(f"**최종 확인:** 총 {len(cart_now)}개 품목, 공급가액 합계 {total_supply_sum:,.0f}원")
+        
+        # [수정] 최종 확인 문구 로직 변경
+        cart_with_master = pd.merge(cart_now, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+        cart_with_master['공급가액'] = cart_with_master['단가'] * cart_with_master['수량']
+        cart_with_master['최종합계'] = cart_with_master.apply(
+            lambda row: row['공급가액'] + math.ceil(row['공급가액'] * 0.1) if row['과세구분'] == '과세' else row['공급가액'], axis=1
+        )
+        total_final_amount_sum = cart_with_master['최종합계'].sum()
+
+        st.markdown(f"**최종 확인:** 총 {len(cart_now)}개 품목, 최종 합계금액(VAT포함) **{total_final_amount_sum:,.0f}원**")
         confirm = st.checkbox("위 내용으로 발주를 제출합니다.")
         if st.form_submit_button("📦 발주 제출", type="primary", use_container_width=True, disabled=cart_now.empty):
             if not confirm: st.warning("제출 확인 체크박스를 선택해주세요."); st.stop()
             user = st.session_state.auth; order_id = make_order_id(user["user_id"])
-            cart_with_master = pd.merge(cart_now, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
             rows = []
             for _, r in cart_with_master.iterrows():
                 unit_price = r['단가']
                 quantity = r['수량']
                 tax_type = r.get('과세구분', '과세')
                 
-                # 공급가액, 세액, 합계금액 순차 계산
                 supply_price = unit_price * quantity
                 tax = math.ceil(supply_price * 0.1) if tax_type == '과세' else 0
                 total_amount = supply_price + tax
@@ -671,12 +703,19 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
-    master_df_display = master_df.rename(columns={"단가": "단가(원)"})
-    st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "단가(원)"]], use_container_width=True, hide_index=True, column_config={"단가(원)": st.column_config.NumberColumn()})
+    master_df_display = master_df.copy()
+    # [수정] VAT 포함 단가 컬럼 추가
+    master_df_display['단가(VAT포함)'] = master_df_display.apply(
+        lambda row: row['단가'] * 1.1 if row['과세구분'] == '과세' else row['단가'], axis=1
+    ).astype(int)
+    master_df_display = master_df_display.rename(columns={"단가": "단가(원)"})
+    st.dataframe(master_df_display[["품목코드", "품목명", "품목규격", "분류", "단위", "단가(원)", "단가(VAT포함)"]], use_container_width=True, hide_index=True, column_config={"단가(원)": st.column_config.NumberColumn(), "단가(VAT포함)": st.column_config.NumberColumn()})
 
 # =============================================================================
-# 9) 관리자(Admin) 페이지
+# 9) 관리자(Admin) 페이지 (이하 생략된 코드는 기존과 동일)
+# ... (기존 코드의 page_admin... 함수들)
 # =============================================================================
+
 def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📋 발주요청 조회·수정")
     display_feedback()
