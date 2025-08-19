@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v6.9 - 최종 안정화)
+# 📦 Streamlit 식자재 발주 시스템 (v6.10 - 안정성 강화)
 #
 # - 주요 개선사항:
-#   - column_config의 format 인자를 제거하여 숫자 서식 오류 근본적 해결
-#   - st.tabs UI 및 내부 탭 선택 상태 유지 로직 안정화
-#   - 모든 기능(매출조회, 상세조회, 문서 다운로드 등) 포함
+#   - 상세 보기의 다운로드 기능에서 발생하던 KeyError 해결
+#   - 지점 '발주 조회' 화면에 '발주번호로 검색' 기능 추가 (UI 통일)
+#   - 코드 안정성 및 일관성 강화
 # =============================================================================
 
 from io import BytesIO
@@ -113,7 +113,6 @@ def open_spreadsheet():
 # =============================================================================
 # 4) 데이터 I/O 함수 (이전과 동일)
 # =============================================================================
-# 이전 버전과 동일하므로 생략 (내부 로직은 동일하게 유지)
 @st.cache_data(ttl=3600)
 def load_store_info_df() -> pd.DataFrame:
     try:
@@ -307,7 +306,6 @@ def add_to_cart(rows_df: pd.DataFrame):
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 요청")
-    # ... 이전 코드와 거의 동일 ...
     v_spacer(10)
     with st.container(border=True):
         st.markdown("##### 🗓️ 납품 요청 정보")
@@ -377,52 +375,53 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     df_user = df_all[df_all["지점ID"] == user["user_id"]]
     if df_user.empty: st.info("발주 데이터가 없습니다."); return
     
-    c1, c2 = st.columns(2)
+    # [UI 개편] 관리자 페이지처럼 필터 구성
+    c1, c2, c3 = st.columns([1, 1, 2])
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_orders_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="store_orders_to")
-    df_user = df_user[(pd.to_datetime(df_user["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df_user["납품요청일"]).dt.date <= dt_to)]
+    order_id_search = c3.text_input("발주번호로 검색", key="store_orders_search", placeholder="전체 또는 일부 입력")
 
-    orders = df_user.groupby("발주번호").agg(주문일시=("주문일시", "first"), 건수=("품목코드", "count"), 합계금액=("합계금액", "sum"), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
+    df_filtered = df_user.copy()
+    if order_id_search:
+        df_filtered = df_filtered[df_filtered["발주번호"].str.contains(order_id_search, na=False)]
+    else:
+        df_filtered = df_filtered[(pd.to_datetime(df_filtered["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df_filtered["납품요청일"]).dt.date <= dt_to)]
+
+    orders = df_filtered.groupby("발주번호").agg(주문일시=("주문일시", "first"), 건수=("품목코드", "count"), 합계금액=("합계금액", "sum"), 상태=("상태", "first")).reset_index().sort_values("주문일시", ascending=False)
     orders.rename(columns={"합계금액": "합계금액(원)"}, inplace=True)
     pending = orders[orders["상태"] == "접수"].copy(); shipped = orders[orders["상태"] == "출고완료"].copy()
+    pending.insert(0, "선택", False); shipped.insert(0, "선택", False)
     
-    # Initialize session state for selections
     if 'store_pending_selection' not in st.session_state: st.session_state.store_pending_selection = {}
     if 'store_shipped_selection' not in st.session_state: st.session_state.store_shipped_selection = {}
 
     tab1, tab2 = st.tabs([f"접수 ({len(pending)}건)", f"출고완료 ({len(shipped)}건)"])
     
-    # [로직 수정] 탭 전환 시 다른 탭 선택을 초기화하기 위해 콜백 함수 사용
-    def on_tab_change():
-        if st.session_state.store_tabs == f"접수 ({len(pending)}건)":
-            st.session_state.store_shipped_selection = {}
-        else:
-            st.session_state.store_pending_selection = {}
-
-    # st.tabs는 on_change 콜백이 없으므로, 위젯 키를 통해 간접적으로 상태를 추적
-    # 이 부분은 Streamlit의 한계로 완벽한 초기화는 어려우나, 상세조회 로직에서 처리
-    
     with tab1:
+        # 탭이 활성화될 때 다른 탭의 선택 상태를 초기화
+        if 'active_tab' not in st.session_state or st.session_state.active_tab != 'pending':
+            st.session_state.store_shipped_selection = {}
+            st.session_state.active_tab = 'pending'
+            
         pending['선택'] = pending['발주번호'].apply(lambda x: st.session_state.store_pending_selection.get(x, False))
         edited_pending = st.data_editor(pending, key="store_pending_editor", hide_index=True, disabled=["발주번호", "주문일시", "건수", "합계금액(원)", "상태"], column_config={"합계금액(원)": st.column_config.NumberColumn(), "선택": st.column_config.CheckboxColumn(width="small")})
         st.session_state.store_pending_selection = dict(zip(edited_pending['발주번호'], edited_pending['선택']))
         selected_pending_ids = [k for k, v in st.session_state.store_pending_selection.items() if v]
-        
-        # 다른 탭의 선택을 초기화
-        if any(selected_pending_ids): st.session_state.store_shipped_selection = {}
 
         if st.button("선택 발주 삭제", disabled=not selected_pending_ids, key="delete_pending_btn"):
             if update_order_status(selected_pending_ids, "삭제", user["name"]):
                 st.session_state.success_message = f"{len(selected_pending_ids)}건의 발주가 삭제되었습니다."; st.rerun()
     
     with tab2:
+        # 탭이 활성화될 때 다른 탭의 선택 상태를 초기화
+        if 'active_tab' not in st.session_state or st.session_state.active_tab != 'shipped':
+            st.session_state.store_pending_selection = {}
+            st.session_state.active_tab = 'shipped'
+
         shipped['선택'] = shipped['발주번호'].apply(lambda x: st.session_state.store_shipped_selection.get(x, False))
         edited_shipped = st.data_editor(shipped, key="store_shipped_editor", hide_index=True, disabled=["발주번호", "주문일시", "건수", "합계금액(원)", "상태"], column_config={"합계금액(원)": st.column_config.NumberColumn(), "선택": st.column_config.CheckboxColumn(width="small")})
         st.session_state.store_shipped_selection = dict(zip(edited_shipped['발주번호'], edited_shipped['선택']))
         selected_shipped_ids = [k for k, v in st.session_state.store_shipped_selection.items() if v]
-        
-        # 다른 탭의 선택을 초기화
-        if any(selected_shipped_ids): st.session_state.store_pending_selection = {}
 
     v_spacer(16)
     with st.container(border=True):
@@ -433,9 +432,11 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             target_df = df_user[df_user["발주번호"] == target_id]
             target_status = target_df.iloc[0]["상태"]
             
+            # [KeyError 수정] 원본 df를 수정하지 않고, 표시용 df를 따로 생성
+            df_display = target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
             display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
-            target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"}, inplace=True)
-            st.dataframe(target_df[display_cols], hide_index=True, use_container_width=True, 
+            
+            st.dataframe(df_display[display_cols], hide_index=True, use_container_width=True, 
                          column_config={
                              "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
                              "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
@@ -446,6 +447,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                 store_info_series = store_info_df[store_info_df["지점ID"] == user["user_id"]]
                 if not store_info_series.empty:
                     store_info = store_info_series.iloc[0]
+                    # [KeyError 수정] 원본 target_df 전달
                     buf = make_document_excel(target_df, "거래명세서", store_info, master_df)
                     st.download_button(f"'{target_id}' 거래명세서 다운로드", data=buf, file_name=f"거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True)
         else:
@@ -550,9 +552,16 @@ def page_admin_unified_management(df_all: pd.DataFrame):
             target_id = total_selected[0]
             st.markdown(f"**선택된 발주번호:** `{target_id}`")
             target_df = df_all[df_all["발주번호"] == target_id]
+            
+            # [KeyError 수정] 원본 df를 수정하지 않고, 표시용 df를 따로 생성
+            df_display = target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"})
             display_cols = ["품목코드", "품목명", "단위", "수량", "판매단가(원)", "공급가액(원)", "세액(원)", "합계금액(원)"]
-            target_df.rename(columns={"판매단가": "판매단가(원)", "공급가액": "공급가액(원)", "세액": "세액(원)", "합계금액": "합계금액(원)"}, inplace=True)
-            st.dataframe(target_df[display_cols], hide_index=True, use_container_width=True, column_config={"판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()})
+            
+            st.dataframe(df_display[display_cols], hide_index=True, use_container_width=True, 
+                         column_config={
+                            "판매단가(원)": st.column_config.NumberColumn(), "공급가액(원)": st.column_config.NumberColumn(), 
+                            "세액(원)": st.column_config.NumberColumn(), "합계금액(원)": st.column_config.NumberColumn()
+                         })
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
@@ -564,7 +573,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     search_mode = st.radio("조회 방식", ["기간으로 조회", "발주번호로 조회"], key="admin_doc_search_mode", horizontal=True)
     dfv = pd.DataFrame(); doc_type = "거래명세서"
     if search_mode == "기간으로 조회":
-        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+        c1, c2, c3, c4 = st.columns([1, 1, 1.5, 1.5])
         dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="admin_doc_from")
         dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to")
         stores = sorted(df_completed["지점명"].dropna().unique().tolist())
@@ -643,7 +652,6 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
         cat_sales = df_sales_with_cat.groupby("분류")["합계금액"].sum().reset_index()
         cat_sales.rename(columns={"합계금액": "매출액(원)"}, inplace=True)
         st.dataframe(cat_sales, use_container_width=True, hide_index=True, column_config={"분류": "카테고리", "매출액(원)": st.column_config.NumberColumn()})
-
 
 # =============================================================================
 # 10) 라우팅
