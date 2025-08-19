@@ -5,4 +5,5 @@ google-auth
 gspread_dataframe
 XlsxWriter
 openpyxl
-requests
+google-api-python-client
+google-auth-httplib2
