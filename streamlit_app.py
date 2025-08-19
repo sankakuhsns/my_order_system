@@ -1,14 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v8.3 - 오류 수정)
+# 📦 Streamlit 식자재 발주 시스템 (v8.4 - 양식 업데이트)
 #
 # - 주요 개선사항:
-#   - 상세 보기 다운로드 KeyError 및 매출 조회 숫자 표시 오류 해결
-#   - 지점/관리자 '발주 조회' UI를 필터, 정렬, 기능 면에서 동일하게 통일
-#   - 관리자 '발주 조회' 상세 보기에서 거래명세서 다운로드 기능 추가
-#   - 매출 조회 대시보드 기능 대폭 강화 (상세 분석 탭, 정산표 다운로드)
-#   - [v8.3] make_trading_statement_excel, make_tax_invoice_excel 함수에서
-#     .get()을 사용하여 지점 정보 누락 시 발생하는 오류를 방지하고 안정성 강화
+#   - 새로운 거래명세서, 세금계산서 Excel 양식에 맞게 데이터 기입 위치 조정
 # =============================================================================
 
 from io import BytesIO
@@ -226,28 +221,35 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     except Exception:
         base_dt = pd.Timestamp.now(tz=KST)
 
-    wb = _load_local_template("거래명세표.xlsx")
+    wb = _load_local_template("거래명세서.xlsx")
     if wb is None:
-        st.error("거래명세표.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
+        st.error("거래명세서.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
 
     ws = wb.active
 
-    ws.cell(3, 2).value = base_dt.strftime("%Y-%m-%d")
-    ws.cell(10, 6).value = total_amount
+    # 공급자 정보 (고정값)
+    supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "성명": "이수정", "사업장": "대전광역시 서구 둔산로18번길 62, 101호"}
+    ws.cell(row=4, column=18).value = supplier["등록번호"]
+    ws.cell(row=6, column=18).value = supplier["상호"]
+    ws.cell(row=6, column=26).value = supplier["성명"]
+    ws.cell(row=8, column=18).value = supplier["사업장"]
 
-    # [수정] .get()을 사용하여 KeyError를 방지하고 안정적으로 지점 정보를 삽입합니다.
-    ws["F5"].value = store_info.get("상호명", "")
-    ws["F6"].value = store_info.get("사업자등록번호", "")
-    ws["F7"].value = store_info.get("사업장주소", "")
-    ws["F8"].value = store_info.get("대표자명", "")
+    # 공급받는자 정보 (지점 정보)
+    ws.cell(row=4, column=4).value = store_info.get("상호명", "")
+    ws.cell(row=6, column=4).value = store_info.get("사업장주소", "")
+    
+    # 상단 합계 금액
+    ws.cell(row=10, column=5).value = total_amount
 
-    COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO = 2, 3, 4, 12, 15, 18, 21, 26, 31
+    # 품목 리스트 칼럼 정의 (1-based index)
+    COL_YEAR, COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO = 1, 2, 3, 4, 14, 17, 20, 23, 27, 31
     start_row = 13
     df_m = pd.merge(df_doc, master_df[["품목코드", "품목규격"]], on="품목코드", how="left")
     
     r = start_row
     for _, row in df_m.iterrows():
         d = pd.to_datetime(row["납품요청일"], errors="coerce") or base_dt
+        ws.cell(r, COL_YEAR).value  = int(d.year)
         ws.cell(r, COL_MONTH).value = int(d.month)
         ws.cell(r, COL_DAY).value   = int(d.day)
         ws.cell(r, COL_ITEM).value  = str(row["품목명"])
@@ -256,18 +258,18 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         ws.cell(r, COL_UNIT).value  = int(row["판매단가"])
         ws.cell(r, COL_SUP).value   = int(row["공급가액"])
         ws.cell(r, COL_TAX).value   = int(row["세액"])
-        if "비고" in row and pd.notna(row["비고"]):
-            ws.cell(r, COL_MEMO).value = str(row["비고"])
+        # 비고는 새 양식에 명시적 칸이 없으나, 필요시 특정 셀에 추가 가능
+        # if "비고" in row and pd.notna(row["비고"]):
+        #     ws.cell(r, COL_MEMO).value = str(row["비고"])
         r += 1
 
-    for rr in range(r, start_row + 20):
-        for cc in (COL_MONTH, COL_DAY, COL_ITEM, COL_SPEC, COL_QTY, COL_UNIT, COL_SUP, COL_TAX, COL_MEMO):
-            if cc:
-                ws.cell(rr, cc).value = None
+    # 하단 합계
+    # 양식에 따라 합계가 자동으로 계산될 수도 있고, 직접 기입해야 할 수도 있습니다.
+    # 아래는 공급가액과 세액의 합계를 품목 리스트 하단에 직접 기입하는 예시입니다.
+    total_row = start_row + 21 # e.g. 13 + 21 = 34
+    ws.cell(total_row, COL_SUP).value = total_supply
+    ws.cell(total_row, COL_TAX).value = total_tax
 
-    ws.cell(43, 4).value  = total_supply
-    ws.cell(43, 11).value = total_tax
-    ws.cell(43, 23).value = total_amount
 
     out = BytesIO()
     wb.save(out)
@@ -292,7 +294,6 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
     
-    # [수정] .get()을 사용하여 KeyError를 방지하고 안정적으로 구매자 정보를 설정합니다.
     buyer = {
         "등록번호": str(store_info.get("사업자등록번호", "")),
         "상호": str(store_info.get("상호명", "")),
