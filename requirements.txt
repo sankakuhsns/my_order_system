@@ -4,3 +4,4 @@ gspread
 google-auth
 gspread_dataframe
 XlsxWriter
+openpyxl
