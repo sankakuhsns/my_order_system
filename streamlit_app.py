@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v6.0 - 전체 기능 개편)
+# 📦 Streamlit 식자재 발주 시스템 (v6.1 - 오타 수정 및 기능 개편)
 #
 # - 주요 개선사항:
+#   - v6.0의 import 구문 오타 수정 (streamlit asst -> streamlit as st)
 #   - 4개 시트(지점마스터, 상품마스터, 발주, 변경로그) 기반 데이터 구조 전면 개편
 #   - 관리자용 '매출 조회' 탭 신설 (기간별/지점별 조회 및 시각화)
 #   - '증빙서류 다운로드' 기능 구체화 (거래명세서, 세금계산서 등)
@@ -19,7 +20,7 @@ import math
 
 import hashlib
 import pandas as pd
-import streamlit asst
+import streamlit as st  # [수정] 오타 수정: asst -> as st
 
 # Google Sheets
 import gspread
@@ -29,12 +30,11 @@ from google.oauth2 import service_account
 import xlsxwriter
 
 # -----------------------------------------------------------------------------
-# 페이지/테마/스타일 (기존과 동일)
+# 페이지/테마/스타일
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="산카쿠 식자재 발주 시스템", page_icon="📦", layout="wide")
 
 THEME = { "BORDER": "#e8e8ee", "PRIMARY": "#1C6758", "BG": "#f7f8fa", "CARD_BG": "#ffffff", "TEXT": "#222", "MUTED": "#777" }
-CARD_STYLE = f"background-color:{THEME['CARD_BG']}; border:1px solid {THEME['BORDER']}; border-radius:12px; padding:16px;"
 
 st.markdown(f"""
 <style>
@@ -59,7 +59,7 @@ def display_feedback():
         st.session_state.success_message = ""
 
 # =============================================================================
-# 1) Users 로더 (기존과 동일)
+# 1) Users 로더
 # =============================================================================
 def _normalize_account(uid: str, payload: Mapping) -> dict:
     pwd_plain, pwd_hash = payload.get("password"), payload.get("password_hash")
@@ -82,24 +82,20 @@ def load_users_from_secrets() -> Dict[str, Dict[str, str]]:
 USERS = load_users_from_secrets()
 
 # =============================================================================
-# 2) [수정] 시트/스키마 정의
+# 2) 시트/스키마 정의
 # =============================================================================
 SHEET_NAME_STORES = "지점마스터"
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
 SHEET_NAME_LOG = "변경로그"
 
-# [수정] 상품마스터 시트 컬럼 정의
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "판매단가", "과세구분", "활성"]
-# [수정] 발주 시트 컬럼 정의 (금액 세분화)
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "납품요청일", "품목코드", "품목명", "단위", "수량", "판매단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
-# [수정] 장바구니 컬럼 정의
 CART_COLUMNS = ["품목코드", "품목명", "단위", "판매단가", "수량", "합계금액"]
-# [신설] 변경로그 시트 컬럼 정의
 LOG_COLUMNS = ["변경일시", "변경자", "대상시트", "품목코드", "변경항목", "이전값", "새로운값"]
 
 # =============================================================================
-# 3) Google Sheets 연결 (기존과 동일)
+# 3) Google Sheets 연결
 # =============================================================================
 @st.cache_resource(show_spinner=False)
 def get_gs_client():
@@ -119,24 +115,20 @@ def open_spreadsheet():
     except Exception as e: st.error(f"스프레드시트 열기 실패: {e}"); st.stop()
 
 # =============================================================================
-# 4) [수정] 데이터 I/O 함수
+# 4) 데이터 I/O 함수
 # =============================================================================
-# [신설] 지점마스터 로드 함수
 @st.cache_data(ttl=3600)
 def load_store_info_df() -> pd.DataFrame:
     try:
         ws = open_spreadsheet().worksheet(SHEET_NAME_STORES)
         df = pd.DataFrame(ws.get_all_records())
-        # 필수 컬럼 존재 여부 확인 및 기본값 처리
         for col in ["지점ID", "상호명", "사업자등록번호", "대표자명", "사업장주소"]:
-            if col not in df.columns:
-                df[col] = ""
+            if col not in df.columns: df[col] = ""
         return df
     except gspread.WorksheetNotFound:
         st.error(f"'{SHEET_NAME_STORES}' 시트를 찾을 수 없습니다.")
         return pd.DataFrame()
 
-# [수정] 상품마스터 로드 함수
 @st.cache_data(ttl=180)
 def load_master_df() -> pd.DataFrame:
     try:
@@ -154,54 +146,44 @@ def load_master_df() -> pd.DataFrame:
         st.error(f"'{SHEET_NAME_MASTER}' 시트를 찾을 수 없습니다.")
         return pd.DataFrame()
 
-# [수정] 상품마스터 쓰기 함수 (변경로그 연동)
 def write_master_df(df: pd.DataFrame, original_df: pd.DataFrame) -> bool:
-    # --- 변경사항 비교 및 로그 생성 ---
     log_entries = []
     user_name = st.session_state.auth["name"]
     timestamp = now_kst_str()
 
-    # 인덱스를 품목코드로 설정하여 비교 용이하게 만듦
-    df = df.set_index("품목코드")
-    original_df = original_df.set_index("품목코드")
+    df_for_comp = df.set_index("품목코드")
+    original_df_for_comp = original_df.set_index("품목코드")
 
-    # 추가된 품목
-    new_items = df.index.difference(original_df.index)
+    new_items = df_for_comp.index.difference(original_df_for_comp.index)
     for code in new_items:
-        log_entries.append({"변경일시": timestamp, "변경자": user_name, "대상시트": SHEET_NAME_MASTER, "품목코드": code, "변경항목": "품목추가", "이전값": "", "새로운값": df.loc[code].to_json()})
+        log_entries.append({"변경일시": timestamp, "변경자": user_name, "대상시트": SHEET_NAME_MASTER, "품목코드": code, "변경항목": "품목추가", "이전값": "", "새로운값": df_for_comp.loc[code].to_json()})
     
-    # 삭제된 품목
-    deleted_items = original_df.index.difference(df.index)
+    deleted_items = original_df_for_comp.index.difference(df_for_comp.index)
     for code in deleted_items:
-        log_entries.append({"변경일시": timestamp, "변경자": user_name, "대상시트": SHEET_NAME_MASTER, "품목코드": code, "변경항목": "품목삭제", "이전값": original_df.loc[code].to_json(), "새로운값": ""})
+        log_entries.append({"변경일시": timestamp, "변경자": user_name, "대상시트": SHEET_NAME_MASTER, "품목코드": code, "변경항목": "품목삭제", "이전값": original_df_for_comp.loc[code].to_json(), "새로운값": ""})
 
-    # 수정된 품목
-    common_items = df.index.intersection(original_df.index)
+    common_items = df_for_comp.index.intersection(original_df_for_comp.index)
     for code in common_items:
-        diff = df.loc[code] != original_df.loc[code]
-        if diff.any():
-            changed_cols = diff[diff].index.tolist()
+        diff_mask = df_for_comp.loc[code] != original_df_for_comp.loc[code]
+        if diff_mask.any():
+            changed_cols = diff_mask[diff_mask].index.tolist()
             for col in changed_cols:
-                log_entries.append({"변경일시": timestamp, "변경자": user_name, "대상시트": SHEET_NAME_MASTER, "품목코드": code, "변경항목": col, "이전값": str(original_df.loc[code, col]), "새로운값": str(df.loc[code, col])})
+                log_entries.append({"변경일시": timestamp, "변경자": user_name, "대상시트": SHEET_NAME_MASTER, "품목코드": code, "변경항목": col, "이전값": str(original_df_for_comp.loc[code, col]), "새로운값": str(df_for_comp.loc[code, col])})
     
     if log_entries:
         append_change_log(log_entries)
 
-    # --- 시트 업데이트 ---
     try:
-        df_to_write = df.reset_index()
         sh = open_spreadsheet()
         ws = sh.worksheet(SHEET_NAME_MASTER)
         ws.clear()
-        ws.update("A1", [MASTER_COLUMNS] + df_to_write[MASTER_COLUMNS].fillna("").values.tolist(), value_input_option='USER_ENTERED')
+        ws.update("A1", [MASTER_COLUMNS] + df[MASTER_COLUMNS].fillna("").values.tolist(), value_input_option='USER_ENTERED')
         load_master_df.clear()
         return True
     except Exception as e:
         st.error(f"상품마스터 저장 실패: {e}")
         return False
 
-
-# [수정] 발주 시트 로드 함수
 @st.cache_data(ttl=60)
 def load_orders_df() -> pd.DataFrame:
     try:
@@ -230,7 +212,6 @@ def write_orders_df(df: pd.DataFrame) -> bool:
         st.error(f"발주 저장 실패: {e}")
         return False
 
-# [수정] 발주 추가 함수
 def append_orders(rows: List[Dict[str, Any]]) -> bool:
     if not rows: return True
     try:
@@ -243,7 +224,6 @@ def append_orders(rows: List[Dict[str, Any]]) -> bool:
         st.error(f"발주 추가 실패: {e}")
         return False
 
-# [신설] 변경로그 추가 함수
 def append_change_log(log_entries: List[Dict[str, Any]]):
     if not log_entries: return True
     try:
@@ -258,13 +238,11 @@ def append_change_log(log_entries: List[Dict[str, Any]]):
         st.error(f"변경로그 기록 실패: {e}")
         return False
 
-# [수정] 주문 상태 변경 함수 (삭제 시 로그 기록 추가)
 def update_order_status(selected_ids: List[str], new_status: str, handler: str) -> bool:
     df = load_orders_df()
     now = now_kst_str()
     mask = df["발주번호"].astype(str).isin([str(x) for x in selected_ids])
     
-    # 주문 삭제 시 로그 기록
     if new_status.lower() in ["deleted", "cancelled", "삭제", "주문취소"]:
         log_entries = []
         for order_id in selected_ids:
@@ -274,7 +252,6 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
                 "이전값": "접수", "새로운값": "삭제"
             })
         append_change_log(log_entries)
-        # 실제 데이터프레임에서 행 삭제
         df_updated = df[~mask]
     else:
         df.loc[mask, "상태"] = new_status
@@ -285,7 +262,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
     return write_orders_df(df_updated)
 
 # =============================================================================
-# 5) 로그인 (기존과 동일)
+# 5) 로그인
 # =============================================================================
 def require_login():
     if st.session_state.get("auth", {}).get("login"): return True
@@ -319,32 +296,21 @@ def _find_account(uid_or_name: str):
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
-# [신설] 거래명세서 등 문서 생성 함수 (기존 함수를 템플릿으로 활용)
 def make_document_excel(df_doc: pd.DataFrame, doc_type: str, store_info: pd.Series) -> BytesIO:
-    # 이 함수는 실제 거래명세서/세금계산서 양식에 맞게 복잡하게 구성되어야 합니다.
-    # 여기서는 간단한 예시 형태로 구성합니다.
     buf = BytesIO()
     workbook = xlsxwriter.Workbook(buf, {'in_memory': True, 'default_date_format': 'yyyy-mm-dd'})
     ws = workbook.add_worksheet(doc_type)
 
-    # 서식 정의
     fmt_h1 = workbook.add_format({"bold": True, "font_size": 20, "align": "center"})
     fmt_money = workbook.add_format({"num_format": "#,##0"})
 
-    # 문서 제목
     ws.merge_range("A1:G1", f"산카쿠 {doc_type}", fmt_h1)
 
-    # 공급받는자 정보 (지점마스터에서 가져옴)
-    ws.write("A3", "상호:")
-    ws.write("B3", store_info.get("상호명", ""))
-    ws.write("A4", "사업자번호:")
-    ws.write("B4", store_info.get("사업자등록번호", ""))
-    ws.write("A5", "주소:")
-    ws.write("B5", store_info.get("사업장주소", ""))
-    ws.write("A6", "대표:")
-    ws.write("B6", store_info.get("대표자명", ""))
+    ws.write("A3", "상호:"); ws.write("B3", store_info.get("상호명", ""))
+    ws.write("A4", "사업자번호:"); ws.write("B4", store_info.get("사업자등록번호", ""))
+    ws.write("A5", "주소:"); ws.write("B5", store_info.get("사업장주소", ""))
+    ws.write("A6", "대표:"); ws.write("B6", store_info.get("대표자명", ""))
 
-    # 품목 내역
     headers = ["품목명", "규격", "단위", "수량", "단가", "공급가액", "세액"]
     for i, header in enumerate(headers):
         ws.write(8, i, header)
@@ -352,7 +318,6 @@ def make_document_excel(df_doc: pd.DataFrame, doc_type: str, store_info: pd.Seri
     row_num = 9
     for _, item in df_doc.iterrows():
         ws.write(row_num, 0, item["품목명"])
-        # 규격은 상품마스터에서 가져와야 함 (여기서는 생략)
         ws.write(row_num, 2, item["단위"])
         ws.write(row_num, 3, item["수량"], fmt_money)
         ws.write(row_num, 4, item["판매단가"], fmt_money)
@@ -360,26 +325,22 @@ def make_document_excel(df_doc: pd.DataFrame, doc_type: str, store_info: pd.Seri
         ws.write(row_num, 6, item["세액"], fmt_money)
         row_num += 1
 
-    # 합계
     total_supply = df_doc["공급가액"].sum()
     total_tax = df_doc["세액"].sum()
     total_amount = df_doc["합계금액"].sum()
-    ws.write(row_num + 1, 4, "공급가액 합계")
-    ws.write(row_num + 1, 5, total_supply, fmt_money)
-    ws.write(row_num + 2, 4, "세액 합계")
-    ws.write(row_num + 2, 5, total_tax, fmt_money)
-    ws.write(row_num + 3, 4, "총 합계")
-    ws.write(row_num + 3, 5, total_amount, fmt_money)
+    ws.write(row_num + 1, 4, "공급가액 합계"); ws.write(row_num + 1, 5, total_supply, fmt_money)
+    ws.write(row_num + 2, 4, "세액 합계"); ws.write(row_num + 2, 5, total_tax, fmt_money)
+    ws.write(row_num + 3, 4, "총 합계"); ws.write(row_num + 3, 5, total_amount, fmt_money)
 
     workbook.close()
     buf.seek(0)
     return buf
 
 # =============================================================================
-# 7) [수정] 장바구니 유틸
+# 7) 장바구니 유틸
 # =============================================================================
 def init_session_state():
-    defaults = { "cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "cart_selected_codes": [], "store_selected_orders": [], "admin_pending_selection": [], "admin_shipped_selection": [], "success_message": "" }
+    defaults = {"cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "success_message": ""}
     for key, value in defaults.items():
         if key not in st.session_state: st.session_state[key] = value
 
@@ -396,8 +357,6 @@ def coerce_cart_df(df: pd.DataFrame) -> pd.DataFrame:
 def add_to_cart(rows_df: pd.DataFrame):
     add = rows_df[rows_df["수량"] > 0].copy()
     if add.empty: return
-    
-    # 합계금액 계산 추가
     add["합계금액"] = add["판매단가"] * add["수량"]
     
     cart = st.session_state.cart.copy()
@@ -408,16 +367,12 @@ def add_to_cart(rows_df: pd.DataFrame):
     merged["합계금액"] = merged["판매단가"] * merged["수량"]
     st.session_state.cart = merged[CART_COLUMNS]
 
-def remove_from_cart(codes: list[str]):
-    if codes: st.session_state.cart = st.session_state.cart[~st.session_state.cart["품목코드"].isin(codes)]
-
 # =============================================================================
-# 8) [수정] 지점(Store) 페이지
+# 8) 지점(Store) 페이지
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame):
     st.subheader("🛒 발주 요청")
     v_spacer(10)
-    # --- 1. 납품 요청 정보 ---
     with st.container(border=True):
         st.markdown("##### 🗓️ 납품 요청 정보")
         today, max_day = date.today(), date.today() + timedelta(days=7)
@@ -429,7 +384,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
         memo = st.text_area("요청 사항(선택)", height=80, placeholder="예) 입고 시 얼음팩 추가 부탁드립니다.")
     
     v_spacer(16)
-    # --- 2. 발주 수량 입력 ---
     with st.container(border=True):
         st.markdown("##### 🧾 발주 수량 입력")
         l, r = st.columns([2, 1])
@@ -455,17 +409,15 @@ def page_store_register_confirm(master_df: pd.DataFrame):
                 st.rerun()
 
     v_spacer(16)
-    # --- 3. 장바구니 ---
     with st.container(border=True):
         st.markdown("##### 🧺 장바구니")
         cart = st.session_state.cart
         if not cart.empty:
-            edited_cart = st.data_editor(cart, key="cart_editor", hide_index=True, disabled=["품목코드", "품목명", "단위", "합계금액"],
+            edited_cart = st.data_editor(cart, key="cart_editor", hide_index=True, disabled=["품목코드", "품목명", "단위", "판매단가", "합계금액"],
                 column_config={"판매단가": st.column_config.NumberColumn(format="%,d원"), "합계금액": st.column_config.NumberColumn(format="%,d원")})
             
             st.session_state.cart = coerce_cart_df(edited_cart)
             
-            # 장바구니 액션 버튼 (선택 기능 제거, 단순화)
             if st.button("장바구니 비우기", use_container_width=True):
                 st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
                 st.rerun()
@@ -473,7 +425,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             st.info("장바구니가 비어 있습니다.")
 
     v_spacer(16)
-    # --- 4. 발주 제출 ---
     with st.form("submit_form"):
         cart_now = st.session_state.cart
         total_amount_sum = cart_now['합계금액'].sum()
@@ -482,37 +433,30 @@ def page_store_register_confirm(master_df: pd.DataFrame):
 
         if st.form_submit_button("📦 발주 제출", type="primary", use_container_width=True, disabled=cart_now.empty):
             if not confirm:
-                st.warning("제출 확인 체크박스를 선택해주세요.")
-                st.stop()
+                st.warning("제출 확인 체크박스를 선택해주세요."); st.stop()
             
-            # [핵심 로직] 발주 데이터 생성 시 공급가액/세액 계산
             user = st.session_state.auth
             order_id = make_order_id(user["user_id"])
             
-            # 상품마스터와 장바구니 병합하여 '과세구분' 정보 가져오기
             cart_with_master = pd.merge(cart_now, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
-
             rows = []
             for _, r in cart_with_master.iterrows():
                 total_amount = r['합계금액']
-                tax_type = r['과세구분']
+                tax_type = r.get('과세구분', '과세')
                 
                 if tax_type == '과세':
                     supply_price = math.ceil(total_amount / 1.1)
                     tax_amount = total_amount - supply_price
-                else: # 면세
+                else:
                     supply_price = total_amount
                     tax_amount = 0
                 
-                order_item = {
+                rows.append({
                     "주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], 
-                    "지점명": user["name"], "납품요청일": f"{납품요청일:%Y-%m-%d}", 
-                    "품목코드": r["품목코드"], "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"],
-                    "판매단가": r["판매단가"], "공급가액": supply_price, "세액": tax_amount, 
-                    "합계금액": total_amount, "비고": memo, "상태": "접수", 
-                    "처리일시": "", "처리자": ""
-                }
-                rows.append(order_item)
+                    "지점명": user["name"], "납품요청일": f"{납품요청일:%Y-%m-%d}", "품목코드": r["품목코드"],
+                    "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"], "판매단가": r["판매단가"],
+                    "공급가액": supply_price, "세액": tax_amount, "합계금액": total_amount, "비고": memo, "상태": "접수"
+                })
             
             if append_orders(rows):
                 st.session_state.success_message = "발주가 성공적으로 제출되었습니다."
@@ -521,7 +465,6 @@ def page_store_register_confirm(master_df: pd.DataFrame):
             else:
                 st.error("발주 제출 중 오류가 발생했습니다.")
 
-
 def page_store_orders_change():
     st.subheader("🧾 발주 조회·수정")
     display_feedback()
@@ -529,18 +472,13 @@ def page_store_orders_change():
     df_user = df_all[df_all["지점ID"] == user["user_id"]]
     if df_user.empty: st.info("발주 데이터가 없습니다."); return
     
-    # 발주 리스트 (합계금액으로 집계)
     orders = df_user.groupby("발주번호").agg(
-        주문일시=("주문일시", "first"), 
-        건수=("품목코드", "count"), 
-        합계금액=("합계금액", "sum"), 
-        상태=("상태", "first")
+        주문일시=("주문일시", "first"), 건수=("품목코드", "count"),
+        합계금액=("합계금액", "sum"), 상태=("상태", "first")
     ).reset_index().sort_values("주문일시", ascending=False)
     
-    st.dataframe(orders, hide_index=True, use_container_width=True,
-                 column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
+    st.dataframe(orders, hide_index=True, use_container_width=True, column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
 
-    # 삭제 기능 (접수 상태인 것만 선택 가능)
     pending_orders = orders[orders["상태"] == "접수"]["발주번호"].tolist()
     order_to_delete = st.selectbox("삭제할 발주번호 선택 (접수 상태만 가능)", [""] + pending_orders)
 
@@ -548,7 +486,6 @@ def page_store_orders_change():
         if update_order_status([order_to_delete], "삭제", user["name"]):
             st.session_state.success_message = f"발주번호 {order_to_delete}가 삭제되었습니다."
             st.rerun()
-
 
 def page_store_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
@@ -565,17 +502,20 @@ def page_store_documents(store_info_df: pd.DataFrame):
     dfv = df[mask].copy()
 
     if dfv.empty:
-        st.warning("해당 기간에 조회된 데이터가 없습니다.")
-        st.stop()
+        st.warning("해당 기간에 조회된 데이터가 없습니다."); st.stop()
 
-    st.dataframe(dfv, use_container_width=True, hide_index=True)
+    st.dataframe(dfv, use_container_width=True, hide_index=True, column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
 
-    if st.button(f"{doc_type} 다운로드", use_container_width=True, type="primary"):
-        store_info = store_info_df[store_info_df["지점ID"] == user["user_id"]].iloc[0]
+    file_name = f"{doc_type}_{user['name']}_{dt_from}~{dt_to}.xlsx"
+    
+    # 지점 정보 찾기
+    store_info_series = store_info_df[store_info_df["지점ID"] == user["user_id"]]
+    if not store_info_series.empty:
+        store_info = store_info_series.iloc[0]
         buf = make_document_excel(dfv, doc_type, store_info)
-        st.download_button("다운로드 시작", data=buf, 
-                            file_name=f"{doc_type}_{user['name']}_{dt_from}~{dt_to}.xlsx", 
-                            mime="application/vnd.ms-excel")
+        st.download_button(f"{doc_type} 다운로드", data=buf, file_name=file_name, mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+    else:
+        st.error("지점 정보를 찾을 수 없어 서류를 생성할 수 없습니다.")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 가격 조회")
@@ -585,7 +525,7 @@ def page_store_master_view(master_df: pd.DataFrame):
                  column_config={"판매단가": st.column_config.NumberColumn(format="%,d원")})
 
 # =============================================================================
-# 9) [수정] 관리자(Admin) 페이지
+# 9) 관리자(Admin) 페이지
 # =============================================================================
 def page_admin_unified_management():
     st.subheader("📋 발주요청 조회·수정")
@@ -593,7 +533,6 @@ def page_admin_unified_management():
     df_all = load_orders_df()
     if df_all.empty: st.info("발주 데이터가 없습니다."); return
 
-    # --- 필터 ---
     c1, c2, c3 = st.columns([1, 1, 2])
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
     dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
@@ -611,12 +550,10 @@ def page_admin_unified_management():
     pending = orders[orders["상태"] == "접수"]
     shipped = orders[orders["상태"] == "출고완료"]
 
-    # --- 탭 화면 ---
     tab1, tab2 = st.tabs([f"📦 발주 요청 접수 ({len(pending)}건)", f"✅ 출고 완료 ({len(shipped)}건)"])
     
     with tab1:
-        st.dataframe(pending, use_container_width=True, hide_index=True,
-                     column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
+        st.dataframe(pending, use_container_width=True, hide_index=True, column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
         ids_to_ship = st.multiselect("출고 처리할 발주번호를 선택하세요.", pending["발주번호"].tolist())
         if st.button("✅ 선택 발주 출고", disabled=not ids_to_ship):
             if update_order_status(ids_to_ship, "출고완료", st.session_state.auth["name"]):
@@ -624,8 +561,7 @@ def page_admin_unified_management():
                 st.rerun()
 
     with tab2:
-        st.dataframe(shipped, use_container_width=True, hide_index=True,
-                     column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
+        st.dataframe(shipped, use_container_width=True, hide_index=True, column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
         ids_to_revert = st.multiselect("접수 상태로 변경할 발주번호를 선택하세요.", shipped["발주번호"].tolist())
         if st.button("↩️ 접수 상태로 변경", disabled=not ids_to_revert):
             if update_order_status(ids_to_revert, "접수", st.session_state.auth["name"]):
@@ -634,11 +570,9 @@ def page_admin_unified_management():
 
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
-    user = st.session_state.auth
     df = load_orders_df()
     if df.empty: st.info("발주 데이터가 없습니다."); return
 
-    # 필터
     c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30))
     dt_to = c2.date_input("조회 종료일", date.today())
@@ -646,31 +580,28 @@ def page_admin_documents(store_info_df: pd.DataFrame):
     store_sel = c3.selectbox("지점 선택", stores)
     doc_type = c4.selectbox("문서 종류", ["거래명세서", "세금계산서 (양식)"])
 
-    mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & \
-           (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to) & \
-           (df["지점명"] == store_sel)
+    mask = (pd.to_datetime(df["납품요청일"]).dt.date >= dt_from) & (pd.to_datetime(df["납품요청일"]).dt.date <= dt_to) & (df["지점명"] == store_sel)
     dfv = df[mask].copy()
 
     if dfv.empty:
-        st.warning(f"{store_sel}의 해당 기간에 조회된 데이터가 없습니다.")
-        st.stop()
+        st.warning(f"{store_sel}의 해당 기간에 조회된 데이터가 없습니다."); st.stop()
 
-    st.dataframe(dfv, use_container_width=True, hide_index=True)
+    st.dataframe(dfv, use_container_width=True, hide_index=True, column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
 
-    if st.button(f"'{store_sel}' {doc_type} 다운로드", use_container_width=True, type="primary"):
-        store_id = dfv.iloc[0]["지점ID"]
-        store_info = store_info_df[store_info_df["지점ID"] == store_id].iloc[0]
+    file_name = f"{doc_type}_{store_sel}_{dt_from}~{dt_to}.xlsx"
+    store_id = dfv.iloc[0]["지점ID"]
+    store_info_series = store_info_df[store_info_df["지점ID"] == store_id]
+
+    if not store_info_series.empty:
+        store_info = store_info_series.iloc[0]
         buf = make_document_excel(dfv, doc_type, store_info)
-        st.download_button("다운로드 시작", data=buf, 
-                            file_name=f"{doc_type}_{store_sel}_{dt_from}~{dt_to}.xlsx", 
-                            mime="application/vnd.ms-excel")
-
+        st.download_button(f"'{store_sel}' {doc_type} 다운로드", data=buf, file_name=file_name, mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+    else:
+        st.error("지점 정보를 찾을 수 없어 서류를 생성할 수 없습니다.")
 
 def page_admin_items_price(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 가격 설정")
     st.caption("가격을 수정하거나 품목을 추가/삭제한 후 '변경사항 저장' 버튼을 누르세요. 모든 변경 내역은 로그에 기록됩니다.")
-    
-    # 원본 복사 (비교용)
     original_df = master_df.copy()
 
     with st.form("master_edit_form"):
@@ -681,19 +612,16 @@ def page_admin_items_price(master_df: pd.DataFrame):
             edited['삭제'] = edited['삭제'].fillna(False).astype(bool)
             final_df = edited[~edited["삭제"]].drop(columns=["삭제"])
             
-            # 원본 df와 함께 전달하여 차이점 로깅
             if write_master_df(final_df, original_df):
                 st.session_state.success_message = "상품마스터가 저장되었습니다."; 
                 st.rerun()
 
-# [신설] 관리자 매출 조회 페이지
 def page_admin_sales_inquiry():
     st.subheader("📈 매출 조회")
     df_orders = load_orders_df()
     if df_orders.empty:
         st.info("매출 데이터가 없습니다."); return
 
-    # --- 필터 ---
     c1, c2, c3 = st.columns(3)
     dt_from = c1.date_input("조회 시작일", date.today().replace(day=1))
     dt_to = c2.date_input("조회 종료일", date.today())
@@ -703,13 +631,11 @@ def page_admin_sales_inquiry():
     mask = (pd.to_datetime(df_orders["주문일시"]).dt.date >= dt_from) & (pd.to_datetime(df_orders["주문일시"]).dt.date <= dt_to)
     if store != "(전체 통합)":
         mask &= (df_orders["지점명"] == store)
-    
     df_sales = df_orders[mask].copy()
 
     if df_sales.empty:
         st.warning("해당 조건의 매출 데이터가 없습니다."); st.stop()
 
-    # --- 현황판 ---
     total_sales = df_sales["합계금액"].sum()
     total_supply = df_sales["공급가액"].sum()
     total_tax = df_sales["세액"].sum()
@@ -718,25 +644,20 @@ def page_admin_sales_inquiry():
     m1.metric("총 매출 (VAT 포함)", f"{total_sales:,}원")
     m2.metric("공급가액", f"{total_supply:,}원")
     m3.metric("부가세액", f"{total_tax:,}원")
-    
     st.divider()
 
-    # --- 시각화 ---
     df_sales["일자"] = pd.to_datetime(df_sales["주문일시"]).dt.date
-
-    # 일별 매출 추이
     st.markdown("##### 📅 일별 매출 추이")
     daily_sales = df_sales.groupby("일자")["합계금액"].sum()
     st.bar_chart(daily_sales)
 
-    # 품목별 매출 순위
     st.markdown("##### 🍔 품목별 매출 순위 (Top 10)")
     item_sales = df_sales.groupby("품목명")["합계금액"].sum().nlargest(10)
     st.dataframe(item_sales.reset_index(), use_container_width=True, hide_index=True,
                  column_config={"합계금액": st.column_config.NumberColumn(format="%,d원")})
 
 # =============================================================================
-# 10) [수정] 라우팅
+# 10) 라우팅
 # =============================================================================
 if __name__ == "__main__":
     if not require_login(): st.stop()
@@ -746,7 +667,6 @@ if __name__ == "__main__":
     display_feedback()
     user = st.session_state.auth
     
-    # 공통 데이터 로딩
     master_df = load_master_df()
     store_info_df = load_store_info_df()
 
