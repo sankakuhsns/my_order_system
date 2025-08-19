@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v8.4 - 양식 업데이트)
+# 📦 Streamlit 식자재 발주 시스템 (v9.0 - Google Drive 연동)
 #
 # - 주요 개선사항:
-#   - 새로운 거래명세서, 세금계산서 Excel 양식에 맞게 데이터 기입 위치 조정
+#   - 로컬/GitHub 템플릿 파일 의존성 제거
+#   - 서비스 계정 인증을 통해 Google Drive에서 템플릿을 안전하게 다운로드
+#   - Google API (Sheets, Drive) 인증 로직 통합 및 최적화
 # =============================================================================
 
 from io import BytesIO
@@ -17,10 +19,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import requests
 
-# Google Sheets
+# Google API
 import gspread
 from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 # Excel
 import xlsxwriter
@@ -92,16 +97,52 @@ CART_COLUMNS = ["품목코드", "품목명", "단위", "판매단가", "수량",
 LOG_COLUMNS = ["변경일시", "변경자", "대상시트", "품목코드", "변경항목", "이전값", "새로운값"]
 
 # =============================================================================
-# 3) Google Sheets 연결
+# 3) Google Sheets & Drive 연결
 # =============================================================================
 @st.cache_resource(show_spinner=False)
-def get_gs_client():
+def get_google_creds():
+    """Google API 인증 정보를 생성하고 반환 (Sheets와 Drive 권한 포함)"""
     google = st.secrets.get("google", {})
     creds_info = dict(google)
-    if "\\n" in str(creds_info.get("private_key", "")): creds_info["private_key"] = str(creds_info["private_key"]).replace("\\n", "\n")
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    if "\\n" in str(creds_info.get("private_key", "")):
+        creds_info["private_key"] = str(creds_info["private_key"]).replace("\\n", "\n")
+    
+    # Google Sheets와 Google Drive 읽기 권한을 함께 요청
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.readonly"
+    ]
     creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scopes)
+    return creds
+
+@st.cache_resource(show_spinner=False)
+def get_gs_client():
+    """gspread 클라이언트 반환"""
+    creds = get_google_creds()
     return gspread.authorize(creds)
+
+@st.cache_resource(show_spinner="API 서비스 연결 중...")
+def get_drive_service():
+    """Google Drive API 서비스 클라이언트 반환"""
+    creds = get_google_creds()
+    return build('drive', 'v3', credentials=creds)
+
+def download_template_from_drive(file_id: str) -> Optional[BytesIO]:
+    """Google Drive에서 파일 ID를 이용해 템플릿 파일을 다운로드"""
+    try:
+        service = get_drive_service()
+        request = service.files().get_media(fileId=file_id)
+        file_buffer = BytesIO()
+        downloader = MediaIoBaseDownload(file_buffer, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        file_buffer.seek(0)
+        return file_buffer
+    except Exception as e:
+        st.error(f"Google Drive에서 템플릿 파일(ID: {file_id}) 다운로드에 실패했습니다.")
+        st.error(e)
+        return None
 
 @st.cache_resource(show_spinner=False)
 def open_spreadsheet():
@@ -198,26 +239,9 @@ def _find_account(uid_or_name: str):
     return None, None
     
 # =============================================================================
-# 6) [수정] 템플릿 기반 Excel 생성 함수들
+# 6) 템플릿 기반 Excel 생성 함수들
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
-
-def _load_local_template(filename: str):
-    # 현재 스크립트 파일이 위치한 디렉토리를 기준으로 경로를 설정합니다.
-    script_dir = Path(__file__).parent
-    
-    # 1. 스크립트와 동일한 위치에서 파일을 찾습니다. (e.g., /app/my_order_system/거래명세서.xlsx)
-    p1 = script_dir / filename
-    if p1.exists():
-        return load_workbook(p1)
-        
-    # 2. 'templates' 하위 폴더에서 파일을 찾습니다. (e.g., /app/my_order_system/templates/거래명세서.xlsx)
-    p2 = script_dir / "templates" / filename
-    if p2.exists():
-        return load_workbook(p2)
-        
-    # 두 경로 모두에서 파일을 찾지 못한 경우 None을 반환합니다.
-    return None
 
 def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_df: pd.DataFrame) -> BytesIO:
     total_supply = int(pd.to_numeric(df_doc["공급가액"], errors="coerce").fillna(0).sum())
@@ -229,10 +253,16 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
     except Exception:
         base_dt = pd.Timestamp.now(tz=KST)
 
-    wb = _load_local_template("거래명세서.xlsx")
-    if wb is None:
-        st.error("거래명세서.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
+    template_id = st.secrets.get("google", {}).get("TEMPLATE_TRADING_STATEMENT_ID")
+    if not template_id:
+        st.error("Secrets에 거래명세서 템플릿 ID가 없습니다.")
+        return BytesIO()
+    
+    template_bytes = download_template_from_drive(template_id)
+    if template_bytes is None:
+        return BytesIO()
 
+    wb = load_workbook(template_bytes)
     ws = wb.active
 
     # 공급자 정보 (고정값)
@@ -266,18 +296,12 @@ def make_trading_statement_excel(df_doc: pd.DataFrame, store_info: pd.Series, ma
         ws.cell(r, COL_UNIT).value  = int(row["판매단가"])
         ws.cell(r, COL_SUP).value   = int(row["공급가액"])
         ws.cell(r, COL_TAX).value   = int(row["세액"])
-        # 비고는 새 양식에 명시적 칸이 없으나, 필요시 특정 셀에 추가 가능
-        # if "비고" in row and pd.notna(row["비고"]):
-        #     ws.cell(r, COL_MEMO).value = str(row["비고"])
         r += 1
 
     # 하단 합계
-    # 양식에 따라 합계가 자동으로 계산될 수도 있고, 직접 기입해야 할 수도 있습니다.
-    # 아래는 공급가액과 세액의 합계를 품목 리스트 하단에 직접 기입하는 예시입니다.
-    total_row = start_row + 21 # e.g. 13 + 21 = 34
+    total_row = start_row + 21
     ws.cell(total_row, COL_SUP).value = total_supply
     ws.cell(total_row, COL_TAX).value = total_tax
-
 
     out = BytesIO()
     wb.save(out)
@@ -294,10 +318,16 @@ def make_tax_invoice_excel(df_doc: pd.DataFrame, store_info: pd.Series, master_d
     except Exception:
         base_dt = pd.Timestamp.now(tz=KST)
 
-    wb = _load_local_template("세금계산서.xlsx")
-    if wb is None:
-        st.error("세금계산서.xlsx 템플릿을 찾을 수 없습니다."); return BytesIO()
+    template_id = st.secrets.get("google", {}).get("TEMPLATE_TAX_INVOICE_ID")
+    if not template_id:
+        st.error("Secrets에 세금계산서 템플릿 ID가 없습니다.")
+        return BytesIO()
 
+    template_bytes = download_template_from_drive(template_id)
+    if template_bytes is None:
+        return BytesIO()
+
+    wb = load_workbook(template_bytes)
     ws = wb.active
 
     supplier = {"등록번호": "686-85-02906", "상호": "산카쿠 대전 가공장", "사업장": "대전광역시 서구 둔산로18번길 62, 101호", "업태": "제조업"}
