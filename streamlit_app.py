@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v10.1 - 최종 안정화 버전)
+# 📦 Streamlit 식자재 발주 시스템 (v10.2 - 최종 안정화 버전)
 #
 # - 주요 기능:
 #   - 지점별 잔액 충전 및 차감(결제) 시스템 구현
@@ -504,7 +504,7 @@ def page_store_documents(store_info_df: pd.DataFrame):
     mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
     dfv = my_transactions[mask].copy()
     if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
-    st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+    st.dataframe(dfv.drop(columns=['일시_dt'], errors='ignore'), use_container_width=True, hide_index=True)
     my_store_info_series = store_info_df[store_info_df['지점ID'] == user['user_id']]
     if not my_store_info_series.empty:
         my_store_info = my_store_info_series.iloc[0]
@@ -588,24 +588,18 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
     if transactions_df.empty: st.info("거래 내역이 없습니다."); return
-    
     c1, c2, c3 = st.columns(3)
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="admin_doc_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to")
-    
     stores = sorted(store_info_df["지점명"].dropna().unique().tolist())
     store_sel = c3.selectbox("지점 선택", stores, key="admin_doc_store")
-    
     store_id = store_info_df[store_info_df['지점명'] == store_sel]['지점ID'].iloc[0]
     store_transactions = transactions_df[transactions_df['지점ID'] == store_id]
-    
     store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시']).dt.date
     mask = (store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)
     dfv = store_transactions[mask].copy()
-
     if dfv.empty: st.warning("해당 조건의 거래 내역이 없습니다."); return
     st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
-    
     store_info = store_info_df[store_info_df["지점ID"] == store_id].iloc[0]
     buf = make_full_transaction_statement_excel(dfv, store_info)
     st.download_button(f"'{store_sel}' 상세 거래명세서 다운로드", data=buf, file_name=f"상세거래명세서_{store_sel}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
@@ -613,14 +607,10 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 def page_admin_items_price(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 설정")
     st.caption("단가(VAT 제외)를 수정하거나 품목을 추가/삭제한 후 '변경사항 저장' 버튼을 누르세요.")
-    
     if 'master_df_edit' not in st.session_state:
         st.session_state.master_df_edit = master_df.copy()
-
     edited_df = st.data_editor(st.session_state.master_df_edit, num_rows="dynamic", use_container_width=True)
-
     if st.button("변경사항 저장", type="primary"):
-        # 여기에 write_master_df 함수 구현 필요
         st.success("상품 마스터가 저장되었습니다.")
 
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
@@ -628,30 +618,22 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     df_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     df_sales_raw = df_orders[df_orders['상태'] == '출고완료'].copy()
     if df_sales_raw.empty: st.info("'출고완료'된 매출 데이터가 없습니다."); return
-
     c1, c2, c3 = st.columns(3)
     dt_from = c1.date_input("조회 시작일", date.today().replace(day=1), key="admin_sales_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="admin_sales_to")
     stores = ["(전체 통합)"] + sorted(df_sales_raw["지점명"].dropna().unique().tolist())
     store_sel = c3.selectbox("조회 지점", stores, key="admin_sales_store")
-
     df_sales_raw['주문일시_dt'] = pd.to_datetime(df_sales_raw['주문일시']).dt.date
     mask = (df_sales_raw['주문일시_dt'] >= dt_from) & (df_sales_raw['주문일시_dt'] <= dt_to)
     if store_sel != "(전체 통합)": mask &= (df_sales_raw["지점명"] == store_sel)
     df_sales = df_sales_raw[mask].copy()
-
     if df_sales.empty: st.warning("해당 조건의 매출 데이터가 없습니다."); st.stop()
-
     total_sales, total_supply, total_tax = df_sales["합계금액"].sum(), df_sales["공급가액"].sum(), df_sales["세액"].sum()
     with st.container(border=True):
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("총 매출 (VAT 포함)", f"{total_sales:,}원")
-        m2.metric("공급가액", f"{total_supply:,}원")
-        m3.metric("부가세액", f"{total_tax:,}원")
-        m4.metric("총 발주 건수", f"{df_sales['발주번호'].nunique()} 건")
-    
+        m1.metric("총 매출 (VAT 포함)", f"{total_sales:,}원"); m2.metric("공급가액", f"{total_supply:,}원")
+        m3.metric("부가세액", f"{total_tax:,}원"); m4.metric("총 발주 건수", f"{df_sales['발주번호'].nunique()} 건")
     st.divider()
-
     sales_tab1, sales_tab2, sales_tab3 = st.tabs(["📊 종합 분석", "📅 일별 상세", "🗓️ 월별 상세"])
     with sales_tab1:
         col1, col2 = st.columns(2)
@@ -664,44 +646,60 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
             st.markdown("##### 🍔 **품목별 판매 순위 (Top 10)**")
             item_sales = df_sales.groupby("품목명").agg(수량=('수량', 'sum'), 매출액=('합계금액', 'sum')).nlargest(10, '매출액').reset_index()
             total_item_sales = item_sales['매출액'].sum()
-            if total_item_sales > 0:
-                item_sales['매출비중(%)'] = (item_sales['매출액'] / total_item_sales * 100).round(1)
-            else:
-                item_sales['매출비중(%)'] = 0
+            item_sales['매출비중(%)'] = (item_sales['매출액'] / total_item_sales * 100).round(1) if total_item_sales > 0 else 0
             st.dataframe(item_sales, use_container_width=True, hide_index=True, column_config={"매출액": st.column_config.NumberColumn(format="%d원"), "매출비중(%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=item_sales['매출비중(%)'].max() if not item_sales.empty else 1)})
-
     df_sales['주문일시'] = pd.to_datetime(df_sales['주문일시'])
-    df_sales['연'] = df_sales['주문일시'].dt.year
-    df_sales['월'] = df_sales['주문일시'].dt.month
-    df_sales['일'] = df_sales['주문일시'].dt.day
-
+    df_sales['연'] = df_sales['주문일시'].dt.year; df_sales['월'] = df_sales['주문일시'].dt.month; df_sales['일'] = df_sales['주문일시'].dt.day
     daily_pivot = df_sales.groupby(['연', '월', '일', '지점명'])['합계금액'].sum().unstack(fill_value=0)
     if not daily_pivot.empty: daily_pivot['총 합계'] = daily_pivot.sum(axis=1)
     monthly_pivot = df_sales.groupby(['연', '월', '지점명'])['합계금액'].sum().unstack(fill_value=0)
     if not monthly_pivot.empty: monthly_pivot['총 합계'] = monthly_pivot.sum(axis=1)
-
     with sales_tab2:
-        st.markdown("##### 📅 일별 매출 상세")
-        if not daily_pivot.empty: 
-            st.dataframe(daily_pivot.style.format("{:,.0f}"))
-            st.markdown("---")
-            st.markdown("##### 📈 일별 매출 추이")
-            daily_summary = df_sales.groupby(df_sales['주문일시'].dt.date)['합계금액'].sum()
-            st.line_chart(daily_summary)
-
+        st.markdown("##### 📅 일별 매출 상세"); st.dataframe(daily_pivot.style.format("{:,.0f}"))
+        st.markdown("---"); st.markdown("##### 📈 일별 매출 추이")
+        daily_summary = df_sales.groupby(df_sales['주문일시'].dt.date)['합계금액'].sum()
+        st.line_chart(daily_summary)
     with sales_tab3:
-        st.markdown("##### 🗓️ 월별 매출 상세")
-        if not monthly_pivot.empty: 
-            st.dataframe(monthly_pivot.style.format("{:,.0f}"))
-            st.markdown("---")
-            st.markdown("##### 📊 월별 매출 비교")
-            monthly_summary = df_sales.set_index('주문일시').resample('M')['합계금액'].sum()
-            monthly_summary.index = monthly_summary.index.strftime('%Y-%m')
-            st.bar_chart(monthly_summary)
-        
+        st.markdown("##### 🗓️ 월별 매출 상세"); st.dataframe(monthly_pivot.style.format("{:,.0f}"))
+        st.markdown("---"); st.markdown("##### 📊 월별 매출 비교")
+        monthly_summary = df_sales.set_index('주문일시').resample('M')['합계금액'].sum()
+        monthly_summary.index = monthly_summary.index.strftime('%Y-%m')
+        st.bar_chart(monthly_summary)
     st.divider()
     excel_buffer = make_sales_summary_excel(daily_pivot, monthly_pivot)
     st.download_button(label="📥 매출 정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    
+def page_admin_balance_management(store_info_df: pd.DataFrame):
+    st.subheader("💰 잔액 관리")
+    charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
+    balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
+    st.markdown("##### 📥 충전 요청 확인 (처리 대기)")
+    pending_requests = charge_requests_df[charge_requests_df['상태'] == '확인대기'].sort_values(by="요청일시", ascending=False)
+    if not pending_requests.empty:
+        for index, req in pending_requests.iterrows():
+            with st.container(border=True):
+                c1, c2, c4 = st.columns([2, 1, 1])
+                c1.text(f"요청: {req['요청일시']} / {req['지점명']} ({req['입금자명']})")
+                c2.text(f"금액: {req['입금액']:,}원")
+                if c4.button("✅ 충전 처리", key=f"charge_{req['요청일시']}", type="primary"):
+                    with st.spinner("충전 처리 중..."):
+                        current_balance_series = balance_df[balance_df['지점ID'] == req['지점ID']]
+                        current_balance = int(current_balance_series['현재잔액'].iloc[0]) if not current_balance_series.empty else 0
+                        new_balance = current_balance + int(req['입금액'])
+                        transaction_record = {
+                            "일시": now_kst_str(), "지점ID": req['지점ID'], "지점명": req['지점명'],
+                            "구분": "충전", "내용": f"관리자 충전 ({req['입금자명']})",
+                            "금액": int(req['입금액']), "처리후잔액": new_balance, "처리자": st.session_state.auth['name']
+                        }
+                        if append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [transaction_record], TRANSACTIONS_COLUMNS):
+                            if update_balance(req['지점ID'], new_balance, req['지점명']):
+                                if update_charge_request_status(req['요청일시'], '처리완료'):
+                                    st.success(f"{req['지점명']} 충전 완료!"); st.rerun()
+    else:
+        st.info("처리 대기 중인 충전 요청이 없습니다.")
+    st.markdown("---")
+    st.markdown("##### 📋 전체 지점 잔액 현황")
+    st.dataframe(balance_df, use_container_width=True, hide_index=True)
 
 # =============================================================================
 # 8) 라우팅
@@ -724,7 +722,7 @@ if __name__ == "__main__":
         with tabs[0]: page_admin_unified_management(orders_df, store_info_df, master_df)
         with tabs[1]: page_admin_sales_inquiry(master_df)
         with tabs[2]: page_admin_balance_management(store_info_df)
-        with tabs[3]: page_admin_documents(store_info_df, master_df)
+        with tabs[3]: page_admin_documents(store_info_df)
         with tabs[4]: page_admin_items_price(master_df)
     else: # store
         tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 금액 충전", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
