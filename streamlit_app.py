@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v10.2 - 최종 안정화 버전)
+# 📦 Streamlit 식자재 발주 시스템 (v11.1 - 최종 기능 완성본)
 #
 # - 주요 기능:
-#   - 지점별 잔액 충전 및 차감(결제) 시스템 구현
-#   - 관리자의 충전 요청 승인 및 잔액 관리 기능
-#   - 누적액이 포함된 신규 거래명세서 생성 기능
-#   - v9.7의 모든 기능 포함 및 데이터 로딩 안정화
+#   - 선충전 및 여신(외상) 결제 시스템 완전 구현
+#   - 관리자의 충전/상환 요청 승인/반려, 여신 수동 조정 기능
+#   - 누적 잔액이 포함된 신규 거래명세서 생성
+#   - 모든 페이지 기능 포함 및 데이터 로딩 안정화
 # =============================================================================
 
 from io import BytesIO
@@ -72,7 +72,7 @@ MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
 BALANCE_COLUMNS = ["지점ID", "지점명", "선충전잔액", "여신한도", "사용여신액"]
-CHARGE_REQ_COLUMNS = ["요청일시", "지점ID", "지점명", "입금자명", "입금액", "상태", "처리사유"]
+CHARGE_REQ_COLUMNS = ["요청일시", "지점ID", "지점명", "입금자명", "입금액", "종류", "상태", "처리사유"]
 TRANSACTIONS_COLUMNS = ["일시", "지점ID", "지점명", "구분", "내용", "금액", "처리후선충전잔액", "처리후사용여신액", "관련발주번호", "처리자"]
 
 # =============================================================================
@@ -165,8 +165,8 @@ def update_charge_request(timestamp: str, new_status: str, reason: str = ""):
         ws = open_spreadsheet().worksheet(SHEET_NAME_CHARGE_REQ)
         cell = ws.find(timestamp, in_column=1)
         if cell:
-            ws.update_cell(cell.row, 6, new_status) # 상태 업데이트
-            ws.update_cell(cell.row, 7, reason)     # 처리사유 업데이트
+            ws.update_cell(cell.row, 7, new_status) # 상태
+            ws.update_cell(cell.row, 8, reason)     # 처리사유
             st.cache_data.clear()
             return True
         return False
@@ -348,8 +348,11 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
     credit_limit = int(balance_info.get('여신한도', 0))
     used_credit = int(balance_info.get('사용여신액', 0))
     available_credit = credit_limit - used_credit
-
-    st.info(f"**선충전 잔액: {prepaid_balance:,.0f}원 | 사용 가능 여신: {available_credit:,.0f}원**")
+    
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        c1.metric("선충전 잔액", f"{prepaid_balance:,.0f}원")
+        c2.metric("사용 가능 여신", f"{available_credit:,.0f}원", delta=f"한도: {credit_limit:,.0f}원", delta_color="off")
     if credit_limit > 0 and (available_credit / credit_limit) < 0.2 :
         st.warning("⚠️ 여신 한도가 20% 미만으로 남았습니다.")
     v_spacer(10)
@@ -428,16 +431,17 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                 rows.append({"주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], "품목코드": r["품목코드"], "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"], "단가": r["단가"], "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": memo, "상태": "접수"})
             
             if append_rows_to_sheet(SHEET_NAME_ORDERS, rows, ORDERS_COLUMNS):
+                new_balance, new_used_credit, trans_desc = 0, 0, ""
                 if payment_method == "선충전 잔액 결제":
                     new_balance = prepaid_balance - total_final_amount_sum
+                    new_used_credit = used_credit
                     update_balance_sheet(user["user_id"], {"선충전잔액": new_balance})
                     trans_desc = "선충전결제"
-                    new_used_credit = used_credit
                 else: # 여신 결제
                     new_used_credit = used_credit + total_final_amount_sum
+                    new_balance = prepaid_balance
                     update_balance_sheet(user["user_id"], {"사용여신액": new_used_credit})
                     trans_desc = "여신결제"
-                    new_balance = prepaid_balance
 
                 transaction_record = {
                     "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
@@ -473,20 +477,23 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     st.info("**입금 계좌: OOO은행 123-456-789 (주)산카쿠**\n\n위 계좌로 입금하신 후, 아래 양식을 작성하여 '알림 보내기' 버튼을 눌러주세요.")
     with st.form("charge_request_form", border=True):
         st.markdown("##### 입금 완료 알림 보내기")
-        depositor_name = st.text_input("입금자명")
-        charge_amount = st.number_input("입금액", min_value=1000, step=1000, format="%d")
+        c1, c2, c3 = st.columns(3)
+        depositor_name = c1.text_input("입금자명")
+        charge_amount = c2.number_input("입금액", min_value=1000, step=1000, format="%d")
+        charge_type = c3.radio("종류", ["선충전", "여신상환"], horizontal=True)
+        
         if st.form_submit_button("알림 보내기", type="primary"):
             if depositor_name and charge_amount > 0:
                 new_request = {
                     "요청일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
-                    "입금자명": depositor_name, "입금액": charge_amount, "상태": "확인대기", "처리사유": ""
+                    "입금자명": depositor_name, "입금액": charge_amount, "종류": charge_type, "상태": "확인대기", "처리사유": ""
                 }
                 if append_rows_to_sheet(SHEET_NAME_CHARGE_REQ, [new_request], CHARGE_REQ_COLUMNS):
-                    st.success("관리자에게 입금 완료 알림을 보냈습니다. 확인 후 잔액이 충전됩니다.")
+                    st.success("관리자에게 입금 완료 알림을 보냈습니다. 확인 후 처리됩니다.")
                 else: st.error("알림 전송에 실패했습니다.")
             else: st.warning("입금자명과 입금액을 모두 입력해주세요.")
     st.markdown("---")
-    st.markdown("##### 나의 충전 요청 현황")
+    st.markdown("##### 나의 충전/상환 요청 현황")
     my_requests = charge_requests_df[charge_requests_df['지점ID'] == user['user_id']]
     st.dataframe(my_requests, use_container_width=True, hide_index=True)
 
@@ -554,7 +561,7 @@ def page_store_documents(store_info_df: pd.DataFrame):
     mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
     dfv = my_transactions[mask].copy()
     if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
-    st.dataframe(dfv.drop(columns=['일시_dt'], errors='ignore'), use_container_width=True, hide_index=True)
+    st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
     my_store_info_series = store_info_df[store_info_df['지점ID'] == user['user_id']]
     if not my_store_info_series.empty:
         my_store_info = my_store_info_series.iloc[0]
@@ -732,32 +739,69 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-    st.markdown("##### 📥 충전 요청 확인 (처리 대기)")
+    
+    st.markdown("##### 📥 금액 처리 확인")
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '확인대기'].sort_values(by="요청일시", ascending=False)
     if not pending_requests.empty:
         for index, req in pending_requests.iterrows():
             with st.container(border=True):
-                c1, c2, c4 = st.columns([2, 1, 1])
+                c1, c2, c3, c4, c5 = st.columns([2,1,1,1,1])
                 c1.text(f"요청: {req['요청일시']} / {req['지점명']} ({req['입금자명']})")
-                c2.text(f"금액: {req['입금액']:,}원")
-                if c4.button("✅ 충전 처리", key=f"charge_{req['요청일시']}", type="primary"):
-                    with st.spinner("충전 처리 중..."):
+                c2.text(f"금액: {req['입금액']:,}원 ({req['종류']})")
+                
+                if c4.button("✅ 승인", key=f"approve_{req['요청일시']}", type="primary"):
+                    with st.spinner("처리 중..."):
                         current_balance_series = balance_df[balance_df['지점ID'] == req['지점ID']]
-                        current_balance = int(current_balance_series['현재잔액'].iloc[0]) if not current_balance_series.empty else 0
-                        new_balance = current_balance + int(req['입금액'])
-                        transaction_record = {
-                            "일시": now_kst_str(), "지점ID": req['지점ID'], "지점명": req['지점명'],
-                            "구분": "충전", "내용": f"관리자 충전 ({req['입금자명']})",
-                            "금액": int(req['입금액']), "처리후잔액": new_balance, "처리자": st.session_state.auth['name']
-                        }
-                        if append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [transaction_record], TRANSACTIONS_COLUMNS):
-                            if update_balance(req['지점ID'], new_balance, req['지점명']):
-                                if update_charge_request_status(req['요청일시'], '처리완료'):
-                                    st.success(f"{req['지점명']} 충전 완료!"); st.rerun()
+                        if current_balance_series.empty:
+                            st.error(f"{req['지점명']}의 잔액 정보를 찾을 수 없습니다."); continue
+                        
+                        current_info = current_balance_series.iloc[0]
+                        current_prepaid = int(current_info['선충전잔액'])
+                        current_used_credit = int(current_info['사용여신액'])
+                        charge_amount = int(req['입금액'])
+
+                        if req['종류'] == '선충전':
+                            new_prepaid = current_prepaid + charge_amount
+                            update_balance_sheet(req['지점ID'], {"선충전잔액": new_prepaid})
+                            trans_record = {"구분": "충전", "금액": charge_amount, "처리후선충전잔액": new_prepaid, "처리후사용여신액": current_used_credit}
+                        else: # 여신상환
+                            new_used_credit = current_used_credit - charge_amount
+                            update_balance_sheet(req['지점ID'], {"사용여신액": new_used_credit})
+                            trans_record = {"구분": "여신상환", "금액": charge_amount, "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_used_credit}
+                        
+                        full_trans_record = {**trans_record, "일시": now_kst_str(), "지점ID": req['지점ID'], "지점명": req['지점명'], "내용": f"관리자 처리 ({req['입금자명']})", "처리자": st.session_state.auth['name']}
+                        
+                        if append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS):
+                            if update_charge_request(req['요청일시'], '처리완료'):
+                                st.success(f"{req['지점명']}의 {req['종류']} 요청이 처리되었습니다."); st.rerun()
+
+                if c5.button("❌ 반려", key=f"reject_{req['요청일시']}"):
+                    update_charge_request(req['요청일시'], '반려', '관리자 확인 후 반려')
+                    st.warning(f"{req['지점명']}의 요청을 반려 처리했습니다."); st.rerun()
     else:
-        st.info("처리 대기 중인 충전 요청이 없습니다.")
+        st.info("처리 대기 중인 요청이 없습니다.")
+    st.markdown("---")
+    
+    st.markdown("##### ✍️ 잔액/여신 수동 조정")
+    with st.form("manual_adjustment_form"):
+        stores = store_info_df["지점명"].dropna().unique().tolist()
+        selected_store = st.selectbox("조정 대상 지점", stores)
+        adj_type = st.selectbox("조정 항목", ["선충전잔액", "여신한도", "사용여신액"])
+        adj_amount = st.number_input("조정할 값 (숫자만 입력)", format="%d", step=1000)
+        adj_reason = st.text_input("조정 사유")
+        
+        if st.form_submit_button("조정 실행", type="primary"):
+            if selected_store and adj_reason:
+                store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
+                if update_balance_sheet(store_id, {adj_type: adj_amount}):
+                     st.success(f"{selected_store}의 {adj_type}이(가) {adj_amount:,}으로 조정되었습니다."); st.rerun()
+            else:
+                st.warning("모든 필드를 입력해주세요.")
+
     st.markdown("---")
     st.markdown("##### 📋 전체 지점 잔액 현황")
+    if not balance_df.empty:
+        balance_df['남은여신액'] = balance_df['여신한도'] - balance_df['사용여신액']
     st.dataframe(balance_df, use_container_width=True, hide_index=True)
 
 # =============================================================================
