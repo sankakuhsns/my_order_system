@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v13.0 - 통합 인증 및 관리 최종본)
+# 📦 Streamlit 식자재 발주 시스템 (v12.0 - UI 복원 및 지점마스터 로그인 통합)
 #
 # - 주요 변경 사항:
-#   - 통합 인증 시스템: 모든 사용자는 '지점마스터' 시트 기준으로 로그인
-#   - 관리자 기능 강화: '관리 설정' 탭에서 품목 및 지점(사용자) 정보 직접 편집
-#   - 편의 기능 추가: 사이드바에 로그인 정보 및 로그아웃 버튼 표시
-#   - 요청된 모든 UI/UX 개선 및 오류 수정 완료 (전체 코드)
+#   - UI 복원: 모든 탭의 UI를 v11.6 버전 기준으로 완벽히 복원
+#   - 로그인 시스템 교체: Google Sheets '지점마스터' 시트 기반의 통합 인증 시스템 적용
+#   - 편의성 개선: 사이드바에 로그인 정보 및 로그아웃 버튼을 항상 표시
 # =============================================================================
 
 from io import BytesIO
@@ -46,6 +45,9 @@ def display_feedback():
         st.success(st.session_state.success_message)
         st.session_state.success_message = ""
 
+def v_spacer(height: int):
+    st.markdown(f"<div style='height:{height}px'></div>", unsafe_allow_html=True)
+
 # =============================================================================
 # 1) 시트/스키마 정의
 # =============================================================================
@@ -56,7 +58,8 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
-STORES_COLUMNS = ["지점ID", "지점PW", "역할", "지점명", "사업자등록번호", "상호명", "대표자명", "사업장주소", "업태", "종목"]
+# 지점마스터 시트에 PW와 역할을 추가해야 합니다.
+STORES_COLUMNS = ["지점ID", "지점PW", "역할", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자", "반려사유"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
@@ -82,7 +85,7 @@ def open_spreadsheet():
     try: return get_gs_client().open_by_key(key)
     except Exception as e: st.error(f"스프레드시트 열기 실패: {e}"); st.stop()
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
     try:
         ws = open_spreadsheet().worksheet(sheet_name)
@@ -91,7 +94,7 @@ def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
             return pd.DataFrame(columns=columns) if columns else pd.DataFrame()
         
         df = pd.DataFrame(records)
-        df = df.astype(str)
+        df = df.astype(str) # 먼저 모든 데이터를 문자열로 변환
         
         numeric_cols = {
             SHEET_NAME_BALANCE: ['선충전잔액', '여신한도', '사용여신액'],
@@ -110,32 +113,15 @@ def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
                 if col not in df.columns: df[col] = ''
             df = df[columns]
             
-        sort_key_map = {'주문일시': "주문일시", '요청일시': "요청일시", '일시': "일시"}
-        for col, key in sort_key_map.items():
-            if col in df.columns:
-                try:
-                    pd.to_datetime(df[key])
-                    df = df.sort_values(by=key, ascending=False)
-                except Exception:
-                    pass
-                break
+        if '주문일시' in df.columns: df = df.sort_values(by="주문일시", ascending=False)
+        if '요청일시' in df.columns: df = df.sort_values(by="요청일시", ascending=False)
+        if '일시' in df.columns: df = df.sort_values(by="일시", ascending=False)
+            
         return df
     except gspread.WorksheetNotFound:
         st.warning(f"'{sheet_name}' 시트를 찾을 수 없습니다. 시트를 먼저 생성해주세요.")
         return pd.DataFrame(columns=columns) if columns else pd.DataFrame()
 
-def save_df_to_sheet(sheet_name: str, df: pd.DataFrame):
-    try:
-        ws = open_spreadsheet().worksheet(sheet_name)
-        ws.clear()
-        df_filled = df.fillna('')
-        ws.update([df_filled.columns.values.tolist()] + df_filled.values.tolist(), value_input_option='USER_ENTERED')
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"'{sheet_name}' 시트에 데이터를 저장하는 중 오류 발생: {e}")
-        return False
-        
 def append_rows_to_sheet(sheet_name: str, rows_data: List[Dict], columns_order: List[str]):
     try:
         ws = open_spreadsheet().worksheet(sheet_name)
@@ -154,17 +140,36 @@ def update_balance_sheet(store_id: str, updates: Dict):
         if not cell:
             st.error(f"'{SHEET_NAME_BALANCE}' 시트에서 지점ID '{store_id}'를 찾을 수 없습니다.")
             return False
+            
         header = ws.row_values(1)
         for key, value in updates.items():
             if key in header:
                 col_idx = header.index(key) + 1
                 ws.update_cell(cell.row, col_idx, value)
+        
         st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"잔액/여신 정보 업데이트 중 오류 발생: {e}")
         return False
-        
+
+def update_charge_request(timestamp: str, new_status: str, reason: str = ""):
+    try:
+        ws = open_spreadsheet().worksheet(SHEET_NAME_CHARGE_REQ)
+        cell = ws.find(timestamp, in_column=1)
+        if cell:
+            header = ws.row_values(1)
+            status_col_idx = header.index("상태") + 1
+            reason_col_idx = header.index("처리사유") + 1
+            ws.update_cell(cell.row, status_col_idx, new_status)
+            ws.update_cell(cell.row, reason_col_idx, reason)
+            st.cache_data.clear()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"충전 요청 상태 업데이트 중 오류 발생: {e}")
+        return False
+
 def update_order_status(selected_ids: List[str], new_status: str, handler: str, reason: str = "") -> bool:
     if not selected_ids: return True
     try:
@@ -195,7 +200,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
         return False
 
 # =============================================================================
-# 3) 로그인 및 인증
+# 3) 로그인 및 인증 (지점마스터 시트 기반)
 # =============================================================================
 def authenticate_user(uid, pwd, store_master_df):
     if uid and pwd:
@@ -205,6 +210,7 @@ def authenticate_user(uid, pwd, store_master_df):
             if pwd == stored_pw:
                 role = user_info.iloc[0]['역할']
                 name = user_info.iloc[0]['지점명']
+                # 지점 ID도 반환하도록 수정
                 return {"login": True, "user_id": uid, "name": name, "role": role}
     return {"login": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."}
 
@@ -237,7 +243,7 @@ def require_login():
             else:
                 st.error(auth_result.get("message", "로그인 실패"))
     return False
-
+    
 # =============================================================================
 # 4) Excel 생성
 # =============================================================================
@@ -292,11 +298,11 @@ def make_item_transaction_statement_excel(order_df: pd.DataFrame, store_info: pd
 
         total_row = row_num + 1
         worksheet.merge_range(f'A{total_row}:D{total_row}', '합계', fmt_total)
-        worksheet.write_formula(f'E{total_row}', f"=SUM(E9:E{row_num})", fmt_total)
-        worksheet.write_formula(f'F{total_row}', f"=SUM(F9:F{row_num})", fmt_total)
-        worksheet.write_formula(f'G{total_row}', f"=SUM(G9:G{row_num})", fmt_total)
-        worksheet.write_formula(f'H{total_row}', f"=SUM(H9:H{row_num})", fmt_total)
-
+        worksheet.write(f'E{total_row}', order_df['단가'].sum(), fmt_total)
+        worksheet.write(f'F{total_row}', order_df['공급가액'].sum(), fmt_total)
+        worksheet.write(f'G{total_row}', order_df['세액'].sum(), fmt_total)
+        worksheet.write(f'H{total_row}', order_df['합계금액'].sum(), fmt_total)
+        
     output.seek(0)
     return output
 
@@ -316,24 +322,26 @@ def make_full_transaction_statement_excel(df_transactions: pd.DataFrame, store_i
 
         worksheet.set_paper(9); worksheet.set_landscape(); worksheet.fit_to_pages(1, 1)
         worksheet.set_margins(left=0.5, right=0.5, top=0.5, bottom=0.5)
-        col_widths = {'A': 20, 'B': 12, 'C': 35, 'D': 15, 'E': 15, 'F': 15}
+        col_widths = {'A': 20, 'B': 10, 'C': 30, 'D': 15, 'E': 15, 'F':15, 'G':15}
         for col, width in col_widths.items(): worksheet.set_column(f'{col}:{col}', width)
 
-        worksheet.merge_range('A1:F1', f"{store_info['지점명']} 금전 거래 상세 명세서", fmt_title)
-        headers = ['일시', '구분', '내용', '금액', '선충전 잔액', '사용 여신액']
+        worksheet.merge_range('A1:G1', f"{store_info['지점명']} 금전 거래 상세 명세서", fmt_title)
+        headers = ['일시', '구분', '내용', '금액', '처리후 선충전잔액', '처리후 사용여신액', '관련발주번호']
         worksheet.write_row('A3', headers, fmt_header)
+
+        df_transactions_sorted = df_transactions.sort_values(by="일시").reset_index(drop=True)
         
-        df_sorted = df_transactions.sort_values(by='일시', ascending=True).reset_index(drop=True)
-        
-        for idx, row in df_sorted.iterrows():
-            row_num = idx + 4
-            worksheet.write(f'A{row_num}', row.get('일시', ''), fmt_border_c)
-            worksheet.write(f'B{row_num}', row.get('구분', ''), fmt_border_c)
-            worksheet.write(f'C{row_num}', row.get('내용', ''), fmt_border_l)
-            worksheet.write(f'D{row_num}', row.get('금액', 0), fmt_money)
-            worksheet.write(f'E{row_num}', row.get('처리후선충전잔액', 0), fmt_money)
-            worksheet.write(f'F{row_num}', row.get('처리후사용여신액', 0), fmt_money)
-    
+        row_num = 3
+        for _, row in df_transactions_sorted.iterrows():
+            row_num += 1
+            worksheet.write(f'A{row_num}', str(row['일시']), fmt_border_c)
+            worksheet.write(f'B{row_num}', row['구분'], fmt_border_c)
+            worksheet.write(f'C{row_num}', row['내용'], fmt_border_l)
+            worksheet.write(f'D{row_num}', row['금액'], fmt_money)
+            worksheet.write(f'E{row_num}', row['처리후선충전잔액'], fmt_money)
+            worksheet.write(f'F{row_num}', row['처리후사용여신액'], fmt_money)
+            worksheet.write(f'G{row_num}', row.get('관련발주번호', ''), fmt_border_c)
+            
     output.seek(0)
     return output
 
@@ -355,6 +363,7 @@ def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFr
                 worksheet.write(2, col_num, value, header_format)
             worksheet.set_column(0, len(df_for_format.columns), 14)
             worksheet.conditional_format(3, 1, len(df_for_format) + 2, len(df_for_format.columns), {'type': 'no_blanks', 'format': money_format})
+            
     output.seek(0)
     return output
 
@@ -385,430 +394,348 @@ def add_to_cart(rows_df: pd.DataFrame):
     st.session_state.cart = merged[CART_COLUMNS]
 
 # =============================================================================
-# 6) 지점 페이지
+# 6) 지점 페이지 (UI 복원 버전)
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series):
-    user = st.session_state.auth
     st.subheader("🛒 발주 요청")
-    st.caption("발주할 품목의 수량을 입력하고 '장바구니 담기' 버튼을 클릭하세요.")
-
-    active_items = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
-    if '수량' not in active_items.columns:
-        active_items['수량'] = 0
-
-    edited_df = st.data_editor(
-        active_items[['품목코드', '품목명', '품목규격', '단위', '단가', '수량']],
-        key="item_selector",
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "품목코드": st.column_config.TextColumn(label="품목코드", disabled=True),
-            "품목명": st.column_config.TextColumn(label="품목명", disabled=True),
-            "품목규격": st.column_config.TextColumn(label="규격", disabled=True),
-            "단위": st.column_config.TextColumn(label="단위", disabled=True),
-            "단가": st.column_config.NumberColumn(label="단가", format="%d", disabled=True),
-            "수량": st.column_config.NumberColumn(label="발주수량", min_value=0, step=1),
-        },
-        hide_index=True
-    )
-    if st.button("🛒 장바구니 담기", use_container_width=True):
-        add_to_cart(edited_df)
-        st.rerun()
-
-    st.markdown("---")
-    st.subheader("🛍️ 장바구니")
-    cart = coerce_cart_df(st.session_state.cart)
-    if cart.empty:
-        st.info("장바구니가 비어있습니다. 위 목록에서 품목을 추가해주세요.")
-        return
-
-    st.dataframe(cart, use_container_width=True, hide_index=True)
-    total_price = cart['합계금액'].sum()
-    st.markdown(f"<h4 style='text-align: right; color: {THEME['PRIMARY']};'>총 합계: {total_price:,.0f}원</h4>", unsafe_allow_html=True)
+    user = st.session_state.auth
     
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("🗑️ 장바구니 비우기", use_container_width=True):
-            st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
-            st.rerun()
+    prepaid_balance = int(balance_info.get('선충전잔액', 0))
+    credit_limit = int(balance_info.get('여신한도', 0))
+    used_credit = int(balance_info.get('사용여신액', 0))
+    available_credit = credit_limit - used_credit
+    total_available = prepaid_balance + available_credit
+    
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("선충전 잔액", f"{prepaid_balance:,.0f}원")
+        c2.metric("사용 가능 여신", f"{available_credit:,.0f}원", delta=f"한도: {credit_limit:,.0f}원", delta_color="off")
+        c3.metric("총 결제 가능액", f"{total_available:,.0f}원")
 
-    with col2:
-        if st.button("🚀 발주 요청하기", type="primary", use_container_width=True):
-            if balance_info.empty:
-                st.error("잔액 정보를 불러올 수 없습니다. 관리자에게 문의하세요.")
-                return
-
-            available_credit = balance_info.get('선충전잔액', 0) + (balance_info.get('여신한도', 0) - balance_info.get('사용여신액', 0))
-            if total_price > available_credit:
-                st.error(f"주문 금액({total_price:,.0f}원)이 결제 가능 금액({available_credit:,.0f}원)을 초과합니다.")
-                return
-
-            new_order_id = make_order_id(user['user_id'])
-            order_time = now_kst_str()
-            new_orders = []
-            for _, row in cart.iterrows():
-                unit_price = int(row['단가'])
-                quantity = int(row['수량'])
-                total_amount = unit_price * quantity
-                supply_price = round(total_amount / 1.1)
-                tax_amount = total_amount - supply_price
-                new_orders.append({
-                    "주문일시": order_time, "발주번호": new_order_id, "지점ID": user['user_id'], "지점명": user['name'],
-                    "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": quantity,
-                    "단가": unit_price, "공급가액": supply_price, "세액": tax_amount, "합계금액": total_amount,
-                    "비고": "", "상태": "요청", "처리일시": "", "처리자": "", "반려사유": ""
-                })
-
-            if append_rows_to_sheet(SHEET_NAME_ORDERS, new_orders, ORDERS_COLUMNS):
-                st.session_state.success_message = f"발주 요청이 완료되었습니다. (발주번호: {new_order_id})"
+    if credit_limit > 0 and used_credit > 0 and (available_credit / credit_limit) < 0.2 :
+        st.warning("⚠️ 여신 한도가 20% 미만으로 남았습니다.")
+    v_spacer(10)
+    
+    with st.container(border=True):
+        st.markdown("##### 🧾 발주 수량 입력")
+        l, r = st.columns([2, 1])
+        keyword = l.text_input("품목 검색(이름/코드)", placeholder="오이, P001 등", key="store_reg_keyword")
+        cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
+        cat_sel = r.selectbox("분류(선택)", cat_opt, key="store_reg_category")
+        
+        df_view = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
+        if keyword: df_view = df_view[df_view.apply(lambda row: keyword.strip().lower() in str(row["품목명"]).lower() or keyword.strip().lower() in str(row["품목코드"]).lower(), axis=1)]
+        if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
+        
+        with st.form(key="add_to_cart_form"):
+            df_edit = df_view.copy()
+            df_edit["수량"] = 0
+            edited_disp = st.data_editor(df_edit[["품목코드", "품목명", "단위", "단가", "수량"]], key=f"editor_v{st.session_state.store_editor_ver}", hide_index=True, disabled=["품목코드", "품목명", "단위", "단가"], use_container_width=True, column_config={"단가": st.column_config.NumberColumn(format="%d원"), "수량": st.column_config.NumberColumn(min_value=0)})
+            
+            if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
+                items_to_add = coerce_cart_df(edited_disp)
+                if not items_to_add[items_to_add["수량"] > 0].empty:
+                    add_to_cart(items_to_add); st.session_state.store_editor_ver += 1
+                st.rerun()
+    
+    v_spacer(16)
+    with st.container(border=True):
+        st.markdown("##### 🧺 장바구니")
+        cart = coerce_cart_df(st.session_state.cart)
+        if not cart.empty:
+            st.dataframe(cart, hide_index=True, use_container_width=True)
+            total_price = cart['합계금액'].sum()
+            st.markdown(f"<h4 style='text-align:right;'>합계: {total_price:,.0f}원</h4>", unsafe_allow_html=True)
+            
+            c1, c2 = st.columns(2)
+            memo = c1.text_input("요청사항 (선택)", placeholder="예: 25일 출고 요청")
+            
+            if c2.button("🗑️ 장바구니 비우기", use_container_width=True): 
                 st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
                 st.rerun()
-            else:
-                st.error("발주 요청 중 오류가 발생했습니다.")
+
+            if st.button("📦 발주 제출", type="primary", use_container_width=True):
+                if total_price > total_available:
+                    st.error(f"결제 가능 금액({total_available:,.0f}원)이 부족합니다.")
+                else:
+                    order_id = make_order_id(user["user_id"])
+                    rows, new_balance, new_used_credit = [], prepaid_balance, used_credit
+                    
+                    # 결제 처리
+                    if prepaid_balance >= total_price:
+                        new_balance -= total_price
+                    else:
+                        remaining_cost = total_price - prepaid_balance
+                        new_balance = 0
+                        new_used_credit += remaining_cost
+
+                    for _, r in cart.iterrows():
+                        supply_price = r['합계금액']
+                        # 과세/면세 구분하여 세액 계산
+                        item_info = master_df[master_df['품목코드'] == r['품목코드']].iloc[0]
+                        tax = math.ceil(supply_price * 0.1) if item_info['과세구분'] == '과세' else 0
+                        rows.append({"주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], "품목코드": r["품목코드"], "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"], "단가": r["단가"], "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": memo, "상태": "접수", "처리자": "", "처리일시": "", "반려사유":""})
+                    
+                    if append_rows_to_sheet(SHEET_NAME_ORDERS, rows, ORDERS_COLUMNS):
+                        update_balance_sheet(user["user_id"], {"선충전잔액": new_balance, "사용여신액": new_used_credit})
+                        
+                        transaction_record = {
+                            "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                            "구분": "발주결제", "내용": f"{cart.iloc[0]['품목명']} 등 {len(cart)}건 발주",
+                            "금액": -total_price, "처리후선충전잔액": new_balance,
+                            "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                        }
+                        append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [transaction_record], TRANSACTIONS_COLUMNS)
+                        
+                        st.session_state.success_message = "발주 및 결제가 성공적으로 완료되었습니다."
+                        st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
+                        st.rerun()
+                    else:
+                        st.error("발주 제출 중 오류가 발생했습니다.")
+        else:
+            st.info("장바구니가 비어 있습니다.")
 
 def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series):
-    user = st.session_state.auth
     st.subheader("💰 결제 관리")
-    
-    if balance_info.empty:
-        st.warning("결제 정보를 조회할 수 없습니다. 관리자에게 문의하세요.")
-        return
+    user = st.session_state.auth
 
-    prepaid = int(balance_info.get('선충전잔액', 0))
+    prepaid_balance = int(balance_info.get('선충전잔액', 0))
     credit_limit = int(balance_info.get('여신한도', 0))
-    credit_used = int(balance_info.get('사용여신액', 0))
-    credit_available = credit_limit - credit_used
-    total_available = prepaid + credit_available
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("선충전 잔액", f"{prepaid:,.0f}원")
-    col2.metric("사용 가능 여신", f"{credit_available:,.0f}원", f"총 {credit_limit:,.0f}원")
-    col3.metric("총 결제 가능 금액", f"{total_available:,.0f}원")
+    used_credit = int(balance_info.get('사용여신액', 0))
+    available_credit = credit_limit - used_credit
     
-    st.markdown("---")
-    st.markdown("##### 💳 충전 요청하기")
-    with st.form("charge_request_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns([1,1,2])
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("선충전 잔액", f"{prepaid_balance:,.0f}원")
+        c2.metric("사용 여신액", f"{used_credit:,.0f}원")
+        c3.metric("사용 가능 여신", f"{available_credit:,.0f}원", delta=f"한도: {credit_limit:,.0f}원", delta_color="off")
+        if credit_limit > 0 and (available_credit / credit_limit) < 0.2:
+            st.warning("⚠️ 여신 한도가 20% 미만으로 남았습니다.")
+    
+    st.info("**입금 계좌: OOO은행 123-456-789 (주)산카쿠**\n\n위 계좌로 입금하신 후, 아래 양식을 작성하여 '알림 보내기' 버튼을 눌러주세요.")
+    with st.form("charge_request_form", border=True):
+        st.markdown("##### 입금 완료 알림 보내기")
+        c1, c2, c3 = st.columns(3)
         depositor_name = c1.text_input("입금자명")
-        charge_amount = c2.number_input("입금액", min_value=0, step=10000)
-        charge_type = c3.radio("종류", ["선충전금 충전", "여신 상환"], horizontal=True)
+        charge_amount = c2.number_input("입금액", min_value=1000, step=1000, format="%d")
+        charge_type = c3.radio("종류", ["선충전", "여신상환"], horizontal=True)
         
-        if st.form_submit_button("충전 요청", use_container_width=True, type="primary"):
+        if st.form_submit_button("알림 보내기", type="primary"):
             if depositor_name and charge_amount > 0:
                 new_request = {
-                    "요청일시": now_kst_str(), "지점ID": user['user_id'], "지점명": user['name'],
-                    "입금자명": depositor_name, "입금액": charge_amount, "종류": charge_type,
-                    "상태": "요청", "처리사유": ""
+                    "요청일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                    "입금자명": depositor_name, "입금액": charge_amount, "종류": charge_type, "상태": "확인대기", "처리사유": ""
                 }
                 if append_rows_to_sheet(SHEET_NAME_CHARGE_REQ, [new_request], CHARGE_REQ_COLUMNS):
-                    st.session_state.success_message = "충전 요청이 성공적으로 접수되었습니다."
-                    st.rerun()
-                else:
-                    st.error("충전 요청 중 오류가 발생했습니다.")
-            else:
-                st.warning("입금자명과 입금액을 올바르게 입력해주세요.")
-
+                    st.success("관리자에게 입금 완료 알림을 보냈습니다. 확인 후 처리됩니다.")
+                else: st.error("알림 전송에 실패했습니다.")
+            else: st.warning("입금자명과 입금액을 모두 입력해주세요.")
+            
     st.markdown("---")
-    st.markdown("##### 📜 충전 요청 내역")
+    st.markdown("##### 나의 충전/상환 요청 현황")
     my_requests = charge_requests_df[charge_requests_df['지점ID'] == user['user_id']]
     st.dataframe(my_requests, use_container_width=True, hide_index=True)
 
 
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
-    user = st.session_state.auth
     st.subheader("🧾 발주 조회")
+    display_feedback()
+    df_all_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+    user = st.session_state.auth
     
-    orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
-    my_orders = orders_df[orders_df['지점ID'] == user['user_id']].copy()
+    df_user = df_all_orders[df_all_orders["지점ID"] == user["user_id"]]
+    if df_user.empty: st.info("발주 데이터가 없습니다."); return
     
-    if my_orders.empty:
-        st.info("아직 발주 내역이 없습니다.")
-        return
-
-    # 날짜 필터
-    today = datetime.now(KST).date()
-    c1, c2, _ = st.columns([1, 1, 3])
-    start_date = c1.date_input("조회 시작일", today - timedelta(days=30))
-    end_date = c2.date_input("조회 종료일", today)
+    c1, c2, c3 = st.columns(3)
+    dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_orders_from")
+    dt_to = c2.date_input("조회 종료일", date.today(), key="store_orders_to")
+    order_id_search = c3.text_input("발주번호로 검색", key="store_orders_search", placeholder="전체 또는 일부 입력")
     
-    my_orders['주문일'] = pd.to_datetime(my_orders['주문일시']).dt.date
-    filtered_orders = my_orders[(my_orders['주문일'] >= start_date) & (my_orders['주문일'] <= end_date)]
+    df_filtered = df_user.copy()
+    if order_id_search:
+        df_filtered = df_filtered[df_filtered["발주번호"].str.contains(order_id_search, na=False)]
+    else:
+        df_filtered['주문일시_dt'] = pd.to_datetime(df_filtered['주문일시']).dt.date
+        df_filtered = df_filtered[(df_filtered['주문일시_dt'] >= dt_from) & (df_filtered['주문일시_dt'] <= dt_to)]
+    
+    orders = df_filtered.groupby("발주번호").agg(
+        주문일시=("주문일시", "first"), 
+        건수=("품목코드", "count"), 
+        합계금액=("합계금액", "sum"), 
+        상태=("상태", "first"), 
+        처리일시=("처리일시", "first"),
+        반려사유=("반려사유", "first")
+    ).reset_index().sort_values("주문일시", ascending=False)
+    
+    pending = orders[orders["상태"] == "접수"].copy()
+    shipped = orders[orders["상태"] == "출고완료"].copy()
+    rejected = orders[orders["상태"] == "반려"].copy()
 
-    unique_order_ids = filtered_orders['발주번호'].unique()
-
-    for order_id in unique_order_ids:
-        order_items = filtered_orders[filtered_orders['발주번호'] == order_id]
-        order_info = order_items.iloc[0]
-        total_amount = order_items['합계금액'].sum()
-        status = order_info['상태']
+    tab1, tab2, tab3 = st.tabs([f"접수 ({len(pending)}건)", f"출고완료 ({len(shipped)}건)", f"반려 ({len(rejected)}건)"])
+    
+    with tab1:
+        st.dataframe(pending, hide_index=True, use_container_width=True)
+    
+    with tab2:
+        st.dataframe(shipped, hide_index=True, use_container_width=True)
         
-        status_color = {"요청": "blue", "승인": "green", "반려": "red"}.get(status, "gray")
-        
-        with st.expander(f"**{order_info['주문일시']}** | 발주번호: {order_id} | 총 {total_amount:,.0f}원 | 상태: <span style='color:{status_color};'>{status}</span>", expanded=False):
-            st.dataframe(order_items[['품목명', '단위', '수량', '단가', '합계금액']], use_container_width=True, hide_index=True)
-            if status == "반려":
-                st.warning(f"반려 사유: {order_info.get('반려사유', '기재 없음')}")
-            
-            # 발주 요청 상태일 때만 취소 버튼 표시
-            if status == "요청":
-                if st.button("이 발주 요청 취소하기", key=f"cancel_{order_id}", type="secondary"):
-                    update_order_status([order_id], "취소", user['name'])
-                    st.success(f"발주번호 {order_id}가 취소되었습니다.")
-                    st.rerun()
+    with tab3:
+        st.dataframe(rejected[['주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], hide_index=True, use_container_width=True)
 
 def page_store_documents(store_info_df: pd.DataFrame):
-    user = st.session_state.auth
     st.subheader("📑 증빙서류 다운로드")
-
-    doc_type = st.radio("다운로드할 서류 종류를 선택하세요.", ["품목 거래명세서", "금전 거래 상세 명세서"], horizontal=True, key="store_doc_type")
+    user = st.session_state.auth
     
-    my_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
-    
-    if doc_type == "품목 거래명세서":
-        orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
-        my_orders = orders_df[(orders_df['지점ID'] == user['user_id']) & (orders_df['상태'] == '승인')]
-        
-        if my_orders.empty:
-            st.warning("다운로드할 승인된 발주 내역이 없습니다.")
-            return
-            
-        order_options = my_orders.groupby('발주번호')['주문일시'].first().sort_index(ascending=False).apply(lambda x: f"{x} - {my_orders[my_orders['발주번호'] == my_orders.loc[my_orders['주문일시']==x].iloc[0]['발주번호']]['합계금액'].sum():,}원")
-        selected_order_id = st.selectbox("거래명세서를 출력할 발주번호를 선택하세요.", order_options.index, format_func=lambda x: order_options[x])
-        
-        if st.button("엑셀 다운로드", key="download_order_statement"):
-            order_to_print = my_orders[my_orders['발주번호'] == selected_order_id]
-            excel_data = make_item_transaction_statement_excel(order_to_print, my_info)
-            st.download_button(
-                label="✅ 다운로드 준비 완료",
-                data=excel_data,
-                file_name=f"거래명세서_{my_info['지점명']}_{selected_order_id}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+    c1, c2, c3 = st.columns(3)
+    dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
+    dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
+    doc_type = c3.selectbox("서류 종류", ["금전 거래내역서", "품목 거래내역서"])
 
-    elif doc_type == "금전 거래 상세 명세서":
+    my_store_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
+
+    if doc_type == "금전 거래내역서":
         transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
         my_transactions = transactions_df[transactions_df['지점ID'] == user['user_id']]
+        if my_transactions.empty: st.info("거래 내역이 없습니다."); return
         
-        if my_transactions.empty:
-            st.warning("거래 내역이 없습니다.")
-            return
+        my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시']).dt.date
+        mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
+        dfv = my_transactions[mask].copy()
+        if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
+        st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+        
+        buf = make_full_transaction_statement_excel(dfv, my_store_info)
+        st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
-        today = datetime.now(KST).date()
-        c1, c2, _ = st.columns([1, 1, 3])
-        start_date = c1.date_input("조회 시작일", today - timedelta(days=365))
-        end_date = c2.date_input("조회 종료일", today)
+    elif doc_type == "품목 거래내역서":
+        orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+        my_orders = orders_df[(orders_df['지점ID'] == user['user_id']) & (orders_df['상태'] == '출고완료')]
+        if my_orders.empty: st.info("출고 완료된 발주 내역이 없습니다."); return
 
-        my_transactions['거래일'] = pd.to_datetime(my_transactions['일시']).dt.date
-        filtered_transactions = my_transactions[(my_transactions['거래일'] >= start_date) & (my_transactions['거래일'] <= end_date)]
-
-        if st.button("엑셀 다운로드", key="download_full_statement"):
-            excel_data = make_full_transaction_statement_excel(filtered_transactions, my_info)
-            st.download_button(
-                label="✅ 다운로드 준비 완료",
-                data=excel_data,
-                file_name=f"금전거래명세서_{my_info['지점명']}_{start_date}~{end_date}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+        my_orders['주문일시_dt'] = pd.to_datetime(my_orders['주문일시']).dt.date
+        mask = (my_orders['주문일시_dt'] >= dt_from) & (my_orders['주문일시_dt'] <= dt_to)
+        dfv = my_orders[mask].copy()
+        if dfv.empty: st.warning("해당 기간의 출고 완료된 발주 내역이 없습니다."); return
+        st.dataframe(dfv, use_container_width=True, hide_index=True)
+        
+        # 다운로드는 단일 발주건만 가능하므로, Selectbox로 선택하게 함
+        selected_order_id = st.selectbox("다운로드할 발주번호 선택", dfv['발주번호'].unique())
+        if selected_order_id:
+            order_to_print = dfv[dfv['발주번호'] == selected_order_id]
+            buf = make_item_transaction_statement_excel(order_to_print, my_store_info)
+            st.download_button(f"'{selected_order_id}' 품목거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{selected_order_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
-    st.caption("현재 발주 가능한 전체 품목 및 단가 정보입니다.")
-    active_items = master_df[master_df['활성'].astype(str).str.lower() == 'true']
-    st.dataframe(active_items[['품목코드', '분류', '품목명', '품목규격', '단위', '단가']], use_container_width=True, hide_index=True)
+    l, r = st.columns([2, 1])
+    keyword = l.text_input("품목 검색(이름/코드)", placeholder="오이, P001 등", key="store_master_keyword")
+    cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
+    cat_sel = r.selectbox("분류(선택)", cat_opt, key="store_master_category")
+    
+    df_view = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
+    if keyword: df_view = df_view[df_view.apply(lambda row: keyword.strip().lower() in str(row["품목명"]).lower() or keyword.strip().lower() in str(row["품목코드"]).lower(), axis=1)]
+    if cat_sel != "(전체)": df_view = df_view[df_view["분류"] == cat_sel]
+    
+    st.dataframe(df_view[["품목코드", "품목명", "품목규격", "분류", "단위", "단가"]], use_container_width=True, hide_index=True, column_config={"단가": st.column_config.NumberColumn(format="%d원")})
+
 
 # =============================================================================
-# 7) 관리자 페이지
+# 7) 관리자 페이지 (UI 복원 버전)
 # =============================================================================
 def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📋 발주요청 통합 관리")
+    display_feedback()
     
-    if df_all.empty:
-        st.info("현재 접수된 발주 요청이 없습니다.")
-        return
-
-    # 필터링 UI
+    if df_all.empty: st.info("발주 데이터가 없습니다."); return
+    
     c1, c2, c3 = st.columns(3)
-    status_filter = c1.multiselect("상태", options=df_all['상태'].unique(), default=["요청"])
-    store_filter = c2.multiselect("지점명", options=store_info_df['지점명'].unique())
-    
-    # 날짜 필터
-    today = datetime.now(KST).date()
-    start_date = c3.date_input("조회 시작일", today - timedelta(days=7), key="admin_order_start")
-    
-    filtered_df = df_all.copy()
-    if status_filter:
-        filtered_df = filtered_df[filtered_df['상태'].isin(status_filter)]
-    if store_filter:
-        filtered_df = filtered_df[filtered_df['지점명'].isin(store_filter)]
-    
-    filtered_df['주문일'] = pd.to_datetime(filtered_df['주문일시']).dt.date
-    filtered_df = filtered_df[filtered_df['주문일'] >= start_date]
-    
-    # 발주 번호별로 그룹화하여 표시
-    order_groups = filtered_df.groupby('발주번호')
-    
-    if order_groups.ngroups == 0:
-        st.warning("선택한 조건에 맞는 발주 내역이 없습니다.")
-        return
+    status_filter = c1.selectbox("상태", ["전체", "접수", "출고완료", "반려"], key="admin_status_filter")
+    store_filter = c2.selectbox("지점", ["전체"] + store_info_df['지점명'].tolist(), key="admin_store_filter")
+    order_id_search = c3.text_input("발주번호 검색", key="admin_order_search")
 
-    selected_order_ids = []
+    df_filtered = df_all.copy()
+    if status_filter != "전체": df_filtered = df_filtered[df_filtered['상태'] == status_filter]
+    if store_filter != "전체": df_filtered = df_filtered[df_filtered['지점명'] == store_filter]
+    if order_id_search: df_filtered = df_filtered[df_filtered['발주번호'].str.contains(order_id_search, na=False)]
     
-    # 전체 선택 체크박스
-    select_all = st.checkbox("전체 선택", key="select_all_orders")
+    order_groups = df_filtered.groupby("발주번호")
     
+    selected_ids = []
     for order_id, group in order_groups:
-        order_info = group.iloc[0]
-        total_amount = group['합계금액'].sum()
-        
-        expander_cols = st.columns([0.05, 0.95])
-        with expander_cols[1]:
-            with st.expander(f"**{order_info['지점명']}** - {order_info['주문일시']} (총 {total_amount:,.0f}원)"):
-                st.dataframe(group[['품목명', '단위', '수량', '단가', '합계금액']], hide_index=True, use_container_width=True)
-
-        checkbox_checked = expander_cols[0].checkbox("", key=f"select_{order_id}", value=select_all)
-        if checkbox_checked:
-            selected_order_ids.append(order_id)
-            
+        with st.expander(f"{group.iloc[0]['지점명']} - {group.iloc[0]['주문일시']} (발주번호: {order_id}, 상태: {group.iloc[0]['상태']})"):
+            st.dataframe(group[['품목명', '수량', '합계금액']], hide_index=True)
+            if group.iloc[0]['상태'] == '접수':
+                selected = st.checkbox("선택", key=f"select_{order_id}")
+                if selected:
+                    selected_ids.append(order_id)
+    
+    if not selected_ids: 
+        if status_filter == '접수' or status_filter == '전체':
+            st.info("처리할 '접수' 상태의 발주를 선택하세요.")
+        return
+    
     st.markdown("---")
-    st.markdown("##### 📦 선택한 발주 처리")
+    st.write(f"**선택된 발주 {len(selected_ids)}건 처리**")
     
-    if not selected_order_ids:
-        st.caption("처리할 발주를 위에서 선택하세요.")
-        return
-        
-    st.write(f"**선택된 발주 {len(selected_order_ids)}건**")
-    
-    action_cols = st.columns(2)
-    
-    with action_cols[0]:
-        if st.button("✅ 일괄 승인", use_container_width=True, type="primary"):
-            balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-            
-            # 발주 승인 및 잔액 차감 로직
-            with st.spinner("발주를 승인하고 잔액을 처리 중입니다..."):
-                all_succeeded = True
-                transactions_to_add = []
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✅ 일괄 출고 완료 처리", use_container_width=True, type="primary"):
+            update_order_status(selected_ids, "출고완료", st.session_state.auth["name"])
+            st.session_state.success_message = f"{len(selected_ids)}건의 발주가 '출고완료' 처리되었습니다."
+            st.rerun()
 
-                for order_id in selected_order_ids:
-                    order_data = df_all[df_all['발주번호'] == order_id]
-                    store_id = order_data.iloc[0]['지점ID']
-                    store_name = order_data.iloc[0]['지점명']
-                    order_total = order_data['합계금액'].sum()
-                    
-                    current_balance_info = balance_df[balance_df['지점ID'] == store_id]
-                    if current_balance_info.empty:
-                        st.error(f"{store_name}의 잔액 정보를 찾을 수 없어 처리를 중단합니다.")
-                        all_succeeded = False
-                        break
-                    
-                    current_balance = current_balance_info.iloc[0]
-                    prepaid = current_balance.get('선충전잔액', 0)
-                    credit_used = current_balance.get('사용여신액', 0)
-                    
-                    # 선충전금에서 먼저 차감
-                    new_prepaid = prepaid - order_total
-                    new_credit_used = credit_used
-                    
-                    if new_prepaid < 0:
-                        # 부족분은 여신에서 차감
-                        new_credit_used += abs(new_prepaid)
-                        new_prepaid = 0
-
-                    updates = {'선충전잔액': new_prepaid, '사용여신액': new_credit_used}
-                    if update_balance_sheet(store_id, updates):
-                        update_order_status([order_id], "승인", st.session_state.auth['name'])
-                        transactions_to_add.append({
-                            "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name,
-                            "구분": "발주승인", "내용": f"발주승인 (주문번호:{order_id})", "금액": -order_total,
-                            "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_credit_used,
-                            "관련발주번호": order_id, "처리자": st.session_state.auth['name']
-                        })
-                    else:
-                        st.error(f"{store_name}의 발주(번호:{order_id}) 처리 중 오류가 발생했습니다.")
-                        all_succeeded = False
-                        break
-                
-                if all_succeeded and transactions_to_add:
-                    append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, transactions_to_add, TRANSACTIONS_COLUMNS)
-                    st.success(f"{len(selected_order_ids)}건의 발주가 성공적으로 승인 처리되었습니다.")
-                    st.rerun()
-
-    with action_cols[1]:
-        rejection_reason = st.text_input("반려 사유 (일괄 적용)", placeholder="예: 재고 부족")
-        if st.button("❌ 일괄 반려", use_container_width=True):
+    with c2:
+        rejection_reason = st.text_input("반려 사유", placeholder="예: 재고 부족")
+        if st.button("❌ 일괄 반려 처리", use_container_width=True):
             if not rejection_reason:
-                st.warning("반려 사유를 입력해주세요.")
+                st.warning("반려 사유를 입력해야 합니다.")
             else:
-                if update_order_status(selected_order_ids, "반려", st.session_state.auth['name'], rejection_reason):
-                    st.success(f"{len(selected_order_ids)}건의 발주가 반려 처리되었습니다.")
+                with st.spinner("발주 반려 및 환불 처리 중..."):
+                    df_balance = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
+                    df_transactions = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+                    
+                    for order_id in selected_ids:
+                        order_items = df_all[df_all['발주번호'] == order_id]
+                        store_id = order_items.iloc[0]['지점ID']
+                        
+                        original_tx = df_transactions[df_transactions['관련발주번호'] == order_id]
+                        if not original_tx.empty:
+                            tx = original_tx.iloc[0]
+                            refund_amount = abs(tx['금액'])
+                            
+                            balance_info = df_balance[df_balance['지점ID'] == store_id].iloc[0]
+                            
+                            new_prepaid = balance_info['선충전잔액']
+                            new_used_credit = balance_info['사용여신액']
+
+                            # 환불 로직: 사용된 여신부터 복구하고, 나머지를 선충전액으로
+                            used_credit_on_tx = tx['처리후사용여신액']
+                            prev_used_credit = used_credit_on_tx - (tx['처리후선충전잔액'] - balance_info['선충전잔액']) if tx['처리후선충전잔액'] < balance_info['선충전잔액'] else used_credit_on_tx
+
+                            credit_refund = min(refund_amount, balance_info['사용여신액'])
+                            prepaid_refund = refund_amount - credit_refund
+                            
+                            new_used_credit -= credit_refund
+                            new_prepaid += prepaid_refund
+                            
+                            update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
+                            
+                            refund_tx = {
+                                "일시": now_kst_str(), "지점ID": store_id, "지점명": tx['지점명'],
+                                "구분": "발주반려", "내용": f"발주 반려 환불 ({order_id})", "금액": refund_amount,
+                                "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit,
+                                "관련발주번호": order_id, "처리자": st.session_state.auth["name"]
+                            }
+                            append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [refund_tx], TRANSACTIONS_COLUMNS)
+                    
+                    update_order_status(selected_ids, "반려", st.session_state.auth["name"], reason=rejection_reason)
+                    st.session_state.success_message = f"{len(selected_ids)}건이 반려 처리되고 환불되었습니다."
                     st.rerun()
-
-def page_admin_documents(store_info_df: pd.DataFrame):
-    st.subheader("📑 증빙서류 다운로드 (관리자)")
-
-    selected_store_name = st.selectbox("서류를 다운로드할 지점을 선택하세요.", options=store_info_df['지점명'].unique())
-    
-    if not selected_store_name:
-        st.info("지점을 먼저 선택해주세요.")
-        return
-        
-    selected_store_info = store_info_df[store_info_df['지점명'] == selected_store_name].iloc[0]
-    selected_store_id = selected_store_info['지점ID']
-
-    doc_type = st.radio("다운로드할 서류 종류를 선택하세요.", ["품목 거래명세서", "금전 거래 상세 명세서"], horizontal=True, key="admin_doc_type")
-    
-    if doc_type == "품목 거래명세서":
-        orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
-        store_orders = orders_df[(orders_df['지점ID'] == selected_store_id) & (orders_df['상태'] == '승인')]
-        
-        if store_orders.empty:
-            st.warning(f"{selected_store_name} 지점의 승인된 발주 내역이 없습니다.")
-            return
-            
-        order_options = store_orders.groupby('발주번호')['주문일시'].first().sort_index(ascending=False).apply(lambda x: f"{x} - {store_orders[store_orders['발주번호'] == store_orders.loc[store_orders['주문일시']==x].iloc[0]['발주번호']]['합계금액'].sum():,}원")
-        selected_order_id = st.selectbox("거래명세서를 출력할 발주번호를 선택하세요.", order_options.index, format_func=lambda x: order_options[x], key=f"order_select_{selected_store_id}")
-        
-        if st.button("엑셀 다운로드", key="admin_download_order_statement"):
-            order_to_print = store_orders[store_orders['발주번호'] == selected_order_id]
-            excel_data = make_item_transaction_statement_excel(order_to_print, selected_store_info)
-            st.download_button(
-                label="✅ 다운로드 준비 완료",
-                data=excel_data,
-                file_name=f"거래명세서_{selected_store_name}_{selected_order_id}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
-
-    elif doc_type == "금전 거래 상세 명세서":
-        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
-        store_transactions = transactions_df[transactions_df['지점ID'] == selected_store_id]
-        
-        if store_transactions.empty:
-            st.warning(f"{selected_store_name} 지점의 거래 내역이 없습니다.")
-            return
-
-        today = datetime.now(KST).date()
-        c1, c2, _ = st.columns([1, 1, 3])
-        start_date = c1.date_input("조회 시작일", today - timedelta(days=365), key=f"trans_start_{selected_store_id}")
-        end_date = c2.date_input("조회 종료일", today, key=f"trans_end_{selected_store_id}")
-
-        store_transactions['거래일'] = pd.to_datetime(store_transactions['일시']).dt.date
-        filtered_transactions = store_transactions[(store_transactions['거래일'] >= start_date) & (store_transactions['거래일'] <= end_date)]
-
-        if st.button("엑셀 다운로드", key="admin_download_full_statement"):
-            excel_data = make_full_transaction_statement_excel(filtered_transactions, selected_store_info)
-            st.download_button(
-                label="✅ 다운로드 준비 완료",
-                data=excel_data,
-                file_name=f"금전거래명세서_{selected_store_name}_{start_date}~{end_date}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
-
 
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.subheader("📈 매출 조회")
-    
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
-    approved_orders = orders_df[orders_df['상태'] == '승인'].copy()
+    approved_orders = orders_df[orders_df['상태'] == '출고완료'].copy()
     
     if approved_orders.empty:
         st.info("매출 데이터가 없습니다.")
@@ -816,14 +743,9 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
 
     approved_orders['주문일시'] = pd.to_datetime(approved_orders['주문일시'])
     
-    # 날짜 범위 선택
-    today = datetime.now(KST).date()
     c1, c2, _ = st.columns([1,1,3])
-    start_date = c1.date_input("조회 시작일", today - timedelta(days=30))
-    end_date = c2.date_input("조회 종료일", today)
-    
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
+    start_date = c1.date_input("조회 시작일", date.today() - timedelta(days=30))
+    end_date = c2.date_input("조회 종료일", date.today())
     
     mask = (approved_orders['주문일시'].dt.date >= start_date) & (approved_orders['주문일시'].dt.date <= end_date)
     filtered_sales = approved_orders.loc[mask]
@@ -832,181 +754,170 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
         st.warning("선택한 기간에 해당하는 매출 데이터가 없습니다.")
         return
 
-    # 일별 매출 현황
     st.markdown("##### 📅 일별 매출 현황")
     daily_pivot = filtered_sales.pivot_table(index='지점명', columns=filtered_sales['주문일시'].dt.strftime('%Y-%m-%d'), values='합계금액', aggfunc='sum', fill_value=0)
     st.dataframe(daily_pivot.style.format("{:,.0f}"))
 
-    # 월별 매출 현황
     st.markdown("##### 🗓️ 월별 매출 현황")
     monthly_pivot = filtered_sales.pivot_table(index='지점명', columns=filtered_sales['주문일시'].dt.strftime('%Y-%m'), values='합계금액', aggfunc='sum', fill_value=0)
     st.dataframe(monthly_pivot.style.format("{:,.0f}"))
     
-    # 엑셀 다운로드
     excel_data = make_sales_summary_excel(daily_pivot, monthly_pivot)
-    st.download_button(
-        label=" 매출 현황 엑셀 다운로드",
-        data=excel_data,
-        file_name=f"매출현황_{start_date}~{end_date}.xlsx",
-        mime="application/vnd.ms-excel"
-    )
+    st.download_button("엑셀 다운로드", data=excel_data, file_name=f"매출현황_{start_date}_to_{end_date}.xlsx", mime="application/vnd.ms-excel")
 
 def page_admin_balance_management(store_info_df: pd.DataFrame):
-    st.subheader("💰 결제 관리 (충전/여신)")
+    st.subheader("💰 결제 관리")
+    charge_req_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
+    balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
+    pending_requests = charge_req_df[charge_req_df['상태'] == '확인대기']
     
-    tab1, tab2 = st.tabs(["충전 요청 처리", "지점별 잔액 현황"])
-    
-    with tab1:
-        st.markdown("##### 💳 충전 요청 처리")
-        charge_req_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
-        pending_requests = charge_req_df[charge_req_df['상태'] == '요청'].copy()
+    st.markdown("##### 💳 충전/상환 요청 처리")
+    if pending_requests.empty:
+        st.info("처리 대기 중인 요청이 없습니다.")
+    else:
+        st.dataframe(pending_requests, hide_index=True)
         
-        if pending_requests.empty:
-            st.info("현재 처리 대기 중인 충전 요청이 없습니다.")
-        else:
-            edited_requests = st.data_editor(
-                pending_requests,
-                column_config={"선택": st.column_config.CheckboxColumn(default=False)},
-                disabled=CHARGE_REQ_COLUMNS,
-                hide_index=True,
-                key="charge_req_editor"
-            )
-            
-            selected_requests = edited_requests[edited_requests['선택']]
-            
-            if not selected_requests.empty:
-                st.write(f"**선택된 요청 {len(selected_requests)}건**")
-                c1, c2 = st.columns(2)
-                
-                with c1:
-                    if st.button("✅ 일괄 승인", use_container_width=True, type="primary"):
-                        balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-                        all_req = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
-                        transactions = []
-                        
-                        with st.spinner("충전 요청을 처리중입니다..."):
-                            for idx, req in selected_requests.iterrows():
-                                store_id = req['지점ID']
-                                current_balance = balance_df.loc[balance_df['지점ID'] == store_id].iloc[0]
-                                new_prepaid, new_credit_used = current_balance['선충전잔액'], current_balance['사용여신액']
+        c1, c2, c3 = st.columns(3)
+        req_options = {f"{row['요청일시']} / {row['지점명']} / {row['입금액']:,}원": row for _, row in pending_requests.iterrows()}
+        selected_req_str = c1.selectbox("처리할 요청 선택", req_options.keys())
+        action = c2.selectbox("처리 방식", ["승인", "반려"])
+        reason = c3.text_input("반려 사유 (반려 시 필수)")
 
-                                if req['종류'] == '선충전금 충전':
-                                    new_prepaid += req['입금액']
-                                    desc = f"선충전금 충전 ({req['입금자명']})"
-                                else: # 여신 상환
-                                    new_credit_used -= req['입금액']
-                                    if new_credit_used < 0: # 초과 상환 시 선충전금으로
-                                        new_prepaid += abs(new_credit_used)
-                                        new_credit_used = 0
-                                    desc = f"여신 상환 ({req['입금자명']})"
-                                
-                                update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_credit_used})
-                                transactions.append({
-                                    "일시": now_kst_str(), "지점ID": store_id, "지점명": req['지점명'], "구분": "입금",
-                                    "내용": desc, "금액": req['입금액'], "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_credit_used,
-                                    "관련발주번호": "", "처리자": st.session_state.auth['name']
-                                })
-                                # 원본 데이터프레임 상태 변경
-                                all_req.loc[(all_req['요청일시'] == req['요청일시']) & (all_req['지점ID'] == req['지점ID']), '상태'] = '승인'
-                            
-                            append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, transactions, TRANSACTIONS_COLUMNS)
-                            save_df_to_sheet(SHEET_NAME_CHARGE_REQ, all_req)
-                        
-                        st.success(f"{len(selected_requests)}건의 충전 요청이 성공적으로 처리되었습니다.")
-                        st.rerun()
+        if st.button("처리 실행", type="primary"):
+            selected_req = req_options[selected_req_str]
+            if action == "반려" and not reason:
+                st.warning("반려 시 사유를 입력해야 합니다.")
+            else:
+                if action == "승인":
+                    store_id = selected_req['지점ID']
+                    current_balance = balance_df[balance_df['지점ID'] == store_id].iloc[0]
+                    amount = selected_req['입금액']
+                    new_prepaid, new_used_credit = current_balance['선충전잔액'], current_balance['사용여신액']
 
-                with c2:
-                    reason = st.text_input("반려 사유 (일괄 적용)")
-                    if st.button("❌ 일괄 반려", use_container_width=True):
-                        if not reason:
-                            st.warning("반려 사유를 입력해야 합니다.")
-                        else:
-                            all_req = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
-                            for idx, req in selected_requests.iterrows():
-                                all_req.loc[(all_req['요청일시'] == req['요청일시']) & (all_req['지점ID'] == req['지점ID']), ['상태', '처리사유']] = ['반려', reason]
-                            save_df_to_sheet(SHEET_NAME_CHARGE_REQ, all_req)
-                            st.success(f"{len(selected_requests)}건의 요청이 반려 처리되었습니다.")
-                            st.rerun()
+                    if selected_req['종류'] == '선충전':
+                        new_prepaid += amount
+                    else: # 여신상환
+                        new_used_credit -= amount
+                        if new_used_credit < 0: # 초과상환
+                            new_prepaid += abs(new_used_credit)
+                            new_used_credit = 0
 
-    with tab2:
-        st.markdown("##### 🏢 지점별 잔액/여신 현황")
-        balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-        st.dataframe(balance_df, hide_index=True, use_container_width=True)
-        
-def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame):
-    st.subheader("🛠️ 관리 설정")
-    
-    tab1, tab2 = st.tabs(["품목 관리", "지점 관리"])
-
-    with tab1:
-        st.markdown("##### 🏷️ 품목 정보 설정")
-        st.caption("품목을 추가/수정/삭제한 후 '품목 정보 저장' 버튼을 누르세요.")
-        
-        edited_master_df = st.data_editor(
-            master_df_raw, 
-            num_rows="dynamic", 
-            use_container_width=True,
-            key="master_editor"
-        )
-        
-        if st.button("품목 정보 저장", type="primary", key="save_master"):
-            if save_df_to_sheet(SHEET_NAME_MASTER, edited_master_df):
-                st.success("상품 마스터가 성공적으로 저장되었습니다. 데이터가 즉시 반영됩니다.")
+                    update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
+                    update_charge_request(selected_req['요청일시'], "승인")
+                    
+                    transaction = {
+                        "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_req['지점명'], "구분": "입금",
+                        "내용": f"{selected_req['종류']} ({selected_req['입금자명']})", "금액": amount,
+                        "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": "", "처리자": st.session_state.auth["name"]
+                    }
+                    append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [transaction], TRANSACTIONS_COLUMNS)
+                    st.success("요청이 승인 처리되었습니다.")
+                else: # 반려
+                    update_charge_request(selected_req['요청일시'], "반려", reason)
+                    st.success("요청이 반려 처리되었습니다.")
                 st.rerun()
 
-    with tab2:
-        st.markdown("##### 🏢 지점(사용자) 정보 설정")
-        st.caption("지점(사용자)을 추가/수정/삭제한 후 '지점 정보 저장' 버튼을 누르세요. 역할은 'admin' 또는 'store'만 가능합니다.")
-        
-        edited_store_df = st.data_editor(
-            store_info_df_raw, 
-            num_rows="dynamic", 
-            use_container_width=True,
-            key="store_editor"
-        )
+    st.markdown("---")
+    st.markdown("##### 🏢 지점별 잔액 현황")
+    st.dataframe(balance_df, hide_index=True)
 
-        if st.button("지점 정보 저장", type="primary", key="save_stores"):
-            # TODO: 지점 추가/삭제 시 잔액 마스터 시트와 동기화하는 로직 추가 필요
-            if save_df_to_sheet(SHEET_NAME_STORES, edited_store_df):
-                st.success("지점 마스터가 성공적으로 저장되었습니다. 변경사항은 다음 로그인부터 적용됩니다.")
-                st.rerun()
+def page_admin_documents(store_info_df: pd.DataFrame):
+    st.subheader("📑 증빙서류 다운로드")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="admin_doc_from")
+    dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to")
+    
+    stores = ["(모든 지점)"] + sorted(store_info_df["지점명"].dropna().unique().tolist())
+    store_sel = c3.selectbox("지점 선택", stores, key="admin_doc_store")
+    doc_type = c4.selectbox("서류 종류", ["금전 거래내역서", "품목 거래내역서"])
+    
+    if store_sel == "(모든 지점)":
+        st.info("지점을 선택하면 내역 조회 및 다운로드가 가능합니다.")
+        return
+        
+    selected_store_info = store_info_df[store_info_df['지점명'] == store_sel].iloc[0]
+
+    if doc_type == "금전 거래내역서":
+        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+        store_transactions = transactions_df[transactions_df['지점명'] == store_sel]
+        
+        store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시']).dt.date
+        mask = (store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)
+        dfv = store_transactions[mask].copy()
+
+        st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+        if not dfv.empty:
+            buf = make_full_transaction_statement_excel(dfv, selected_store_info)
+            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{store_sel}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+
+    elif doc_type == "품목 거래내역서":
+        orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+        store_orders = orders_df[(orders_df['지점명'] == store_sel) & (orders_df['상태'] == '출고완료')]
+        
+        store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시']).dt.date
+        mask = (store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)
+        dfv = store_orders[mask].copy()
+
+        st.dataframe(dfv, use_container_width=True, hide_index=True)
+        if not dfv.empty:
+            selected_order_id = st.selectbox("다운로드할 발주번호 선택", dfv['발주번호'].unique())
+            if selected_order_id:
+                order_to_print = dfv[dfv['발주번호'] == selected_order_id]
+                buf = make_item_transaction_statement_excel(order_to_print, selected_store_info)
+                st.download_button(f"'{selected_order_id}' 품목거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{store_sel}_{selected_order_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+
+def page_admin_items_price(master_df: pd.DataFrame):
+    st.subheader("🏷️ 품목 단가 설정")
+    st.caption("품목 정보를 수정하고 '저장하기' 버튼을 누르면 시트에 반영됩니다.")
+
+    edited_df = st.data_editor(master_df, num_rows="dynamic", use_container_width=True)
+    
+    if st.button("변경된 품목 정보 저장하기", type="primary"):
+        ws = open_spreadsheet().worksheet(SHEET_NAME_MASTER)
+        ws.clear()
+        ws.update([edited_df.columns.values.tolist()] + edited_df.fillna('').values.tolist(), value_input_option='USER_ENTERED')
+        st.cache_data.clear()
+        st.success("품목 정보가 성공적으로 업데이트되었습니다.")
+        st.rerun()
 
 # =============================================================================
 # 8) 라우팅
 # =============================================================================
 if __name__ == "__main__":
-    if not require_login():
-        st.stop()
-        
+    if not require_login(): st.stop()
     init_session_state()
     st.title("📦 식자재 발주 시스템")
     display_feedback()
     user = st.session_state.auth
     
-    # 데이터 로딩
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
     store_info_df_raw = load_data(SHEET_NAME_STORES, STORES_COLUMNS)
+    
+    if user["role"] == "admin":
+        store_info_df = store_info_df_raw[store_info_df_raw['지점명'] != '대전 가공장'].copy()
+    else:
+        store_info_df = store_info_df_raw
+
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
 
     if user["role"] == "admin":
-        store_info_for_display = store_info_df_raw[store_info_df_raw['역할'] == 'store'].copy()
-        
-        tabs = st.tabs(["📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"])
-        with tabs[0]: page_admin_unified_management(orders_df, store_info_for_display, master_df)
+        tabs = st.tabs(["📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 설정"])
+        with tabs[0]: page_admin_unified_management(orders_df, store_info_df, master_df)
         with tabs[1]: page_admin_sales_inquiry(master_df)
-        with tabs[2]: page_admin_balance_management(store_info_for_display)
-        with tabs[3]: page_admin_documents(store_info_for_display)
-        with tabs[4]: page_admin_settings(store_info_df_raw, master_df)
-    
+        with tabs[2]: page_admin_balance_management(store_info_df)
+        with tabs[3]: page_admin_documents(store_info_df)
+        with tabs[4]: page_admin_items_price(master_df)
     else: # store
+        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
+        
         my_balance_series = balance_df[balance_df['지점ID'] == user['user_id']]
-        my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype=object)
+        my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype='object')
         
         my_store_info = store_info_df_raw[store_info_df_raw['지점ID'] == user['user_id']]
 
-        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
         with tabs[0]: page_store_register_confirm(master_df, my_balance_info)
         with tabs[1]: page_store_orders_change(my_store_info, master_df)
         with tabs[2]: page_store_balance(charge_requests_df, my_balance_info)
