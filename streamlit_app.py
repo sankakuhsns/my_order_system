@@ -237,7 +237,6 @@ def load_master_df() -> pd.DataFrame:
         st.error(f"'{SHEET_NAME_MASTER}' 시트를 찾을 수 없습니다."); return pd.DataFrame()
 
 def write_master_df(df: pd.DataFrame, original_df: pd.DataFrame) -> bool:
-    # ... (생략된 함수)
     st.error("write_master_df 함수가 구현되지 않았습니다.")
     return False
 
@@ -253,27 +252,72 @@ def load_orders_df() -> pd.DataFrame:
         df = df.sort_values(by="주문일시", ascending=False)
         return df[ORDERS_COLUMNS].copy()
     except gspread.WorksheetNotFound:
+        st.warning(f"'{SHEET_NAME_ORDERS}' 시트가 없어 새로 생성합니다. 첫 발주 후 확인해주세요.")
         return pd.DataFrame(columns=ORDERS_COLUMNS)
 
-def write_orders_df(df: pd.DataFrame) -> bool:
-    # ... (생략된 함수)
-    st.error("write_orders_df 함수가 구현되지 않았습니다.")
-    return False
-
+# [수정] append_orders 함수 구현
 def append_orders(rows: List[Dict[str, Any]]) -> bool:
-    # ... (생략된 함수)
-    st.error("append_orders 함수가 구현되지 않았습니다.")
-    return False
+    """지정된 행(List[Dict])을 '발주' 시트에 추가합니다."""
+    if not rows:
+        return True
+    try:
+        ss = open_spreadsheet()
+        ws = ss.worksheet(SHEET_NAME_ORDERS)
+        
+        values_to_append = []
+        for row_dict in rows:
+            row_list = [row_dict.get(col, "") for col in ORDERS_COLUMNS]
+            values_to_append.append(row_list)
+            
+        ws.append_rows(values_to_append, value_input_option='USER_ENTERED')
+        st.cache_data.clear()
+        return True
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"'{SHEET_NAME_ORDERS}' 시트를 찾을 수 없습니다.")
+        return False
+    except Exception as e:
+        st.error(f"발주 데이터 추가 중 오류가 발생했습니다: {e}")
+        return False
 
 def append_change_log(log_entries: List[Dict[str, Any]]):
-    # ... (생략된 함수)
     st.error("append_change_log 함수가 구현되지 않았습니다.")
     return True
 
+# [수정] update_order_status 함수 구현
 def update_order_status(selected_ids: List[str], new_status: str, handler: str) -> bool:
-    # ... (생략된 함수)
-    st.error("update_order_status 함수가 구현되지 않았습니다.")
-    return False
+    """선택된 발주번호들의 상태를 일괄 변경합니다."""
+    if not selected_ids:
+        return True
+    try:
+        ss = open_spreadsheet()
+        ws = ss.worksheet(SHEET_NAME_ORDERS)
+        
+        all_data = ws.get_all_values()
+        header = all_data[0]
+        records = all_data[1:]
+
+        id_col_idx = header.index("발주번호") + 1
+        status_col_idx = header.index("상태") + 1
+        handler_col_idx = header.index("처리자") + 1
+        timestamp_col_idx = header.index("처리일시") + 1
+        
+        cells_to_update = []
+        now_str = now_kst_str()
+        
+        for i, row in enumerate(records, start=2):
+            if row[id_col_idx - 1] in selected_ids:
+                cells_to_update.append(gspread.Cell(i, status_col_idx, new_status))
+                cells_to_update.append(gspread.Cell(i, handler_col_idx, handler))
+                cells_to_update.append(gspread.Cell(i, timestamp_col_idx, now_str))
+
+        if cells_to_update:
+            ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+        
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"발주 상태 업데이트 중 오류가 발생했습니다: {e}")
+        return False
 
 # =============================================================================
 # 5) 로그인
