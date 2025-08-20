@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v11.4 - 최종 오류 수정 및 기능 개선)
+# 📦 Streamlit 식자재 발주 시스템 (v11.5 - 안정성 강화)
 #
 # - 주요 기능 개선:
-#   - '지점명'을 데이터의 유일한 기준으로 확정
-#   - 증빙서류 선택 기능 UI 복원
-#   - 입금 요청 처리 시 '승인'/'반려' 동시 선택 방지 로직 추가
-#   - 결제 관리 페이지에서 발생하던 KeyError 해결
+#   - 잔액마스터에 없는 지점 수동 조정 시도 시 발생하던 IndexError 해결
+#   - 관리자 페이지의 지점 선택 목록에서 특정 지점(공급처) 제외 기능 추가
 # =============================================================================
 
 from io import BytesIO
@@ -68,7 +66,6 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
-# --- [수정] 지점마스터 컬럼 정의를 '지점명' 기준으로 확정 ---
 STORES_COLUMNS = ["지점ID", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
@@ -206,8 +203,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str) 
         return False
 
 # =============================================================================
-# 3) 로그인 및 인증 (변경 없음)
-# ... (이하 동일)
+# 3) 로그인 및 인증
 # =============================================================================
 @st.cache_data
 def load_users_from_secrets() -> Dict[str, Dict[str, Any]]:
@@ -254,10 +250,9 @@ def _find_account(uid_or_name: str):
     for uid, acct in USERS.items():
         if uid.lower() == s_lower or acct.get("name", "").lower() == s_lower: return uid, acct
     return None, None
-
+    
 # =============================================================================
-# 4) Excel 생성 (변경 없음)
-# ... (이하 동일)
+# 4) Excel 생성
 # =============================================================================
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
@@ -267,7 +262,7 @@ def make_full_transaction_statement_excel(df_transactions: pd.DataFrame, store_i
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        worksheet = workbook.add_worksheet(f"{store_info['상호명']} 거래명세서")
+        worksheet = workbook.add_worksheet(f"{store_info['지점명']} 거래명세서")
 
         fmt_title = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
         fmt_header = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
@@ -280,7 +275,7 @@ def make_full_transaction_statement_excel(df_transactions: pd.DataFrame, store_i
         col_widths = {'A': 20, 'B': 10, 'C': 30, 'D': 15, 'E': 15}
         for col, width in col_widths.items(): worksheet.set_column(f'{col}:{col}', width)
 
-        worksheet.merge_range('A1:E1', f"{store_info['상호명']} 거래 상세 명세서", fmt_title)
+        worksheet.merge_range('A1:E1', f"{store_info['지점명']} 거래 상세 명세서", fmt_title)
         headers = ['일시', '구분', '내용', '금액', '누적 잔액']
         worksheet.write_row('A3', headers, fmt_header)
 
@@ -320,8 +315,7 @@ def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFr
     return output
 
 # =============================================================================
-# 5) 장바구니 유틸 (변경 없음)
-# ... (이하 동일)
+# 5) 장바구니 유틸
 # =============================================================================
 def init_session_state():
     defaults = {"cart": pd.DataFrame(columns=CART_COLUMNS), "store_editor_ver": 0, "success_message": ""}
@@ -607,7 +601,6 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
-# --- [수정] 증빙서류 선택 기능 UI 복원 ---
 def page_store_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     user = st.session_state.auth
@@ -618,7 +611,7 @@ def page_store_documents(store_info_df: pd.DataFrame):
     c1, c2, c3 = st.columns(3)
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
-    doc_type = c3.selectbox("서류 종류", ["상세 거래명세서"], key="store_doc_type") # 다른 서류 추가 가능
+    doc_type = c3.selectbox("서류 종류", ["상세 거래명세서"], key="store_doc_type")
 
     my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시']).dt.date
     mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
@@ -705,7 +698,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
-# --- [수정] 증빙서류 선택 기능 UI 복원 ---
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
@@ -813,7 +805,7 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     excel_buffer = make_sales_summary_excel(daily_pivot, monthly_pivot)
     st.download_button(label="📥 매출 정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
-# --- [수정] 결제관리 페이지 로직 개선 및 오류 수정 ---
+# --- [수정] IndexError 방지 로직 추가 ---
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
@@ -826,7 +818,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         pending_requests['승인'] = False
         pending_requests['반려'] = False
         
-        # 원본 데이터프레임 복사본을 만들어 컬럼명 변경
         display_df = pending_requests.copy()
         display_df.rename(columns={'입금액': '입금액(원)'}, inplace=True)
         
@@ -852,7 +843,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             has_error = True
                             continue
 
-                        # 원본 데이터에서 현재 처리할 요청건을 찾음
                         original_req = pending_requests.loc[index]
                         
                         if req['승인']:
@@ -863,14 +853,13 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             current_info = current_balance_series.iloc[0]
                             current_prepaid = int(current_info['선충전잔액'])
                             current_used_credit = int(current_info['사용여신액'])
-                            # [오류 수정] 원본 데이터의 '입금액' 컬럼 사용
                             charge_amount = int(original_req['입금액'])
 
                             if original_req['종류'] == '선충전':
                                 new_prepaid = current_prepaid + charge_amount
                                 update_balance_sheet(original_req['지점ID'], {"선충전잔액": new_prepaid})
                                 trans_record = {"구분": "충전", "금액": charge_amount, "처리후선충전잔액": new_prepaid, "처리후사용여신액": current_used_credit}
-                            else: # 여신상환
+                            else: 
                                 new_used_credit = current_used_credit - charge_amount
                                 update_balance_sheet(original_req['지점ID'], {"사용여신액": new_used_credit})
                                 trans_record = {"구분": "여신상환", "금액": charge_amount, "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_used_credit}
@@ -890,8 +879,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     st.rerun()
                 elif processed_count == 0 and not has_error:
                     st.info("처리할 항목이 선택되지 않았습니다.")
-
-
     else:
         st.info("처리 대기 중인 입금 요청이 없습니다.")
     st.markdown("---")
@@ -916,7 +903,13 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                         if selected_store and adj_reason and adj_amount != 0:
                             store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
                             
-                            current_balance = balance_df[balance_df['지점ID'] == store_id].iloc[0]
+                            current_balance_query = balance_df[balance_df['지점ID'] == store_id]
+                            
+                            if current_balance_query.empty:
+                                st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다. 먼저 잔액 정보를 등록해주세요.")
+                                st.stop()
+
+                            current_balance = current_balance_query.iloc[0]
                             current_prepaid = int(current_balance['선충전잔액'])
                             current_used_credit = int(current_balance['사용여신액'])
                             
@@ -959,7 +952,14 @@ if __name__ == "__main__":
     user = st.session_state.auth
     
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
-    store_info_df = load_data(SHEET_NAME_STORES, STORES_COLUMNS)
+    store_info_df_raw = load_data(SHEET_NAME_STORES, STORES_COLUMNS)
+    
+    # --- [수정] 관리자 페이지에서 특정 지점(공급처) 제외 ---
+    if user["role"] == "admin":
+        store_info_df = store_info_df_raw[store_info_df_raw['지점명'] != '대전 가공장'].copy()
+    else:
+        store_info_df = store_info_df_raw
+
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
@@ -976,9 +976,12 @@ if __name__ == "__main__":
         
         my_balance_series = balance_df[balance_df['지점ID'] == user['user_id']]
         my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype='object')
+        
+        # 지점 사용자는 모든 지점 정보를 볼 필요가 없으므로 자신의 정보만 필터링
+        my_store_info = store_info_df_raw[store_info_df_raw['지점ID'] == user['user_id']]
 
         with tabs[0]: page_store_register_confirm(master_df, my_balance_info)
-        with tabs[1]: page_store_orders_change(store_info_df, master_df)
+        with tabs[1]: page_store_orders_change(my_store_info, master_df)
         with tabs[2]: page_store_balance(charge_requests_df, my_balance_info)
-        with tabs[3]: page_store_documents(store_info_df)
+        with tabs[3]: page_store_documents(my_store_info)
         with tabs[4]: page_store_master_view(master_df)
