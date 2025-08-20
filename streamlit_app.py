@@ -504,7 +504,7 @@ def page_store_documents(store_info_df: pd.DataFrame):
     mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
     dfv = my_transactions[mask].copy()
     if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
-    st.dataframe(dfv.drop(columns=['일시_dt'], errors='ignore'), use_container_width=True, hide_index=True)
+    st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
     my_store_info_series = store_info_df[store_info_df['지점ID'] == user['user_id']]
     if not my_store_info_series.empty:
         my_store_info = my_store_info_series.iloc[0]
@@ -593,8 +593,17 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to")
     stores = sorted(store_info_df["지점명"].dropna().unique().tolist())
     store_sel = c3.selectbox("지점 선택", stores, key="admin_doc_store")
-    store_id = store_info_df[store_info_df['지점명'] == store_sel]['지점ID'].iloc[0]
+    
+    store_id_series = store_info_df[store_info_df['지점명'] == store_sel]['지점ID']
+    if store_id_series.empty:
+        st.error(f"'{store_sel}' 지점 정보를 찾을 수 없습니다.")
+        return
+        
+    store_id = store_id_series.iloc[0]
     store_transactions = transactions_df[transactions_df['지점ID'] == store_id]
+    
+    if store_transactions.empty: st.warning("해당 지점의 거래 내역이 없습니다."); return
+
     store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시']).dt.date
     mask = (store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)
     dfv = store_transactions[mask].copy()
@@ -722,7 +731,7 @@ if __name__ == "__main__":
         with tabs[0]: page_admin_unified_management(orders_df, store_info_df, master_df)
         with tabs[1]: page_admin_sales_inquiry(master_df)
         with tabs[2]: page_admin_balance_management(store_info_df)
-        with tabs[3]: page_admin_documents(store_info_df)
+        with tabs[3]: page_admin_documents(store_info_df, master_df)
         with tabs[4]: page_admin_items_price(master_df)
     else: # store
         tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 금액 충전", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
