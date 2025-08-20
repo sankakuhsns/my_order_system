@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v11.1 - 최종 기능 완성본)
+# 📦 Streamlit 식자재 발주 시스템 (v11.2 - 최종 안정화 버전)
 #
 # - 주요 기능:
 #   - 선충전 및 여신(외상) 결제 시스템 완전 구현
 #   - 관리자의 충전/상환 요청 승인/반려, 여신 수동 조정 기능
-#   - 누적 잔액이 포함된 신규 거래명세서 생성
+#   - 누적 잔액이 포함된 신규 거래명세서 생성 기능
 #   - 모든 페이지 기능 포함 및 데이터 로딩 안정화
 # =============================================================================
 
@@ -68,6 +68,7 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
+STORE_COLUMNS = ["지점ID", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
@@ -739,22 +740,19 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-    
     st.markdown("##### 📥 금액 처리 확인")
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '확인대기'].sort_values(by="요청일시", ascending=False)
     if not pending_requests.empty:
         for index, req in pending_requests.iterrows():
             with st.container(border=True):
-                c1, c2, c3, c4, c5 = st.columns([2,1,1,1,1])
+                c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
                 c1.text(f"요청: {req['요청일시']} / {req['지점명']} ({req['입금자명']})")
                 c2.text(f"금액: {req['입금액']:,}원 ({req['종류']})")
-                
-                if c4.button("✅ 승인", key=f"approve_{req['요청일시']}", type="primary"):
+                if c3.button("✅ 승인", key=f"approve_{req['요청일시']}", type="primary"):
                     with st.spinner("처리 중..."):
                         current_balance_series = balance_df[balance_df['지점ID'] == req['지점ID']]
                         if current_balance_series.empty:
                             st.error(f"{req['지점명']}의 잔액 정보를 찾을 수 없습니다."); continue
-                        
                         current_info = current_balance_series.iloc[0]
                         current_prepaid = int(current_info['선충전잔액'])
                         current_used_credit = int(current_info['사용여신액'])
@@ -774,14 +772,12 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                         if append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS):
                             if update_charge_request(req['요청일시'], '처리완료'):
                                 st.success(f"{req['지점명']}의 {req['종류']} 요청이 처리되었습니다."); st.rerun()
-
-                if c5.button("❌ 반려", key=f"reject_{req['요청일시']}"):
+                if c4.button("❌ 반려", key=f"reject_{req['요청일시']}"):
                     update_charge_request(req['요청일시'], '반려', '관리자 확인 후 반려')
                     st.warning(f"{req['지점명']}의 요청을 반려 처리했습니다."); st.rerun()
     else:
         st.info("처리 대기 중인 요청이 없습니다.")
     st.markdown("---")
-    
     st.markdown("##### ✍️ 잔액/여신 수동 조정")
     with st.form("manual_adjustment_form"):
         stores = store_info_df["지점명"].dropna().unique().tolist()
@@ -789,7 +785,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         adj_type = st.selectbox("조정 항목", ["선충전잔액", "여신한도", "사용여신액"])
         adj_amount = st.number_input("조정할 값 (숫자만 입력)", format="%d", step=1000)
         adj_reason = st.text_input("조정 사유")
-        
         if st.form_submit_button("조정 실행", type="primary"):
             if selected_store and adj_reason:
                 store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
@@ -797,7 +792,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                      st.success(f"{selected_store}의 {adj_type}이(가) {adj_amount:,}으로 조정되었습니다."); st.rerun()
             else:
                 st.warning("모든 필드를 입력해주세요.")
-
     st.markdown("---")
     st.markdown("##### 📋 전체 지점 잔액 현황")
     if not balance_df.empty:
@@ -815,7 +809,7 @@ if __name__ == "__main__":
     user = st.session_state.auth
     
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
-    store_info_df = load_data(SHEET_NAME_STORES)
+    store_info_df = load_data(SHEET_NAME_STORES, STORE_COLUMNS)
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
