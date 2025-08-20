@@ -68,7 +68,6 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
-STORE_COLUMNS = ["지점ID", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
@@ -552,22 +551,29 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 def page_store_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     user = st.session_state.auth
-    transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
-    my_transactions = transactions_df[transactions_df['지점ID'] == user['user_id']]
-    if my_transactions.empty: st.info("거래 내역이 없습니다."); return
-    c1, c2 = st.columns(2)
-    dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
-    dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
-    my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시']).dt.date
-    mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
-    dfv = my_transactions[mask].copy()
-    if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
-    st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
-    my_store_info_series = store_info_df[store_info_df['지점ID'] == user['user_id']]
-    if not my_store_info_series.empty:
-        my_store_info = my_store_info_series.iloc[0]
-        buf = make_full_transaction_statement_excel(dfv, my_store_info)
-        st.download_button("상세 거래명세서 다운로드", data=buf, file_name=f"상세거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+    
+    doc_type = st.radio("다운로드할 문서 종류", ["거래내역서", "납품내역서", "세금계산서"], horizontal=True, key="doc_type_radio")
+    
+    if doc_type == "거래내역서":
+        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+        my_transactions = transactions_df[transactions_df['지점ID'] == user['user_id']]
+        if my_transactions.empty: st.info("거래 내역이 없습니다."); return
+        c1, c2 = st.columns(2)
+        dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
+        dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
+        my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시']).dt.date
+        mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
+        dfv = my_transactions[mask].copy()
+        if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
+        st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+        my_store_info_series = store_info_df[store_info_df['지점ID'] == user['user_id']]
+        if not my_store_info_series.empty:
+            my_store_info = my_store_info_series.iloc[0]
+            buf = make_full_transaction_statement_excel(dfv, my_store_info)
+            st.download_button("상세 거래명세서 다운로드", data=buf, file_name=f"상세거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+    else: # 납품내역서
+        st.warning(f"'{doc_type}' 다운로드 기능은 현재 준비 중입니다.")
+
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
