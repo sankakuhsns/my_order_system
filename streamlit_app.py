@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v11.2 - 최종 안정화 버전)
+# 📦 Streamlit 식자재 발주 시스템 (v10.2 - 최종 안정화 버전)
 #
 # - 주요 기능:
 #   - 선충전 및 여신(외상) 결제 시스템 완전 구현
 #   - 관리자의 충전/상환 요청 승인/반려, 여신 수동 조정 기능
 #   - 누적 잔액이 포함된 신규 거래명세서 생성 기능
-#   - 모든 페이지 기능 포함 및 데이터 로딩 안정화
+#   - v9.7의 모든 기능 포함 및 데이터 로딩 안정화
 # =============================================================================
 
 from io import BytesIO
@@ -68,7 +68,6 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
-STORE_COLUMNS = ["지점ID", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
@@ -809,7 +808,7 @@ if __name__ == "__main__":
     user = st.session_state.auth
     
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
-    store_info_df = load_data(SHEET_NAME_STORES, STORE_COLUMNS)
+    store_info_df = load_data(SHEET_NAME_STORES)
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
