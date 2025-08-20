@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v11.2 - 최종 기능 완성본)
+# 📦 Streamlit 식자재 발주 시스템 (v11.2 - 최종 안정화 버전)
 #
 # - 주요 기능:
 #   - 선충전 및 여신(외상) 결제 시스템 완전 구현
@@ -68,6 +68,7 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
+STORE_COLUMNS = ["지점ID", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
@@ -741,7 +742,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     
     st.markdown("##### 📥 금액 처리 확인")
-    pending_requests = charge_requests_df[charge_requests_df['상태'] == '확인대기']
+    pending_requests = charge_requests_df[charge_requests_df['상태'] == '확인대기'].sort_values(by="요청일시", ascending=False)
     if not pending_requests.empty:
         for index, req in pending_requests.iterrows():
             with st.container(border=True):
@@ -754,6 +755,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                         current_balance_series = balance_df[balance_df['지점ID'] == req['지점ID']]
                         if current_balance_series.empty:
                             st.error(f"{req['지점명']}의 잔액 정보를 찾을 수 없습니다."); continue
+                        
                         current_info = current_balance_series.iloc[0]
                         current_prepaid = int(current_info['선충전잔액'])
                         current_used_credit = int(current_info['사용여신액'])
@@ -783,13 +785,15 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     
     with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
-            stores = store_info_df["지점명"].dropna().unique().tolist()
-            if not stores:
+            if store_info_df.empty:
                 st.warning("조정할 지점이 없습니다. '지점마스터' 시트를 먼저 등록해주세요.")
+                st.form_submit_button("닫기", disabled=True)
             else:
-                selected_store = st.selectbox("조정 대상 지점", stores)
-                adj_type = st.selectbox("조정 항목", ["선충전잔액", "여신한도", "사용여신액"])
-                adj_amount = st.number_input("조정할 값 (숫자만 입력)", format="%d", step=1000)
+                stores = store_info_df["지점명"].dropna().unique().tolist()
+                c1, c2, c3 = st.columns(3)
+                selected_store = c1.selectbox("조정 대상 지점", stores)
+                adj_type = c2.selectbox("조정 항목", ["선충전잔액", "여신한도", "사용여신액"])
+                adj_amount = c3.number_input("조정할 값 (숫자만 입력)", format="%d", step=1000)
                 adj_reason = st.text_input("조정 사유")
                 if st.form_submit_button("조정 실행", type="primary"):
                     if selected_store and adj_reason:
@@ -816,7 +820,7 @@ if __name__ == "__main__":
     user = st.session_state.auth
     
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
-    store_info_df = load_data(SHEET_NAME_STORES)
+    store_info_df = load_data(SHEET_NAME_STORES, STORE_COLUMNS)
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
