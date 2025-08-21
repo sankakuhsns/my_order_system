@@ -1192,7 +1192,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                 current_inv_df = load_data(SHEET_NAME_CURRENT_INVENTORY, CURRENT_INVENTORY_COLUMNS)
                 all_pending_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS).query("상태 == '요청'")
                 
-                # 현재 선택된 건을 제외한 나머지 대기 물량 계산
                 other_pending_orders = all_pending_orders[~all_pending_orders['발주번호'].isin(selected_pending_ids)]
                 pending_qty = other_pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
                 
@@ -1211,7 +1210,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                         item_name = master_df.loc[master_df['품목코드'] == item_code, '품목명'].iloc[0]
                         lacking_items.append(item_name)
                 
-                # --- 경고 또는 진행 ---
                 if lacking_items:
                     st.session_state.warning_message = f"⚠️ 재고 부족 경고: {', '.join(lacking_items)}의 재고가 부족하여 발송이 지연될 수 있습니다. 그대로 진행합니다."
                 
@@ -1219,7 +1217,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                     if update_order_status(selected_pending_ids, "승인", st.session_state.auth["name"]):
                         items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
                         items_to_deduct['수량변경'] = -items_to_deduct['수량']
-                        
                         ref_id = ", ".join(selected_pending_ids)
                         
                         if update_inventory(items_to_deduct, "발주출고", "system_auto", ref_id=ref_id):
@@ -1231,6 +1228,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                         st.rerun()
 
         with btn_cols[1]:
+            # --- 오류 수정: 누락된 '반려' 로직 시작 ---
             if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
                 rejection_reason = st.session_state.get("rejection_reason_input", "")
                 if not rejection_reason:
@@ -1259,6 +1257,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                             prepaid_refund = refund_amount - credit_refund
                             new_prepaid += prepaid_refund
                             update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
+                            
                             refund_record = {
                                 "일시": now_kst_str(), "지점ID": store_id, "지점명": tx_info['지점명'],
                                 "구분": "발주반려", "내용": f"발주 반려 환불 ({order_id})",
@@ -1269,7 +1268,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
 
                         update_order_status(selected_pending_ids, "반려", st.session_state.auth["name"], reason=rejection_reason)
                         st.session_state.success_message = f"{len(selected_pending_ids)}건이 반려 처리되고 환불되었습니다."
-                        st.session_state.admin_orders_selection = {}
+                        st.session_state.admin_orders_selection.clear()
                         st.rerun()
         with btn_cols[2]:
             st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input", placeholder="예: 재고 부족")
