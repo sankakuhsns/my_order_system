@@ -883,7 +883,18 @@ def page_store_documents(store_info_df: pd.DataFrame):
     my_store_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
 
     if doc_type == "금전 거래내역서":
-        # ... (로직 변경 없음)
+        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+        my_transactions = transactions_df[transactions_df['지점ID'] == user['user_id']]
+        if my_transactions.empty: st.info("거래 내역이 없습니다."); return
+        
+        my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시']).dt.date
+        mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
+        dfv = my_transactions[mask].copy()
+        if dfv.empty: st.warning("해당 기간의 거래 내역이 없습니다."); return
+        st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+        
+        buf = make_full_transaction_statement_excel(dfv, my_store_info)
+        st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
     
     elif doc_type == "품목 거래명세서":
         orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
