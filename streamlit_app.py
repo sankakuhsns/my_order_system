@@ -1435,6 +1435,7 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.download_button(label="📥 매출 정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     
 ### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
+### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     
@@ -1448,23 +1449,57 @@ def page_admin_documents(store_info_df: pd.DataFrame):
         store_info_filtered = store_info_df[store_info_df['지점명'] != '대전 가공장'].copy()
         stores = sorted(store_info_filtered["지점명"].dropna().unique().tolist())
         if not stores:
-            st.warning("조회할 지점이 없습니다."); return
+            st.warning("조회할 지점이 없습니다.")
+            return
         store_sel = c4.selectbox("지점 선택", stores, key="admin_doc_store")
         selected_store_info = store_info_filtered[store_info_filtered['지점명'] == store_sel].iloc[0]
         
         if doc_type == "금전 거래내역서":
-        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
-        store_transactions = transactions_df[transactions_df['지점명'] == store_sel]
-        
-        store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시']).dt.date
-        mask = (store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)
-        dfv = store_transactions[mask].copy()
-
-        st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
-        if not dfv.empty:
-            buf = make_full_transaction_statement_excel(dfv, selected_store_info)
-            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{store_sel}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+            transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+            store_transactions = transactions_df[transactions_df['지점명'] == store_sel]
             
+            if not store_transactions.empty:
+                store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시']).dt.date
+                mask = (store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)
+                dfv = store_transactions[mask].copy()
+
+                st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+                if not dfv.empty:
+                    buf = make_full_transaction_statement_excel(dfv, selected_store_info)
+                    st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{store_sel}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+            else:
+                st.info(f"'{store_sel}' 지점의 거래 내역이 없습니다.")
+        
+        # --- 오류 수정: 누락된 '품목 거래명세서' 로직 시작 ---
+        elif doc_type == "품목 거래명세서":
+            orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+            store_orders = orders_df[(orders_df['지점명'] == store_sel) & (orders_df['상태'].isin(['승인', '출고완료']))]
+            
+            if store_orders.empty:
+                st.warning(f"'{store_sel}' 지점의 승인/출고된 발주 내역이 없습니다.")
+                return
+
+            store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시']).dt.date
+            filtered_orders = store_orders[store_orders['주문일시_dt'].between(dt_from, dt_to)]
+
+            if filtered_orders.empty:
+                st.warning(f"선택한 기간 내 '{store_sel}' 지점의 승인/출고된 발주 내역이 없습니다.")
+                return
+
+            order_options = ["(기간 전체)"] + filtered_orders['발주번호'].unique().tolist()
+            selected_order_id = st.selectbox("발주번호 선택", order_options, key="admin_doc_order_select")
+
+            preview_df = filtered_orders
+            if selected_order_id != "(기간 전체)":
+                preview_df = filtered_orders[filtered_orders['발주번호'] == selected_order_id]
+
+            st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+            if not preview_df.empty:
+                buf = make_multi_date_item_statement_excel(preview_df, selected_store_info, dt_from, dt_to)
+                st.download_button("엑셀 다운로드", data=buf, file_name=f"품목거래명세서_{store_sel}_{selected_order_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+        # --- 오류 수정: '품목 거래명세서' 로직 끝 ---
+
     elif doc_type == "품목 생산 보고서":
         c4.empty() # 마지막 칸 비우기
         log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
@@ -1477,6 +1512,8 @@ def page_admin_documents(store_info_df: pd.DataFrame):
             if not report_df.empty:
                 buf = make_inventory_report_excel(report_df, "품목 생산 보고서", dt_from, dt_to)
                 st.download_button("엑셀 다운로드", data=buf, file_name=f"품목생산보고서_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+        else:
+            st.info("생산 기록이 없습니다.")
 
     elif doc_type == "품목 재고 변동 보고서":
         c4.empty()
@@ -1489,6 +1526,8 @@ def page_admin_documents(store_info_df: pd.DataFrame):
             if not report_df.empty:
                 buf = make_inventory_report_excel(report_df, "품목 재고 변동 보고서", dt_from, dt_to)
                 st.download_button("엑셀 다운로드", data=buf, file_name=f"품목재고변동보고서_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+        else:
+            st.info("재고 변동 기록이 없습니다.")
 
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
