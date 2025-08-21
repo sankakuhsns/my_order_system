@@ -1733,10 +1733,22 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
 
     with tab2:
         st.markdown("##### 🏢 지점(사용자) 정보 설정")
-        edited_store_df = st.data_editor(store_info_df_raw, num_rows="dynamic", use_container_width=True, key="store_editor")
+        
+        # [수정] 신규 ID 추가 시 주의 문구 추가
+        st.info("ℹ️ 신규 지점 추가 시 ID는 신중히 입력해주세요. 저장 후에는 변경할 수 없습니다.")
+        
+        # [수정] 기존 지점 ID를 수정하지 못하도록 disabled 처리
+        edited_store_df = st.data_editor(
+            store_info_df_raw, 
+            num_rows="dynamic", 
+            use_container_width=True, 
+            key="store_editor",
+            disabled=["지점ID"] 
+        )
+        
         if st.button("지점 정보 저장", type="primary", key="save_stores"):
             if save_df_to_sheet(SHEET_NAME_STORES, edited_store_df):
-                # [개선사항 11] 신규 지점 잔액 마스터 자동 추가
+                # 신규 지점 잔액 마스터 자동 추가 로직 (기존과 동일)
                 balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
                 
                 store_ids_set = set(edited_store_df['지점ID'].unique())
@@ -1765,7 +1777,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     success_msg += f" {new_stores_added}개의 신규 지점이 잔액 마스터에 자동 추가되었습니다."
                 st.session_state.success_message = success_msg
                 st.rerun()
-
 # =============================================================================
 # 8) 라우팅
 # =============================================================================
