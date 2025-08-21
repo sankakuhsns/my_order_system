@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v12.1 - UI 복원 및 지점마스터 로그인 최종본)
+# 📦 Streamlit 식자재 발주 시스템 (v13.0 - 최종 기능 통합본)
 #
 # - 주요 변경 사항:
-#   - UI 완전 복원: 모든 탭의 UI를 v11.6 버전 기준으로 완벽히 복원
-#   - 로그인 시스템 교체: Google Sheets '지점마스터' 시트 기반의 통합 인증 시스템 적용
-#   - 편의성 개선: 사이드바에 로그인 정보 및 로그아웃 버튼을 항상 표시
+#   - v11.6 기반 UI/UX 완전 복원 (체크박스, 상세 보기, 발주 취소 등)
+#   - 지점마스터 시트 기반 로그인 및 관리자 설정 기능 유지
+#   - 관리자 페이지의 결제 처리 및 반려/환불 로직 완성
+#   - 코드 안정성 강화 및 잠재적 오류 수정
 # =============================================================================
 
 from io import BytesIO
@@ -58,8 +59,7 @@ SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
 
-# [업데이트] 로그인 기능을 위해 지점마스터 컬럼 확장 (지점PW, 역할)
-STORES_COLUMNS = ["지점ID", "지점PW", "역할", "지점명", "사업자등록번호", "상호명", "사업장주소", "업태"]
+STORES_COLUMNS = ["지점ID", "지점PW", "역할", "지점명", "사업자등록번호", "상호명", "대표자명", "사업장주소", "업태", "종목"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자", "반려사유"]
 CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "수량", "합계금액"]
@@ -85,7 +85,7 @@ def open_spreadsheet():
     try: return get_gs_client().open_by_key(key)
     except Exception as e: st.error(f"스프레드시트 열기 실패: {e}"); st.stop()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
     try:
         ws = open_spreadsheet().worksheet(sheet_name)
@@ -127,6 +127,18 @@ def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
         st.warning(f"'{sheet_name}' 시트를 찾을 수 없습니다. 시트를 먼저 생성해주세요.")
         return pd.DataFrame(columns=columns) if columns else pd.DataFrame()
 
+def save_df_to_sheet(sheet_name: str, df: pd.DataFrame):
+    try:
+        ws = open_spreadsheet().worksheet(sheet_name)
+        ws.clear()
+        df_filled = df.fillna('')
+        ws.update([df_filled.columns.values.tolist()] + df_filled.values.tolist(), value_input_option='USER_ENTERED')
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"'{sheet_name}' 시트에 데이터를 저장하는 중 오류 발생: {e}")
+        return False
+        
 def append_rows_to_sheet(sheet_name: str, rows_data: List[Dict], columns_order: List[str]):
     try:
         ws = open_spreadsheet().worksheet(sheet_name)
@@ -156,23 +168,6 @@ def update_balance_sheet(store_id: str, updates: Dict):
         st.error(f"잔액/여신 정보 업데이트 중 오류 발생: {e}")
         return False
         
-def update_charge_request(timestamp: str, new_status: str, reason: str = ""):
-    try:
-        ws = open_spreadsheet().worksheet(SHEET_NAME_CHARGE_REQ)
-        cell = ws.find(timestamp, in_column=1)
-        if cell:
-            header = ws.row_values(1)
-            status_col_idx = header.index("상태") + 1
-            reason_col_idx = header.index("처리사유") + 1
-            ws.update_cell(cell.row, status_col_idx, new_status)
-            ws.update_cell(cell.row, reason_col_idx, reason)
-            st.cache_data.clear()
-            return True
-        return False
-    except Exception as e:
-        st.error(f"충전 요청 상태 업데이트 중 오류 발생: {e}")
-        return False
-
 def update_order_status(selected_ids: List[str], new_status: str, handler: str, reason: str = "") -> bool:
     if not selected_ids: return True
     try:
@@ -393,7 +388,7 @@ def add_to_cart(rows_df: pd.DataFrame):
     st.session_state.cart = merged[CART_COLUMNS]
 
 # =============================================================================
-# 6) 지점 페이지 (v11.6 UI 복원)
+# 6) 지점 페이지
 # =============================================================================
 def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series):
     st.subheader("🛒 발주 요청")
@@ -546,7 +541,6 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     my_requests = charge_requests_df[charge_requests_df['지점ID'] == user['user_id']]
     st.dataframe(my_requests, use_container_width=True, hide_index=True)
 
-
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
     display_feedback()
@@ -583,12 +577,19 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     shipped = orders[orders["상태"].isin(["승인", "출고완료"])].copy()
     rejected = orders[orders["상태"] == "반려"].copy()
 
+    if 'store_orders_selection' not in st.session_state: st.session_state.store_orders_selection = {}
+
     tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려 ({len(rejected)}건)"])
     
     with tab1:
-        st.dataframe(pending[["주문일시", "발주번호", "건수", "합계금액", "상태"]], hide_index=True, use_container_width=True)
-        selected_order_id_cancel = st.selectbox("취소할 발주번호를 선택하세요.", pending['발주번호'].tolist(), index=None, placeholder="발주번호 선택")
-        if st.button("선택한 발주 요청 취소하기", disabled=not selected_order_id_cancel):
+        pending_display = pending.copy()
+        pending_display.insert(0, '선택', pending['발주번호'].apply(lambda x: st.session_state.store_orders_selection.get(x, False)))
+        edited_pending = st.data_editor(pending_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태']], hide_index=True, use_container_width=True, key="pending_editor", disabled=pending.columns)
+        st.session_state.store_orders_selection = {**st.session_state.store_orders_selection, **dict(zip(edited_pending['발주번호'], edited_pending['선택']))}
+        
+        selected_to_cancel = [oid for oid, selected in st.session_state.store_orders_selection.items() if selected and oid in pending['발주번호'].values]
+        
+        if st.button("선택한 발주 요청 취소하기", disabled=not selected_to_cancel, type="primary"):
             with st.spinner("발주 취소 및 환불 처리 중..."):
                 # 발주 취소 및 환불 로직
                 original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == selected_order_id_cancel]
@@ -614,16 +615,26 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     }
                     append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [refund_record], TRANSACTIONS_COLUMNS)
                     
-                    st.success(f"발주번호 {selected_order_id_cancel}이(가) 취소되고 환불 처리되었습니다.")
-                    st.rerun()
-                else:
-                    st.error("환불 처리 중 원거래 내역을 찾지 못했습니다.")
+                st.success(f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다.")
+                st.rerun()
 
     with tab2:
         st.dataframe(shipped[["주문일시", "발주번호", "건수", "합계금액", "상태", "처리일시"]], hide_index=True, use_container_width=True)
         
     with tab3:
         st.dataframe(rejected[['주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], hide_index=True, use_container_width=True)
+        
+    v_spacer(16)
+    with st.container(border=True):
+        st.markdown("##### 📄 발주 품목 상세 조회")
+        selected_ids = [k for k,v in st.session_state.store_orders_selection.items() if v]
+        if len(selected_ids) == 1:
+            target_id = selected_ids[0]
+            st.markdown(f"**선택된 발주번호:** `{target_id}`")
+            target_df = df_user[df_user["발주번호"] == target_id]
+            st.dataframe(target_df[["품목코드", "품목명", "단위", "수량", "단가", "합계금액"]], hide_index=True, use_container_width=True)
+        else:
+            st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
 def page_store_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
@@ -642,7 +653,7 @@ def page_store_documents(store_info_df: pd.DataFrame):
         mask = (my_orders['주문일시_dt'] >= dt_from) & (my_orders['주문일시_dt'] <= dt_to)
         order_options = my_orders[mask]['발주번호'].unique().tolist()
 
-    selected_order_id = c3.selectbox("발주번호 선택", ["(전체 기간)"] + order_options)
+    selected_order_id = c3.selectbox("발주번호 선택", ["(기간 전체)"] + order_options)
     doc_type = c4.selectbox("서류 종류", ["금전 거래내역서", "품목 거래명세서", "세금계산서 (준비중)"])
 
     my_store_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
@@ -688,9 +699,6 @@ def page_store_master_view(master_df: pd.DataFrame):
     
     st.dataframe(df_view[['품목코드', '분류', '품목명', '단위', '단가(원)', '단가(VAT포함)']], use_container_width=True, hide_index=True)
 
-# =============================================================================
-# 7) 관리자 페이지 (v11.6 UI 복원 및 기능 완성)
-# =============================================================================
 # =============================================================================
 # 7) 관리자 페이지 (v11.6 UI 복원 및 기능 완성)
 # =============================================================================
