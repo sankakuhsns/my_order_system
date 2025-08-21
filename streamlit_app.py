@@ -551,6 +551,7 @@ def init_session_state():
     defaults = {
         "cart": pd.DataFrame(columns=CART_COLUMNS), 
         "store_editor_ver": 0, 
+        "production_cart": pd.DataFrame(), # 👈 이 줄 추가
         "production_editor_ver": 0,
         "success_message": "",
         "error_message": "",
@@ -1029,40 +1030,72 @@ def page_admin_daily_production(master_df: pd.DataFrame):
     st.subheader("📝 일일 생산 보고")
     user = st.session_state.auth
     
-    with st.form("production_form", border=True):
-        production_date = st.date_input("생산일자", date.today())
-        
+    # --- 1. 생산 수량 입력 부분 ---
+    with st.container(border=True):
+        st.markdown("##### 📦 생산 수량 입력")
         df_producible = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
-        df_producible.rename(columns={'수량': '생산수량'}, inplace=True)
         df_producible['생산수량'] = 0
         
-        st.markdown("##### 📦 생산 수량 입력")
-        edited_production = st.data_editor(
-            df_producible[['품목코드', '품목명', '단위', '생산수량']],
-            key=f"production_editor_{st.session_state.production_editor_ver}",
-            use_container_width=True,
-            hide_index=True,
-            disabled=['품목코드', '품목명', '단위'],
-            column_config={"생산수량": st.column_config.NumberColumn(min_value=0, step=1)}
-        )
+        with st.form(key="add_production_form"):
+            edited_production = st.data_editor(
+                df_producible[['품목코드', '품목명', '단위', '생산수량']],
+                key=f"production_editor_{st.session_state.production_editor_ver}",
+                use_container_width=True,
+                hide_index=True,
+                disabled=['품목코드', '품목명', '단위'],
+                column_config={"생산수량": st.column_config.NumberColumn(min_value=0, step=1)}
+            )
 
-        if st.form_submit_button("생산 기록 저장", type="primary", use_container_width=True):
-            items_to_log = edited_production[edited_production['생산수량'] > 0].copy()
-            if items_to_log.empty:
-                st.warning("생산수량을 입력한 품목이 없습니다.")
-                return
-
-            items_to_log.rename(columns={'생산수량': '수량변경'}, inplace=True)
-            
-            with st.spinner("생산 기록 및 재고 업데이트 중..."):
-                if update_inventory(items_to_log, "생산입고", user['name']):
-                    st.session_state.success_message = f"{len(items_to_log)}개 품목의 생산 기록이 저장되고 재고가 업데이트되었습니다."
+            if st.form_submit_button("생산 목록에 추가", type="primary", use_container_width=True):
+                items_to_add = edited_production[edited_production['생산수량'] > 0]
+                if not items_to_add.empty:
+                    # 기존 목록과 합치고 품목코드로 합산
+                    current_cart = st.session_state.production_cart
+                    updated_cart = pd.concat([current_cart, items_to_add]).groupby('품목코드').agg({
+                        '품목명': 'last',
+                        '단위': 'last',
+                        '생산수량': 'sum'
+                    }).reset_index()
+                    st.session_state.production_cart = updated_cart
                     st.session_state.production_editor_ver += 1
-                    st.rerun()
+                    st.session_state.success_message = "생산 목록에 추가되었습니다."
                 else:
-                    st.session_state.error_message = "생산 기록 저장 중 오류가 발생했습니다."
+                    st.session_state.warning_message = "생산수량을 입력한 품목이 없습니다."
+                st.rerun()
 
-### 🏭 7-2) 신규: 생산/재고 관리
+    v_spacer(16)
+
+    # --- 2. 생산 목록 확인 및 최종 저장 부분 ---
+    with st.container(border=True):
+        st.markdown("##### 📦 최종 생산 기록 목록")
+        production_cart = st.session_state.production_cart
+        
+        if production_cart.empty:
+            st.info("기록할 생산 목록이 없습니다.")
+        else:
+            st.dataframe(production_cart[['품목코드', '품목명', '단위', '생산수량']], use_container_width=True, hide_index=True)
+            
+            with st.form("finalize_production_form"):
+                btn_cols = st.columns(2)
+                with btn_cols[0]:
+                    if st.form_submit_button("✅ 최종 생산 기록 저장", type="primary", use_container_width=True):
+                        items_to_log = production_cart.copy()
+                        items_to_log.rename(columns={'생산수량': '수량변경'}, inplace=True)
+                        
+                        with st.spinner("생산 기록 및 재고 업데이트 중..."):
+                            if update_inventory(items_to_log, "생산입고", user['name']):
+                                st.session_state.success_message = f"{len(items_to_log)}개 품목의 생산 기록이 저장되고 재고가 업데이트되었습니다."
+                                st.session_state.production_cart = pd.DataFrame() # 목록 비우기
+                                st.rerun()
+                            else:
+                                st.session_state.error_message = "생산 기록 저장 중 오류가 발생했습니다."
+                
+                with btn_cols[1]:
+                    if st.form_submit_button("🗑️ 목록 비우기", use_container_width=True):
+                        st.session_state.production_cart = pd.DataFrame()
+                        st.session_state.success_message = "생산 목록을 모두 삭제했습니다."
+                        st.rerun()
+
 ### 🏭 7-2) 신규: 생산/재고 관리
 def page_admin_inventory_management(master_df: pd.DataFrame):
     st.subheader("📊 생산/재고 관리")
