@@ -934,48 +934,47 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
             selected_req = req_options[selected_req_str]
             if action == "반려" and not reason:
                 st.warning("반려 시 사유를 입력해야 합니다.")
-                return
-
-            store_id = selected_req['지점ID']
-            
-            all_charge_requests = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
-            req_index = all_charge_requests[all_charge_requests['요청일시'] == selected_req['요청일시']].index
-
-            if action == "승인":
-                current_balance_info = balance_df[balance_df['지점ID'] == store_id]
-                if current_balance_info.empty:
-                    st.error(f"'{selected_req['지점명']}'의 잔액 정보가 없습니다.")
-                    return
+            else:
+                store_id = selected_req['지점ID']
                 
-                current_balance = current_balance_info.iloc[0]
-                new_prepaid = current_balance['선충전잔액']
-                new_used_credit = current_balance['사용여신액']
-                amount = selected_req['입금액']
+                all_charge_requests = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
+                req_index = all_charge_requests[all_charge_requests['요청일시'] == selected_req['요청일시']].index
 
-                if selected_req['종류'] == '선충전':
-                    new_prepaid += amount
-                else: # 여신상환
-                    new_used_credit -= amount
-                    if new_used_credit < 0:
-                        new_prepaid += abs(new_used_credit)
-                        new_used_credit = 0
+                if action == "승인":
+                    current_balance_info = balance_df[balance_df['지점ID'] == store_id]
+                    if current_balance_info.empty:
+                        st.error(f"'{selected_req['지점명']}'의 잔액 정보가 없습니다.")
+                        return
+
+                    current_balance = current_balance_info.iloc[0]
+                    new_prepaid = current_balance['선충전잔액']
+                    new_used_credit = current_balance['사용여신액']
+                    amount = selected_req['입금액']
+
+                    if selected_req['종류'] == '선충전':
+                        new_prepaid += amount
+                    else: # 여신상환
+                        new_used_credit -= amount
+                        if new_used_credit < 0:
+                            new_prepaid += abs(new_used_credit)
+                            new_used_credit = 0
+                    
+                    update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
+                    all_charge_requests.loc[req_index, '상태'] = '승인'
+                    st.session_state.success_message = "요청이 승인 처리되었습니다."
+                else: # 반려
+                    all_charge_requests.loc[req_index, '상태'] = '반려'
+                    all_charge_requests.loc[req_index, '처리사유'] = reason
+                    st.session_state.success_message = "요청이 반려 처리되었습니다."
                 
-                update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
-                all_charge_requests.loc[req_index, '상태'] = '승인'
-                st.session_state.success_message = "요청이 승인 처리되었습니다."
-            else: # 반려
-                all_charge_requests.loc[req_index, '상태'] = '반려'
-                all_charge_requests.loc[req_index, '처리사유'] = reason
-                st.session_state.success_message = "요청이 반려 처리되었습니다."
-            
-            save_df_to_sheet(SHEET_NAME_CHARGE_REQ, all_charge_requests)
-            st.rerun()
+                save_df_to_sheet(SHEET_NAME_CHARGE_REQ, all_charge_requests)
+                st.rerun()
 
     st.markdown("---")
     st.markdown("##### 🏢 지점별 잔액 현황")
     st.dataframe(balance_df, hide_index=True, use_container_width=True)
     
-with st.expander("✍️ 잔액/여신 수동 조정"):
+    with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
             stores = sorted(store_info_df["지점명"].dropna().unique().tolist())
             if not stores:
@@ -990,50 +989,47 @@ with st.expander("✍️ 잔액/여신 수동 조정"):
                 if st.form_submit_button("조정 실행", type="primary"):
                     if not (selected_store and adj_reason and adj_amount != 0):
                         st.warning("모든 필드를 올바르게 입력해주세요.")
-                        return
-
-                    store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
-                    
-                    current_balance_query = balance_df[balance_df['지점ID'] == store_id]
-                    
-                    if current_balance_query.empty:
-                        st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다. 먼저 잔액 정보를 등록해주세요.")
-                        return
-
-                    current_balance = current_balance_query.iloc[0]
-                    
-                    if adj_type == "여신한도":
-                        new_limit = int(current_balance['여신한도']) + adj_amount
-                        update_balance_sheet(store_id, {adj_type: new_limit})
-                        st.session_state.success_message = f"'{selected_store}'의 여신한도가 조정되었습니다. (거래내역에 기록되지 않음)"
-                        st.rerun()
                     else:
-                        current_prepaid = int(current_balance['선충전잔액'])
-                        current_used_credit = int(current_balance['사용여신액'])
+                        store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
+                        current_balance_query = balance_df[balance_df['지점ID'] == store_id]
                         
-                        new_prepaid, new_used_credit = current_prepaid, current_used_credit
-                        trans_record = {"금액": adj_amount, "내용": adj_reason}
+                        if current_balance_query.empty:
+                            st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다. 먼저 잔액 정보를 등록해주세요.")
+                        else:
+                            current_balance = current_balance_query.iloc[0]
+                            
+                            if adj_type == "여신한도":
+                                new_limit = int(current_balance['여신한도']) + adj_amount
+                                update_balance_sheet(store_id, {adj_type: new_limit})
+                                st.session_state.success_message = f"'{selected_store}'의 여신한도가 조정되었습니다. (거래내역에 기록되지 않음)"
+                                st.rerun()
+                            else:
+                                current_prepaid = int(current_balance['선충전잔액'])
+                                current_used_credit = int(current_balance['사용여신액'])
+                                
+                                new_prepaid, new_used_credit = current_prepaid, current_used_credit
+                                trans_record = {"금액": adj_amount, "내용": adj_reason}
 
-                        if adj_type == "선충전잔액":
-                            new_prepaid += adj_amount
-                            update_balance_sheet(store_id, {adj_type: new_prepaid})
-                            trans_record.update({"구분": "수동조정(충전)", "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit})
-                        
-                        elif adj_type == "사용여신액":
-                            new_used_credit += adj_amount
-                            update_balance_sheet(store_id, {adj_type: new_used_credit})
-                            trans_record.update({"구분": "수동조정(여신)", "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_used_credit})
+                                if adj_type == "선충전잔액":
+                                    new_prepaid += adj_amount
+                                    update_balance_sheet(store_id, {adj_type: new_prepaid})
+                                    trans_record.update({"구분": "수동조정(충전)", "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit})
+                                
+                                elif adj_type == "사용여신액":
+                                    new_used_credit += adj_amount
+                                    update_balance_sheet(store_id, {adj_type: new_used_credit})
+                                    trans_record.update({"구분": "수동조정(여신)", "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_used_credit})
 
-                        full_trans_record = {
-                            **trans_record, 
-                            "일시": now_kst_str(), 
-                            "지점ID": store_id, 
-                            "지점명": selected_store, 
-                            "처리자": st.session_state.auth['name']
-                        }
-                        append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS)
-                        st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 조정되고 거래내역에 기록되었습니다."
-                        st.rerun()
+                                full_trans_record = {
+                                    **trans_record, 
+                                    "일시": now_kst_str(), 
+                                    "지점ID": store_id, 
+                                    "지점명": selected_store, 
+                                    "처리자": st.session_state.auth['name']
+                                }
+                                append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS)
+                                st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 조정되고 거래내역에 기록되었습니다."
+                                st.rerun()
                         
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
