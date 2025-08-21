@@ -1356,11 +1356,14 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
 ### 📈 7-4) 기존: 매출 조회 (오류 수정 및 시각화 변경)
+### 📈 7-4) 기존: 매출 조회 (오류 수정 및 시각화 변경)
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.subheader("📈 매출 조회")
-    df_orders = load_data(SHEET_NAME_ORDERS)
+    df_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     df_sales_raw = df_orders[df_orders['상태'].isin(['승인', '출고완료'])].copy()
-    if df_sales_raw.empty: st.info("매출 데이터가 없습니다."); return
+    if df_sales_raw.empty: 
+        st.info("매출 데이터가 없습니다.")
+        return
 
     c1, c2, c3 = st.columns(3)
     dt_from = c1.date_input("조회 시작일", date.today().replace(day=1), key="admin_sales_from")
@@ -1368,12 +1371,19 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     stores = ["(전체 통합)"] + sorted(df_sales_raw["지점명"].dropna().unique().tolist())
     store_sel = c3.selectbox("조회 지점", stores, key="admin_sales_store")
     
-    df_sales_raw['주문일시_dt'] = pd.to_datetime(df_sales_raw['주문일시']).dt.date
+    # '주문일시'가 datetime 객체인지 확인하고 변환
+    if not pd.api.types.is_datetime64_any_dtype(df_sales_raw['주문일시']):
+        df_sales_raw['주문일시'] = pd.to_datetime(df_sales_raw['주문일시'])
+
+    df_sales_raw['주문일시_dt'] = df_sales_raw['주문일시'].dt.date
     mask = (df_sales_raw['주문일시_dt'] >= dt_from) & (df_sales_raw['주문일시_dt'] <= dt_to)
-    if store_sel != "(전체 통합)": mask &= (df_sales_raw["지점명"] == store_sel)
+    if store_sel != "(전체 통합)": 
+        mask &= (df_sales_raw["지점명"] == store_sel)
     df_sales = df_sales_raw[mask].copy()
     
-    if df_sales.empty: st.warning("해당 조건의 매출 데이터가 없습니다."); return
+    if df_sales.empty: 
+        st.warning("해당 조건의 매출 데이터가 없습니다.")
+        return
     
     total_sales = df_sales["합계금액"].sum()
     total_supply = df_sales["공급가액"].sum()
@@ -1405,29 +1415,31 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
             else:
                 item_sales['매출액(%)'] = 0
             
-            # [개선사항] 표 내부 막대그래프 스타일로 시각화
             st.dataframe(
                 item_sales,
                 column_config={
                     "매출액(%)": st.column_config.ProgressColumn(
-                        "매출액(%)",
-                        format="%.1f%%",
-                        min_value=0,
-                        max_value=item_sales['매출액(%)'].max(),
+                        "매출액(%)", format="%.1f%%",
+                        min_value=0, max_value=item_sales['매출액(%)'].max(),
                     ),
                 },
                 use_container_width=True, hide_index=True
             )
+
+    # --- 오류 수정: pivot_table 실행 전에 날짜 컬럼 생성 ---
+    df_sales['연'] = df_sales['주문일시'].dt.strftime('%y')
+    df_sales['월'] = df_sales['주문일시'].dt.month
+    df_sales['일'] = df_sales['주문일시'].dt.day
 
     daily_pivot = df_sales.pivot_table(index=['연', '월', '일'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
     monthly_pivot = df_sales.pivot_table(index=['연', '월'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
     
     with sales_tab2:
         st.markdown("##### 📅 일별 매출 상세")
-        # [오류 해결] ArrowInvalid 오류 방지를 위해 인덱스를 문자열로 변환
         daily_pivot_display = daily_pivot.copy()
         daily_pivot_display.index = daily_pivot_display.index.map(str)
         st.dataframe(daily_pivot_display.style.format("{:,.0f}"))
+        
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 매출 상세")
         monthly_pivot_display = monthly_pivot.copy()
@@ -1435,12 +1447,9 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
         st.dataframe(monthly_pivot_display.style.format("{:,.0f}"))
 
     st.divider()
-    # [개선사항 8] 매출 정산표 데이터 전달
     summary_data = {
-        'total_sales': total_sales,
-        'total_supply': total_supply,
-        'total_tax': total_tax,
-        'total_orders': total_orders_count
+        'total_sales': total_sales, 'total_supply': total_supply,
+        'total_tax': total_tax, 'total_orders': total_orders_count
     }
     filter_info = {
         'period': f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}",
@@ -1448,8 +1457,7 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     }
     excel_buffer = make_sales_summary_excel(daily_pivot, monthly_pivot, summary_data, filter_info)
     st.download_button(label="📥 매출 정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-    
-### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
+
 ### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
