@@ -812,7 +812,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                         update_order_status(selected_pending_ids, "반려", st.session_state.auth["name"], reason=rejection_reason)
                         st.session_state.success_message = f"{len(selected_pending_ids)}건이 반려 처리되고 환불되었습니다."
                         st.session_state.admin_orders_selection = {}
-                        st.rerun()        
+                        st.rerun()
         with btn_cols[2]:
             st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input", placeholder="예: 재고 부족")
             
