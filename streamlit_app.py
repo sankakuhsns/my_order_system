@@ -1399,7 +1399,17 @@ def page_admin_documents(store_info_df: pd.DataFrame):
     selected_store_info = store_info_filtered[store_info_filtered['지점명'] == store_sel].iloc[0]
     
     if doc_type == "금전 거래내역서":
-        # ... (로직 변경 없음)
+        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+        store_transactions = transactions_df[transactions_df['지점명'] == store_sel]
+        
+        store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시']).dt.date
+        mask = (store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)
+        dfv = store_transactions[mask].copy()
+
+        st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
+        if not dfv.empty:
+            buf = make_full_transaction_statement_excel(dfv, selected_store_info)
+            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{store_sel}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
     
     elif doc_type == "품목 거래명세서":
         orders_df = load_data(SHEET_NAME_ORDERS)
