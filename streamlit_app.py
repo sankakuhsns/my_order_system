@@ -1777,15 +1777,14 @@ if __name__ == "__main__":
     
     user = st.session_state.auth
     
-    # --- 데이터 로드 ---
+    # --- 오류 수정: 공통 데이터 로드를 if문 밖으로 이동 ---
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
     store_info_df_raw = load_data(SHEET_NAME_STORES, STORES_COLUMNS)
+    orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+    balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
+    charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     
     if user["role"] == "admin":
-        orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
-        balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-        charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
-        
         # --- 통합 관리자 탭 ---
         tabs = st.tabs(["🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"])
         with tabs[0]: page_admin_daily_production(master_df)
@@ -1799,6 +1798,7 @@ if __name__ == "__main__":
     else: # store
         tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
         
+        # 이제 balance_df가 존재하므로 이 코드가 정상적으로 작동합니다.
         my_balance_series = balance_df[balance_df['지점ID'] == user['user_id']]
         my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype='object')
         
