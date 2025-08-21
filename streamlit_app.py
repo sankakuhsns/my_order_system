@@ -161,7 +161,8 @@ def update_balance_sheet(store_id: str, updates: Dict):
         for key, value in updates.items():
             if key in header:
                 col_idx = header.index(key) + 1
-                ws.update_cell(cell.row, col_idx, value)
+                # [수정] API 전송 전에 값을 파이썬 기본 타입(int)으로 변환합니다.
+                ws.update_cell(cell.row, col_idx, int(value))
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -872,6 +873,7 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
 
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
+    display_feedback()
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '요청']
@@ -892,34 +894,43 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
             selected_req = req_options[selected_req_str]
             if action == "반려" and not reason:
                 st.warning("반려 시 사유를 입력해야 합니다.")
-            else:
-                store_id = selected_req['지점ID']
-                if action == "승인":
-                    current_balance_info = balance_df[balance_df['지점ID'] == store_id]
-                    if current_balance_info.empty:
-                        st.error(f"'{selected_req['지점명']}'의 잔액 정보가 없습니다.")
-                        return
-                    
-                    current_balance = current_balance_info.iloc[0]
-                    new_prepaid = current_balance['선충전잔액']
-                    new_used_credit = current_balance['사용여신액']
-                    amount = selected_req['입금액']
+                return
 
-                    if selected_req['종류'] == '선충전':
-                        new_prepaid += amount
-                    else: # 여신상환
-                        new_used_credit -= amount
-                        if new_used_credit < 0:
-                            new_prepaid += abs(new_used_credit)
-                            new_used_credit = 0
-                    
-                    update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
-                    update_charge_request(selected_req['요청일시'], '승인')
-                    st.success("요청이 승인 처리되었습니다.")
-                else: # 반려
-                    update_charge_request(selected_req['요청일시'], '반려', reason)
-                    st.success("요청이 반려 처리되었습니다.")
-                st.rerun()
+            store_id = selected_req['지점ID']
+            
+            # [수정] 전체 데이터를 읽어와서 수정 후 저장하는 방식으로 변경
+            all_charge_requests = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
+            req_index = all_charge_requests[all_charge_requests['요청일시'] == selected_req['요청일시']].index
+
+            if action == "승인":
+                current_balance_info = balance_df[balance_df['지점ID'] == store_id]
+                if current_balance_info.empty:
+                    st.error(f"'{selected_req['지점명']}'의 잔액 정보가 없습니다.")
+                    return
+                
+                current_balance = current_balance_info.iloc[0]
+                new_prepaid = current_balance['선충전잔액']
+                new_used_credit = current_balance['사용여신액']
+                amount = selected_req['입금액']
+
+                if selected_req['종류'] == '선충전':
+                    new_prepaid += amount
+                else: # 여신상환
+                    new_used_credit -= amount
+                    if new_used_credit < 0:
+                        new_prepaid += abs(new_used_credit)
+                        new_used_credit = 0
+                
+                update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
+                all_charge_requests.loc[req_index, '상태'] = '승인'
+                st.session_state.success_message = "요청이 승인 처리되었습니다."
+            else: # 반려
+                all_charge_requests.loc[req_index, '상태'] = '반려'
+                all_charge_requests.loc[req_index, '처리사유'] = reason
+                st.session_state.success_message = "요청이 반려 처리되었습니다."
+            
+            save_df_to_sheet(SHEET_NAME_CHARGE_REQ, all_charge_requests)
+            st.rerun()
 
     st.markdown("---")
     st.markdown("##### 🏢 지점별 잔액 현황")
