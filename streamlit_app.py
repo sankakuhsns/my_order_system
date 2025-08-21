@@ -1063,6 +1063,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                     st.session_state.error_message = "생산 기록 저장 중 오류가 발생했습니다."
 
 ### 🏭 7-2) 신규: 생산/재고 관리
+### 🏭 7-2) 신규: 생산/재고 관리
 def page_admin_inventory_management(master_df: pd.DataFrame):
     st.subheader("📊 생산/재고 관리")
 
@@ -1076,7 +1077,16 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         pending_orders = orders_df[orders_df['상태'] == '요청']
         pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
 
+        # 현재고 데이터가 없을 경우를 대비해 빈 데이터프레임 생성
+        if current_inv_df.empty:
+            current_inv_df = pd.DataFrame(columns=CURRENT_INVENTORY_COLUMNS)
+
         display_inv = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
+        
+        # '현재고수량'과 '출고 대기 수량'이 숫자가 아닐 경우를 대비
+        display_inv['현재고수량'] = pd.to_numeric(display_inv['현재고수량'], errors='coerce').fillna(0)
+        display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0)
+        
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
         
         st.dataframe(display_inv, use_container_width=True, hide_index=True)
@@ -1085,21 +1095,26 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         st.markdown("##### 📜 재고 변동 내역")
         log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
         
-        c1, c2, c3 = st.columns(3)
-        dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=7), key="log_from")
-        dt_to = c2.date_input("조회 종료일", date.today(), key="log_to")
-        
-        item_list = ["(전체)"] + master_df['품목명'].unique().tolist()
-        item_filter = c3.selectbox("품목 필터", item_list, key="log_item_filter")
-        
-        filtered_log = log_df.copy()
-        if not filtered_log.empty:
+        # --- 오류 수정: log_df가 비어있을 경우를 먼저 처리 ---
+        if log_df.empty:
+            st.info("재고 변동 기록이 없습니다.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=7), key="log_from")
+            dt_to = c2.date_input("조회 종료일", date.today(), key="log_to")
+            
+            item_list = ["(전체)"] + master_df['품목명'].unique().tolist()
+            item_filter = c3.selectbox("품목 필터", item_list, key="log_item_filter")
+            
+            filtered_log = log_df.copy()
+            
             filtered_log['로그일시_dt'] = pd.to_datetime(filtered_log['로그일시']).dt.date
             filtered_log = filtered_log[(filtered_log['로그일시_dt'] >= dt_from) & (filtered_log['로그일시_dt'] <= dt_to)]
             if item_filter != "(전체)":
                 filtered_log = filtered_log[filtered_log['품목명'] == item_filter]
-        
-        st.dataframe(filtered_log.drop(columns=['로그일시_dt']), use_container_width=True, hide_index=True)
+            
+            # 이 블록 안에서만 drop을 실행하므로 안전함
+            st.dataframe(filtered_log.drop(columns=['로그일시_dt']), use_container_width=True, hide_index=True)
 
     with inventory_tabs[2]: # 재고 수동 조정
         st.markdown("##### ✍️ 재고 수동 조정")
