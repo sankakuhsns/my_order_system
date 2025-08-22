@@ -1497,26 +1497,35 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.download_button(label="📥 매출 정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 ### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
+### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     
     c1, c2, c3, c4 = st.columns(4)
-    dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="admin_doc_from")
     
     all_stores = sorted(store_info_df["지점명"].dropna().unique().tolist())
     store_selection_list = ["대전 가공장 (Admin)"] + [s for s in all_stores if s != '대전 가공장']
     
     selected_entity = c3.selectbox("지점/관리 선택", store_selection_list, key="admin_doc_entity_select")
 
+    doc_type = ""
     if selected_entity == "대전 가공장 (Admin)":
         doc_type = c4.selectbox("서류 종류", ["품목 생산 보고서", "품목 재고 변동 보고서", "현재고 현황 보고서"], key="admin_doc_type_admin")
-        
-        dt_to_value = dt_from if doc_type == "현재고 현황 보고서" else date.today()
-        dt_to_disabled = True if doc_type == "현재고 현황 보고서" else False
-        dt_to = c2.date_input("조회 종료일", dt_to_value, key="admin_doc_to", disabled=dt_to_disabled)
-        
+    else:
+        doc_type = c4.selectbox("서류 종류", ["금전 거래내역서", "품목 거래명세서"], key="admin_doc_type_store")
+
+    # --- [수정] '현재고 현황 보고서' 선택 시 날짜 기본값 변경 ---
+    default_start_date = date.today() if doc_type == "현재고 현황 보고서" else date.today() - timedelta(days=30)
+    dt_from = c1.date_input("조회 시작일", default_start_date, key="admin_doc_from")
+    
+    dt_to_value = dt_from if doc_type == "현재고 현황 보고서" else date.today()
+    dt_to_disabled = True if doc_type == "현재고 현황 보고서" else False
+    dt_to = c2.date_input("조회 종료일", dt_to_value, key="admin_doc_to", disabled=dt_to_disabled)
+    # --- 수정 끝 ---
+
+    if selected_entity == "대전 가공장 (Admin)":
         log_df_raw = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
-        if not log_df_raw.empty and not pd.api.types.is_datetime64_any_dtype(log_df_raw['작업일자']):
+        if not log_df_raw.empty and '작업일자' in log_df_raw.columns:
             log_df_raw['작업일자'] = pd.to_datetime(log_df_raw['작업일자'], errors='coerce')
 
         if doc_type == "품목 생산 보고서":
