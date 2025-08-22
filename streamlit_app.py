@@ -882,20 +882,15 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 
     tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려 ({len(rejected)}건)"])
     
-    # --- [수정] 쉼표 서식을 적용할 column_config 정의 ---
-    column_config_orders = {
-        "합계금액": st.column_config.NumberColumn(format="%,d원"),
-        "건수": st.column_config.NumberColumn(format="%d건")
-    }
-
     with tab1:
         pending_display = pending.copy()
         pending_display.insert(0, '선택', pending['발주번호'].apply(lambda x: st.session_state.store_orders_selection.get(x, False)))
+        
+        # --- [수정] column_config 서식 제거 ---
         edited_pending = st.data_editor(
             pending_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태']], 
             hide_index=True, use_container_width=True, key="pending_editor", 
-            disabled=pending.columns,
-            column_config=column_config_orders # 서식 적용
+            disabled=pending.columns
         )
         for _, row in edited_pending.iterrows():
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
@@ -914,11 +909,9 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                         if not balance_info_df.empty:
                             balance_info = balance_info_df.iloc[0]
                             new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
-
                             credit_refund = min(refund_amount, new_used_credit)
                             new_used_credit -= credit_refund
                             new_prepaid += (refund_amount - credit_refund)
-
                             update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit})
                             
                             refund_record = {
@@ -937,11 +930,12 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     with tab2:
         shipped_display = shipped.copy()
         shipped_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in shipped['발주번호']])
+        
+        # --- [수정] column_config 서식 제거 ---
         edited_shipped = st.data_editor(
             shipped_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], 
             hide_index=True, use_container_width=True, key="shipped_editor", 
-            disabled=shipped.columns,
-            column_config=column_config_orders # 서식 적용
+            disabled=shipped.columns
         )
         for _, row in edited_shipped.iterrows():
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
@@ -949,11 +943,12 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     with tab3:
         rejected_display = rejected.copy()
         rejected_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in rejected['발주번호']])
+
+        # --- [수정] column_config 서식 제거 ---
         edited_rejected = st.data_editor(
             rejected_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], 
             hide_index=True, use_container_width=True, key="rejected_editor", 
-            disabled=rejected.columns,
-            column_config=column_config_orders # 서식 적용
+            disabled=rejected.columns
         )
         for _, row in edited_rejected.iterrows():
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
@@ -962,9 +957,30 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
-        selected_ids = [k for k, v in st.session_state.store_orders_selection.items() if v]
-        if len(selected_ids) == 1:
-            target_id = selected_ids[0]
+        
+        # --- [수정] st.data_editor의 selection 상태를 직접 가져오는 로직으로 변경 ---
+        # st.session_state.selection은 st.data_editor의 key 값과 연동됩니다.
+        selections = {
+            "pending": st.session_state.get("pending_editor", {}).get("selection", {"rows": []}),
+            "shipped": st.session_state.get("shipped_editor", {}).get("selection", {"rows": []}),
+            "rejected": st.session_state.get("rejected_editor", {}).get("selection", {"rows": []})
+        }
+
+        selected_indices = []
+        selected_df = pd.DataFrame()
+
+        if selections["pending"]["rows"]:
+            selected_indices = selections["pending"]["rows"]
+            selected_df = pending.iloc[selected_indices]
+        elif selections["shipped"]["rows"]:
+            selected_indices = selections["shipped"]["rows"]
+            selected_df = shipped.iloc[selected_indices]
+        elif selections["rejected"]["rows"]:
+            selected_indices = selections["rejected"]["rows"]
+            selected_df = rejected.iloc[selected_indices]
+
+        if len(selected_indices) == 1:
+            target_id = selected_df.iloc[0]['발주번호']
             target_df = df_user[df_user["발주번호"] == target_id]
             total_amount = target_df['합계금액'].sum()
             
