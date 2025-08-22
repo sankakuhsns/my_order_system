@@ -672,12 +672,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                 key=f"editor_v{st.session_state.store_editor_ver}", 
                 hide_index=True, 
                 disabled=["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)"], 
-                use_container_width=True, 
-                column_config={
-                    "단가": st.column_config.NumberColumn(format="%,d원"), 
-                    "단가(VAT포함)": st.column_config.NumberColumn(format="%,d원"),
-                    "수량": st.column_config.NumberColumn(min_value=0, format="%d")
-                }
+                use_container_width=True 
             )
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
@@ -711,12 +706,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             st.dataframe(
                 cart_now[["품목코드", "분류", "품목명", "단위", "단가(VAT포함)", "수량", "합계금액(VAT포함)"]], 
                 hide_index=True, 
-                use_container_width=True,
-                column_config={
-                    "단가(VAT포함)": st.column_config.NumberColumn(format="%,d원"), 
-                    "수량": st.column_config.NumberColumn(format="%,d"),
-                    "합계금액(VAT포함)": st.column_config.NumberColumn(format="%,d원")
-                }
+                use_container_width=True
             )
             
             cart_with_master = pd.merge(cart_now, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
@@ -1081,7 +1071,6 @@ def page_store_master_view(master_df: pd.DataFrame):
 # =============================================================================
 # 7) 관리자 페이지
 # =============================================================================
-
 def page_admin_daily_production(master_df: pd.DataFrame):
     st.subheader("📝 일일 생산 보고")
     user = st.session_state.auth
@@ -1121,8 +1110,9 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                     items_to_add = edited_production[edited_production['생산수량'] > 0]
                     if not items_to_add.empty:
                         current_cart = st.session_state.production_cart
+                        # --- [수정] 생산 목록에 '분류' 추가 ---
                         updated_cart = pd.concat([current_cart, items_to_add]).groupby('품목코드').agg({
-                            '품목명': 'last', '단위': 'last', '생산수량': 'sum'
+                            '분류': 'last', '품목명': 'last', '단위': 'last', '생산수량': 'sum'
                         }).reset_index()
                         st.session_state.production_cart = updated_cart
                         st.session_state.production_editor_ver += 1
@@ -1144,7 +1134,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
             production_log_date = st.session_state.production_date_to_log
             st.markdown(f"##### 📦 최종 생산 기록 목록 ({production_log_date.strftime('%Y년 %m월 %d일')})")
             
-            st.dataframe(production_cart[['품목코드', '품목명', '단위', '생산수량']], use_container_width=True, hide_index=True)
+            st.dataframe(production_cart[['품목코드', '분류', '품목명', '단위', '생산수량']], use_container_width=True, hide_index=True)
             
             with st.form("finalize_production_form"):
                 btn_cols = st.columns(2)
@@ -1214,7 +1204,7 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=7), key="log_from")
             dt_to = c2.date_input("조회 종료일", date.today(), key="log_to")
             
-            item_list = ["(전체)"] + master_df['품목명'].unique().tolist()
+            item_list = ["(전체)"] + sorted(master_df['품목명'].unique().tolist())
             item_filter = c3.selectbox("품목 필터", item_list, key="log_item_filter")
             
             filtered_log = log_df.copy()
@@ -1232,7 +1222,7 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         st.warning("이 기능은 전산 재고와 실물 재고가 맞지 않을 때만 사용하세요. 모든 조정 내역은 영구적으로 기록됩니다.")
 
         with st.form("adj_form", border=True):
-            item_list = master_df['품목명'].unique().tolist()
+            item_list = sorted(master_df['품목명'].unique().tolist())
             c1, c2, c3 = st.columns(3)
             selected_item = c1.selectbox("조정할 품목 선택", item_list)
             adj_qty = c2.number_input("조정 수량 (+/-)", step=1, help="증가시키려면 양수, 감소시키려면 음수를 입력하세요.")
