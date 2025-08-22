@@ -1549,21 +1549,22 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     df_sales['월'] = df_sales['주문일시'].dt.month
     df_sales['일'] = df_sales['주문일시'].dt.day
 
-    # --- [수정] margins_name을 ''으로 변경하여 '합계' 텍스트 제거 ---
-    daily_pivot = df_sales.pivot_table(index=['연', '월', '일'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='')
-    monthly_pivot = df_sales.pivot_table(index=['연', '월'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='')
+    daily_pivot = df_sales.pivot_table(index=['연', '월', '일'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
+    monthly_pivot = df_sales.pivot_table(index=['연', '월'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
     
     with sales_tab2:
         st.markdown("##### 📅 일별 상세")
         daily_display_df = daily_pivot.reset_index()
-        # --- [테스트] st.table 사용 ---
-        st.table(daily_display_df)
+        # --- [원복] '연', '월', '일'을 제외한 숫자 열에만 서식을 적용하는 초기 방식으로 변경 ---
+        numeric_cols = daily_display_df.columns.drop(['연', '월', '일'])
+        st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols), use_container_width=True, hide_index=True)
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        # --- [테스트] st.table 사용 ---
-        st.table(monthly_display_df)
+        # --- [원복] '연', '월'을 제외한 숫자 열에만 서식을 적용하는 초기 방식으로 변경 ---
+        numeric_cols = monthly_display_df.columns.drop(['연', '월'])
+        st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols), use_container_width=True, hide_index=True)
 
     st.divider()
     summary_data = {
