@@ -796,23 +796,36 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     
     st.info("**입금 계좌: OOO은행 123-456-789 (주)산카쿠**\n\n위 계좌로 입금하신 후, 아래 양식을 작성하여 '알림 보내기' 버튼을 눌러주세요.")
     
-    # --- [수정] 라디오 버튼 변경 시 인덱스를 업데이트하는 콜백 함수 ---
+    # --- [수정] 대기 중인 여신상환 요청액 계산 로직 추가 ---
+    my_pending_repayments = charge_requests_df[
+        (charge_requests_df['지점ID'] == user['user_id']) &
+        (charge_requests_df['상태'] == '요청') &
+        (charge_requests_df['종류'] == '여신상환')
+    ]
+    pending_repayment_sum = int(my_pending_repayments['입금액'].sum())
+    
+    # 실제 상환해야 할 금액 계산
+    repayable_amount = max(0, used_credit - pending_repayment_sum)
+
+    # 대기 중인 요청이 있으면 사용자에게 알림
+    if pending_repayment_sum > 0:
+        st.warning(f"현재 처리 대기 중인 여신상환 요청 금액 {pending_repayment_sum:,.0f}원이 있습니다.\n\n해당 금액을 제외한 **{repayable_amount:,.0f}원**으로 상환 요청이 생성됩니다.")
+
     def on_radio_change():
         options = ["선충전", "여신상환"]
-        # 현재 선택된 라디오 버튼의 값으로 인덱스를 찾아 세션 상태에 저장
         st.session_state.charge_type_index = options.index(st.session_state.charge_type_radio)
 
     charge_type = st.radio(
         "종류 선택", ["선충전", "여신상환"], 
         key="charge_type_radio", 
         horizontal=True,
-        index=st.session_state.charge_type_index, # index로 선택 상태를 제어
-        on_change=on_radio_change # 사용자가 선택을 바꾸면 콜백 실행
+        index=st.session_state.charge_type_index,
+        on_change=on_radio_change
     )
 
-    # 선택된 종류에 따라 입금액과 입력 필드 활성/비활성 상태를 결정
     if st.session_state.charge_type_radio == '여신상환':
-        st.session_state.charge_amount = used_credit if used_credit > 0 else 0
+        # --- [수정] used_credit 대신 계산된 repayable_amount 사용 ---
+        st.session_state.charge_amount = repayable_amount
         is_disabled = True
     else:
         is_disabled = False
@@ -823,11 +836,8 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
         depositor_name = c1.text_input("입금자명")
         
         charge_amount = c2.number_input(
-            "입금액", 
-            min_value=0, 
-            step=1000, 
-            key="charge_amount",
-            disabled=is_disabled
+            "입금액", min_value=0, step=1000, 
+            key="charge_amount", disabled=is_disabled
         )
         
         if st.form_submit_button("알림 보내기", type="primary"):
@@ -843,7 +853,6 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
             else: 
                 st.warning("입금자명과 0원 이상의 입금액을 올바르게 입력해주세요.")
             
-            # --- [수정] 위젯 값을 직접 바꾸는 대신, 인덱스를 0('선충전')으로 초기화 ---
             st.session_state.charge_type_index = 0
             st.session_state.charge_amount = 1000
             st.rerun()
