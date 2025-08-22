@@ -1741,7 +1741,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     
-    # 처리 대기 중인 요청을 실시간으로 가져옴
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '요청']
     
@@ -1753,16 +1752,13 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         
         c1, c2, c3 = st.columns(3)
         
-        # Selectbox에 표시될 옵션 생성
         req_options = {
             f"{row['요청일시']} / {row['지점명']} / {int(row['입금액']):,}원": row 
             for _, row in pending_requests.iterrows()
         }
         
-        # 만약 처리할 요청이 없다면 selectbox를 표시하지 않음
         if not req_options:
             st.info("처리 대기 중인 요청이 없습니다.")
-            # 만약 사용자가 보고 있는 사이 st.rerun() 되어 모든 요청이 처리된 경우를 대비
             if st.button("새로고침"):
                 st.rerun()
             return
@@ -1776,21 +1772,11 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                 st.warning("처리할 요청을 선택하고, 반려 시 사유를 입력해야 합니다.")
                 st.stop()
 
-            # --- [수정] 버튼 클릭 시점의 최신 데이터 다시 확인 ---
-            latest_charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
             selected_req_data = req_options[selected_req_str]
             
-            # 최신 데이터에서 현재 선택한 요청이 '요청' 상태로 존재하는지 재확인
-            request_still_exists = not latest_charge_requests_df[
-                (latest_charge_requests_df['요청일시'] == selected_req_data['요청일시']) &
-                (latest_charge_requests_df['지점ID'] == selected_req_data['지점ID']) &
-                (latest_charge_requests_df['상태'] == '요청')
-            ].empty
-
-            if not request_still_exists:
-                st.error("⚠️ 다른 사용자가 방금 이 요청을 처리했습니다. 페이지를 새로고침하여 최신 목록을 확인하세요.")
-                st.stop()
-            # --- [수정] 확인 로직 끝 ---
+            # --- [핵심 수정] 날짜/시간 객체를 비교를 위한 문자열로 변환 ---
+            selected_timestamp_str = selected_req_data['요청일시'].strftime('%Y-%m-%d %H:%M:%S')
+            # ---------------------------------------------------------
 
             try:
                 with st.spinner("요청 처리 중..."):
@@ -1800,12 +1786,12 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     
                     target_row_index = -1
                     for i, row in enumerate(all_data[1:], start=2):
-                        if row[header.index('요청일시')] == selected_req_data['요청일시'] and row[header.index('지점ID')] == selected_req_data['지점ID']:
+                        # --- [핵심 수정] 문자열 vs 문자열로 비교 ---
+                        if row[header.index('요청일시')] == selected_timestamp_str and row[header.index('지점ID')] == selected_req_data['지점ID']:
                             target_row_index = i
                             break
 
                     if target_row_index == -1:
-                        # 이 부분은 위의 확인 로직으로 인해 거의 발생하지 않지만, 만약을 위한 최종 방어선으로 남겨둠
                         st.error("처리할 요청을 시트에서 찾을 수 없습니다. 페이지를 새로고침하고 다시 시도하세요.")
                         st.stop()
                     
@@ -1849,7 +1835,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                         else:
                             st.session_state.error_message = "잔액 정보 업데이트에 실패했습니다."
                             st.rerun()
-
                     else:  # 반려
                         cells_to_update.append(gspread.Cell(target_row_index, status_col_index, '반려'))
                         cells_to_update.append(gspread.Cell(target_row_index, reason_col_index, reason))
@@ -1860,7 +1845,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
 
                     st.cache_data.clear()
                     st.rerun()
-
             except Exception as e:
                 st.error(f"처리 중 오류가 발생했습니다: {e}")
 
