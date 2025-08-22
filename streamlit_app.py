@@ -1497,7 +1497,6 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.download_button(label="📥 매출 정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 ### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
-### 📑 7-5) 기존: 증빙서류 다운로드 (UI 개선 및 재고 리포트 추가)
 def page_admin_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     
@@ -1554,17 +1553,28 @@ def page_admin_documents(store_info_df: pd.DataFrame):
             if log_df_raw.empty:
                 st.info("재고 기록이 없습니다.")
                 return
+
+            # 상품마스터의 모든 품목을 기준으로 재고를 '0'으로 초기화
+            report_df = master_df[['품목코드', '품목명']].copy()
+            report_df['현재고수량'] = 0
+            
+            # 선택된 날짜까지의 로그만 필터링
             filtered_log = log_df_raw[log_df_raw['작업일자'].dt.date <= dt_from]
             
             if not filtered_log.empty:
-                report_df = filtered_log.groupby(['품목코드', '품목명'])['수량변경'].sum().reset_index()
-                report_df = report_df.rename(columns={'수량변경': '현재고수량'})
-                st.dataframe(report_df, use_container_width=True, hide_index=True)
+                # 계산된 재고 합산
+                calculated_stock = filtered_log.groupby('품목코드')['수량변경'].sum().reset_index()
+                
+                # report_df를 업데이트하여 재고 수량 반영
+                report_df = report_df.set_index('품목코드')
+                report_df.update(calculated_stock.set_index('품목코드').rename(columns={'수량변경': '현재고수량'}))
+                report_df = report_df.reset_index()
 
+            st.dataframe(report_df, use_container_width=True, hide_index=True)
+
+            if not report_df.empty:
                 buf = make_inventory_report_excel(report_df, "현재고 현황 보고서", dt_from, dt_from)
                 st.download_button("엑셀 다운로드", data=buf, file_name=f"현재고현황보고서_{dt_from}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
-            else:
-                st.info("해당 날짜까지의 재고 기록이 없습니다.")
 
     else: # 일반 지점 선택 시
         dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to_store")        
