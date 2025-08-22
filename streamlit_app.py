@@ -1556,12 +1556,14 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     with sales_tab2:
         st.markdown("##### 📅 일별 상세")
         daily_display_df = daily_pivot.reset_index()
-        st.dataframe(daily_display_df, use_container_width=True, hide_index=True)
+        # --- [테스트] st.table 사용 ---
+        st.table(daily_display_df)
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        st.dataframe(monthly_display_df, use_container_width=True, hide_index=True)
+        # --- [테스트] st.table 사용 ---
+        st.table(monthly_display_df)
 
     st.divider()
     summary_data = {
