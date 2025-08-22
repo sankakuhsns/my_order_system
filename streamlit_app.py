@@ -882,15 +882,20 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 
     tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려 ({len(rejected)}건)"])
     
+    # --- [수정] 쉼표 서식을 적용할 column_config 정의 ---
+    column_config_orders = {
+        "합계금액": st.column_config.NumberColumn(format="%,d원"),
+        "건수": st.column_config.NumberColumn(format="%d건")
+    }
+
     with tab1:
         pending_display = pending.copy()
         pending_display.insert(0, '선택', pending['발주번호'].apply(lambda x: st.session_state.store_orders_selection.get(x, False)))
         edited_pending = st.data_editor(
             pending_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태']], 
-            hide_index=True, 
-            use_container_width=True, 
-            key="pending_editor", 
-            disabled=pending.columns
+            hide_index=True, use_container_width=True, key="pending_editor", 
+            disabled=pending.columns,
+            column_config=column_config_orders # 서식 적용
         )
         for _, row in edited_pending.iterrows():
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
@@ -932,14 +937,24 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     with tab2:
         shipped_display = shipped.copy()
         shipped_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in shipped['발주번호']])
-        edited_shipped = st.data_editor(shipped_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], hide_index=True, use_container_width=True, key="shipped_editor", disabled=shipped.columns)
+        edited_shipped = st.data_editor(
+            shipped_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], 
+            hide_index=True, use_container_width=True, key="shipped_editor", 
+            disabled=shipped.columns,
+            column_config=column_config_orders # 서식 적용
+        )
         for _, row in edited_shipped.iterrows():
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
         
     with tab3:
         rejected_display = rejected.copy()
         rejected_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in rejected['발주번호']])
-        edited_rejected = st.data_editor(rejected_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], hide_index=True, use_container_width=True, key="rejected_editor", disabled=rejected.columns)
+        edited_rejected = st.data_editor(
+            rejected_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], 
+            hide_index=True, use_container_width=True, key="rejected_editor", 
+            disabled=rejected.columns,
+            column_config=column_config_orders # 서식 적용
+        )
         for _, row in edited_rejected.iterrows():
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
 
