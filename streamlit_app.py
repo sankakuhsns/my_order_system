@@ -525,7 +525,9 @@ def init_session_state():
         "production_editor_ver": 0,
         "success_message": "", "error_message": "", "warning_message": "",
         "store_orders_selection": {}, "admin_orders_selection": {},
-        "charge_type_radio": "선충전", "charge_amount": 1000
+        "charge_type_radio": "선충전", "charge_amount": 1000,
+        # --- [수정] 라디오 버튼 인덱스 관리를 위한 상태 추가 ---
+        "charge_type_index": 0 
     }
     for key, value in defaults.items():
         if key not in st.session_state: st.session_state[key] = value
@@ -794,12 +796,21 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     
     st.info("**입금 계좌: OOO은행 123-456-789 (주)산카쿠**\n\n위 계좌로 입금하신 후, 아래 양식을 작성하여 '알림 보내기' 버튼을 눌러주세요.")
     
+    # --- [수정] 라디오 버튼 변경 시 인덱스를 업데이트하는 콜백 함수 ---
+    def on_radio_change():
+        options = ["선충전", "여신상환"]
+        # 현재 선택된 라디오 버튼의 값으로 인덱스를 찾아 세션 상태에 저장
+        st.session_state.charge_type_index = options.index(st.session_state.charge_type_radio)
+
     charge_type = st.radio(
         "종류 선택", ["선충전", "여신상환"], 
         key="charge_type_radio", 
-        horizontal=True
+        horizontal=True,
+        index=st.session_state.charge_type_index, # index로 선택 상태를 제어
+        on_change=on_radio_change # 사용자가 선택을 바꾸면 콜백 실행
     )
 
+    # 선택된 종류에 따라 입금액과 입력 필드 활성/비활성 상태를 결정
     if st.session_state.charge_type_radio == '여신상환':
         st.session_state.charge_amount = used_credit if used_credit > 0 else 0
         is_disabled = True
@@ -832,7 +843,8 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
             else: 
                 st.warning("입금자명과 0원 이상의 입금액을 올바르게 입력해주세요.")
             
-            st.session_state.charge_type_radio = "선충전"
+            # --- [수정] 위젯 값을 직접 바꾸는 대신, 인덱스를 0('선충전')으로 초기화 ---
+            st.session_state.charge_type_index = 0
             st.session_state.charge_amount = 1000
             st.rerun()
             
