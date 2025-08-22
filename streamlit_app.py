@@ -681,7 +681,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             )
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-                items_to_add = pd.merge(coerce_cart_df(edited_disp), master_df[['품목코드', '분류']], on='품목코드', how='left')
+                items_to_add = coerce_cart_df(edited_disp)
                 if not items_to_add[items_to_add["수량"] > 0].empty:
                     add_to_cart(items_to_add, master_df)
                     st.session_state.store_editor_ver += 1
@@ -693,6 +693,17 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
     with st.container(border=True):
         st.markdown("##### 🧺 장바구니 및 최종 확인")
         cart_now = st.session_state.cart.copy()
+
+        # --- [KeyError 수정] 이전 세션의 장바구니에 '분류'가 없을 경우를 대비한 방어 코드 ---
+        if '분류' not in cart_now.columns and not cart_now.empty:
+            cart_now = pd.merge(
+                cart_now,
+                master_df[['품목코드', '분류']],
+                on='품목코드',
+                how='left'
+            )
+            # 현재 세션의 장바구니 데이터를 영구적으로 수정하여 오류 재발 방지
+            st.session_state.cart = cart_now.copy()
         
         if cart_now.empty:
             st.info("장바구니가 비어 있습니다.")
@@ -768,7 +779,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                         st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
                         st.session_state.success_message = "장바구니를 비웠습니다."
                         st.rerun()
-
+                        
 def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series):
     st.subheader("💰 결제 관리")
     user = st.session_state.auth
