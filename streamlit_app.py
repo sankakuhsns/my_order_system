@@ -1736,13 +1736,13 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                 buf = make_multi_date_item_statement_excel(preview_df, supplier_info, selected_entity_info, dt_from, dt_to)
                 st.download_button("엑셀 다운로드", data=buf, file_name=f"기간별_거래명세서_{selected_entity_real_name}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
-
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     
-    # 데이터 로드는 기존과 동일
-    charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
+    
+    # 처리 대기 중인 요청을 실시간으로 가져옴
+    charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '요청']
     
     st.markdown("##### 💳 충전/상환 요청 처리")
@@ -1752,16 +1752,45 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         st.dataframe(pending_requests, hide_index=True, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
-        req_options = {f"{row['요청일시']} / {row['지점명']} / {int(row['입금액']):,}원": row for _, row in pending_requests.iterrows()}
+        
+        # Selectbox에 표시될 옵션 생성
+        req_options = {
+            f"{row['요청일시']} / {row['지점명']} / {int(row['입금액']):,}원": row 
+            for _, row in pending_requests.iterrows()
+        }
+        
+        # 만약 처리할 요청이 없다면 selectbox를 표시하지 않음
+        if not req_options:
+            st.info("처리 대기 중인 요청이 없습니다.")
+            # 만약 사용자가 보고 있는 사이 st.rerun() 되어 모든 요청이 처리된 경우를 대비
+            if st.button("새로고침"):
+                st.rerun()
+            return
+
         selected_req_str = c1.selectbox("처리할 요청 선택", req_options.keys())
         action = c2.selectbox("처리 방식", ["승인", "반려"])
         reason = c3.text_input("반려 사유 (반려 시 필수)")
 
-        # ------------------- [수정된 부분 시작] -------------------
         if st.button("처리 실행", type="primary", use_container_width=True):
             if not selected_req_str or (action == "반려" and not reason):
                 st.warning("처리할 요청을 선택하고, 반려 시 사유를 입력해야 합니다.")
                 st.stop()
+
+            # --- [수정] 버튼 클릭 시점의 최신 데이터 다시 확인 ---
+            latest_charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
+            selected_req_data = req_options[selected_req_str]
+            
+            # 최신 데이터에서 현재 선택한 요청이 '요청' 상태로 존재하는지 재확인
+            request_still_exists = not latest_charge_requests_df[
+                (latest_charge_requests_df['요청일시'] == selected_req_data['요청일시']) &
+                (latest_charge_requests_df['지점ID'] == selected_req_data['지점ID']) &
+                (latest_charge_requests_df['상태'] == '요청')
+            ].empty
+
+            if not request_still_exists:
+                st.error("⚠️ 다른 사용자가 방금 이 요청을 처리했습니다. 페이지를 새로고침하여 최신 목록을 확인하세요.")
+                st.stop()
+            # --- [수정] 확인 로직 끝 ---
 
             try:
                 with st.spinner("요청 처리 중..."):
@@ -1769,58 +1798,52 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     all_data = ws_charge_req.get_all_values()
                     header = all_data[0]
                     
-                    selected_req = req_options[selected_req_str]
                     target_row_index = -1
-                    
-                    # 요청일시와 지점ID를 기준으로 시트에서 실제 행 번호 찾기
                     for i, row in enumerate(all_data[1:], start=2):
-                        if row[header.index('요청일시')] == selected_req['요청일시'] and row[header.index('지점ID')] == selected_req['지점ID']:
+                        if row[header.index('요청일시')] == selected_req_data['요청일시'] and row[header.index('지점ID')] == selected_req_data['지점ID']:
                             target_row_index = i
                             break
 
                     if target_row_index == -1:
+                        # 이 부분은 위의 확인 로직으로 인해 거의 발생하지 않지만, 만약을 위한 최종 방어선으로 남겨둠
                         st.error("처리할 요청을 시트에서 찾을 수 없습니다. 페이지를 새로고침하고 다시 시도하세요.")
                         st.stop()
                     
-                    # 업데이트할 셀(들)을 담을 리스트
                     cells_to_update = []
                     status_col_index = header.index('상태') + 1
                     reason_col_index = header.index('처리사유') + 1
 
                     if action == "승인":
-                        # 잔액 업데이트 및 거래내역 추가 로직 (기존과 동일)
-                        store_id = selected_req['지점ID']
+                        store_id = selected_req_data['지점ID']
                         current_balance_info = balance_df[balance_df['지점ID'] == store_id]
                         if current_balance_info.empty:
-                            st.error(f"'{selected_req['지점명']}'의 잔액 정보가 없습니다.")
+                            st.error(f"'{selected_req_data['지점명']}'의 잔액 정보가 없습니다.")
                             st.rerun()
 
                         current_balance = current_balance_info.iloc[0]
                         new_prepaid = int(current_balance['선충전잔액'])
                         new_used_credit = int(current_balance['사용여신액'])
-                        amount = int(selected_req['입금액'])
+                        amount = int(selected_req_data['입금액'])
                         trans_record = {}
 
-                        if selected_req['종류'] == '선충전':
+                        if selected_req_data['종류'] == '선충전':
                             new_prepaid += amount
-                            trans_record = {"구분": "선충전승인", "내용": f"선충전 입금 확인 ({selected_req['입금자명']})"}
-                        else:  # 여신상환
+                            trans_record = {"구분": "선충전승인", "내용": f"선충전 입금 확인 ({selected_req_data['입금자명']})"}
+                        else:
                             new_used_credit -= amount
-                            trans_record = {"구분": "여신상환승인", "내용": f"여신 상환 입금 확인 ({selected_req['입금자명']})"}
+                            trans_record = {"구분": "여신상환승인", "내용": f"여신 상환 입금 확인 ({selected_req_data['입금자명']})"}
                             if new_used_credit < 0:
                                 new_prepaid += abs(new_used_credit)
                                 new_used_credit = 0
                         
                         if update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
                             full_trans_record = {
-                                "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_req['지점명'],
+                                "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_req_data['지점명'],
                                 "금액": amount, "처리후선충전잔액": new_prepaid,
                                 "처리후사용여신액": new_used_credit, "관련발주번호": "", "처리자": st.session_state.auth["name"],
                                 **trans_record
                             }
                             append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS)
-                            
-                            # 성공 시, '상태' 셀을 '승인'으로 업데이트하도록 준비
                             cells_to_update.append(gspread.Cell(target_row_index, status_col_index, '승인'))
                             st.session_state.success_message = "요청이 승인 처리되고 거래내역에 기록되었습니다."
                         else:
@@ -1828,28 +1851,25 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             st.rerun()
 
                     else:  # 반려
-                        # '상태' 셀을 '반려'로, '처리사유' 셀을 입력된 내용으로 업데이트하도록 준비
                         cells_to_update.append(gspread.Cell(target_row_index, status_col_index, '반려'))
                         cells_to_update.append(gspread.Cell(target_row_index, reason_col_index, reason))
                         st.session_state.success_message = "요청이 반려 처리되었습니다."
 
-                    # 준비된 셀 업데이트를 시트에 일괄 적용
                     if cells_to_update:
                         ws_charge_req.update_cells(cells_to_update, value_input_option='USER_ENTERED')
 
-                    st.cache_data.clear() # 최신 데이터를 다시 불러오도록 캐시 비우기
+                    st.cache_data.clear()
                     st.rerun()
 
             except Exception as e:
                 st.error(f"처리 중 오류가 발생했습니다: {e}")
-        # ------------------- [수정된 부분 끝] -------------------
 
     st.markdown("---")
     st.markdown("##### 🏢 지점별 잔액 현황")
     st.dataframe(balance_df, hide_index=True, use_container_width=True)
     
-    # '잔액/여신 수동 조정' 부분은 기존 코드와 동일하게 유지 (문제가 없는 부분이므로)
     with st.expander("✍️ 잔액/여신 수동 조정"):
+        # (이하 코드는 변경 없음)
         with st.form("manual_adjustment_form"):
             store_info_filtered = store_info_df[store_info_df['역할'] != 'admin']
             stores = sorted(store_info_filtered["지점명"].dropna().unique().tolist())
@@ -1871,15 +1891,12 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                         if store_id_series.empty:
                             st.error(f"'{selected_store}'의 지점ID를 찾을 수 없습니다.")
                             return
-
                         store_id = store_id_series.iloc[0]
                         current_balance_query = balance_df[balance_df['지점ID'] == store_id]
-                        
                         if current_balance_query.empty:
                             st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다.")
                         else:
                             current_balance = current_balance_query.iloc[0]
-                            
                             if adj_type == "여신한도":
                                 new_limit = int(current_balance['여신한도']) + adj_amount
                                 update_balance_sheet(store_id, {adj_type: new_limit})
@@ -1887,7 +1904,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             else:
                                 current_prepaid = int(current_balance['선충전잔액'])
                                 current_used_credit = int(current_balance['사용여신액'])
-                                
                                 new_prepaid, new_used_credit = current_prepaid, current_used_credit
                                 trans_record = {"금액": adj_amount, "내용": adj_reason}
 
@@ -1911,7 +1927,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                                 append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS)
                                 st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 조정되고 거래내역에 기록되었습니다."
                             st.rerun()
-
+                            
 def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame):
     st.subheader("🛠️ 관리 설정")
     tab1, tab2 = st.tabs(["품목 관리", "지점 관리"])
