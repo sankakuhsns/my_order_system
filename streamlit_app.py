@@ -783,22 +783,19 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     
     with st.container(border=True):
         c1, c2, c3 = st.columns(3)
-        c1.metric("선충전 잔액", f"{prepaid_balance:,.0f}원")
-        c2.metric("사용 여신액", f"{used_credit:,.0f}원")
-        c3.metric("사용 가능 여신", f"{available_credit:,.0f}원", delta=f"한도: {credit_limit:,.0f}원", delta_color="off")
+        c1.metric("선충전 잔액", f"{prepaid_balance:,}원")
+        c2.metric("사용 여신액", f"{used_credit:,}원")
+        c3.metric("사용 가능 여신", f"{available_credit:,}원", delta=f"한도: {credit_limit:,}원", delta_color="off")
     
     st.info("**입금 계좌: OOO은행 123-456-789 (주)산카쿠**\n\n위 계좌로 입금하신 후, 아래 양식을 작성하여 '알림 보내기' 버튼을 눌러주세요.")
     
-    # --- [수정] st.form 밖으로 종류 선택 radio 버튼을 이동하여 on_change 오류 해결 ---
     charge_type = st.radio(
         "종류 선택", ["선충전", "여신상환"], 
         key="charge_type_radio", 
         horizontal=True
     )
 
-    # --- [수정] 선택된 종류에 따라 입금액과 입력 상태를 결정 ---
     if st.session_state.charge_type_radio == '여신상환':
-        # 사용 여신액이 0보다 클 때만 해당 금액으로 설정, 아니면 0으로
         st.session_state.charge_amount = used_credit if used_credit > 0 else 0
         is_disabled = True
     else:
@@ -814,12 +811,11 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
             min_value=0, 
             step=1000, 
             key="charge_amount",
-            disabled=is_disabled,
-            format="%d"
+            disabled=is_disabled
         )
         
         if st.form_submit_button("알림 보내기", type="primary"):
-            if depositor_name and (charge_amount > 0 or (charge_type == '여신상환' and charge_amount == 0 and used_credit == 0)):
+            if depositor_name and (charge_amount > 0 or (charge_type == '여신상환' and charge_amount >= 0)):
                 new_request = {
                     "요청일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
                     "입금자명": depositor_name, "입금액": charge_amount, "종류": charge_type, "상태": "요청", "처리사유": ""
@@ -831,7 +827,6 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
             else: 
                 st.warning("입금자명과 0원 이상의 입금액을 올바르게 입력해주세요.")
             
-            # form 제출 후 '선충전'으로 초기화
             st.session_state.charge_type_radio = "선충전"
             st.session_state.charge_amount = 1000
             st.rerun()
@@ -839,12 +834,7 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     st.markdown("---")
     st.markdown("##### 나의 충전/상환 요청 현황")
     my_requests = charge_requests_df[charge_requests_df['지점ID'] == user['user_id']]
-    st.dataframe(
-        my_requests, 
-        use_container_width=True, 
-        hide_index=True,
-        column_config={"입금액": st.column_config.NumberColumn(format="%,d원")}
-    )
+    st.dataframe(my_requests, use_container_width=True, hide_index=True)
 
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
@@ -1101,8 +1091,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                 df_producible[['품목코드', '분류', '품목명', '단위', '생산수량']],
                 key=f"production_editor_{st.session_state.production_editor_ver}",
                 use_container_width=True, hide_index=True,
-                disabled=['품목코드', '분류', '품목명', '단위'],
-                column_config={"생산수량": st.column_config.NumberColumn(min_value=0, step=1, format="%d")}
+                disabled=['품목코드', '분류', '품목명', '단위']
             )
 
             if st.form_submit_button("생산 목록에 추가", type="primary", use_container_width=True):
@@ -1112,10 +1101,15 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                     items_to_add = edited_production[edited_production['생산수량'] > 0]
                     if not items_to_add.empty:
                         current_cart = st.session_state.production_cart
-                        # --- [수정] 생산 목록에 '분류' 추가 ---
+                        
+                        # --- [KeyError 수정] agg()에 '분류'를 추가하여 데이터 유지 ---
                         updated_cart = pd.concat([current_cart, items_to_add]).groupby('품목코드').agg({
-                            '분류': 'last', '품목명': 'last', '단위': 'last', '생산수량': 'sum'
+                            '분류': 'last', 
+                            '품목명': 'last', 
+                            '단위': 'last', 
+                            '생산수량': 'sum'
                         }).reset_index()
+                        
                         st.session_state.production_cart = updated_cart
                         st.session_state.production_editor_ver += 1
                         st.session_state.production_date_to_log = production_date
