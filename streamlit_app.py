@@ -1560,14 +1560,35 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     with sales_tab2:
         st.markdown("##### 📅 일별 매출 상세")
         daily_display_df = daily_pivot.reset_index()
-        numeric_cols = daily_display_df.select_dtypes(include='number').columns
-        st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols), hide_index=True)
+        
+        # --- [수정] st.data_editor로 변경하고 column_config로 너비 조절 ---
+        st.data_editor(
+            daily_display_df, 
+            use_container_width=True, 
+            hide_index=True,
+            disabled=True, # 전체를 읽기 전용으로 설정
+            column_config={
+                "연": st.column_config.Column(width="small"),
+                "월": st.column_config.Column(width="small"),
+                "일": st.column_config.Column(width="small"),
+            }
+        )
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 매출 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        numeric_cols = monthly_display_df.select_dtypes(include='number').columns
-        st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols), hide_index=True)
+
+        # --- [수정] st.data_editor로 변경하고 column_config로 너비 조절 ---
+        st.data_editor(
+            monthly_display_df, 
+            use_container_width=True, 
+            hide_index=True,
+            disabled=True, # 전체를 읽기 전용으로 설정
+            column_config={
+                "연": st.column_config.Column(width="small"),
+                "월": st.column_config.Column(width="small"),
+            }
+        )
 
     st.divider()
     summary_data = {
