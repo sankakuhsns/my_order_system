@@ -882,15 +882,14 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 
     tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려 ({len(rejected)}건)"])
     
-    def handle_selection(df, key):
-        edited_rows = st.session_state[key].get("edited_rows", {})
-        if not edited_rows:
-            return
-        last_edited_index = list(edited_rows.keys())[-1]
-        is_selected = edited_rows[last_edited_index].get("선택")
-        selected_order_id = df.iloc[last_edited_index]['발주번호']
-        st.session_state.store_orders_selection = {selected_order_id: is_selected}
-        st.rerun()
+    # --- [수정] 여러 개 선택이 가능하도록 하고, 불필요한 st.rerun()을 제거한 최종 콜백 함수 ---
+    def handle_multiselect(key, source_df):
+        # data_editor에서 편집된 내용을 st.session_state에서 직접 가져옴
+        edits = st.session_state[key].get("edited_rows", {})
+        for row_index, changed_data in edits.items():
+            if "선택" in changed_data:
+                order_id = source_df.iloc[row_index]['발주번호']
+                st.session_state.store_orders_selection[order_id] = changed_data["선택"]
 
     with tab1:
         pending_display = pending.copy()
@@ -898,14 +897,12 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         st.data_editor(
             pending_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태']], 
             hide_index=True, use_container_width=True, key="pending_editor", 
-            disabled=pending.columns,
-            on_change=handle_selection, args=(pending_display, "pending_editor")
+            disabled=pending_display.columns.drop('선택'),
+            on_change=handle_multiselect, kwargs={"key": "pending_editor", "source_df": pending}
         )
         
         selected_to_cancel = [oid for oid, selected in st.session_state.store_orders_selection.items() if selected and oid in pending['발주번호'].values]
-        
         if st.button("선택한 발주 요청 취소하기", disabled=not selected_to_cancel, type="primary"):
-            # --- [IndentationError 수정] 누락되었던 실행 코드 블록 복원 ---
             with st.spinner("발주 취소 및 환불 처리 중..."):
                 for order_id in selected_to_cancel:
                     original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
@@ -941,8 +938,8 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         st.data_editor(
             shipped_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], 
             hide_index=True, use_container_width=True, key="shipped_editor", 
-            disabled=shipped.columns,
-            on_change=handle_selection, args=(shipped_display, "shipped_editor")
+            disabled=shipped_display.columns.drop('선택'),
+            on_change=handle_multiselect, kwargs={"key": "shipped_editor", "source_df": shipped}
         )
 
     with tab3:
@@ -951,8 +948,8 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         st.data_editor(
             rejected_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], 
             hide_index=True, use_container_width=True, key="rejected_editor", 
-            disabled=rejected.columns,
-            on_change=handle_selection, args=(rejected_display, "rejected_editor")
+            disabled=rejected_display.columns.drop('선택'),
+            on_change=handle_multiselect, kwargs={"key": "rejected_editor", "source_df": rejected}
         )
 
     v_spacer(16)
