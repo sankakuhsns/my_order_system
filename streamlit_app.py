@@ -1435,7 +1435,6 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     stores = ["(전체 통합)"] + sorted(df_sales_raw["지점명"].dropna().unique().tolist())
     store_sel = c3.selectbox("조회 지점", stores, key="admin_sales_store")
     
-    # '주문일시'가 datetime 객체인지 확인하고 변환
     if not pd.api.types.is_datetime64_any_dtype(df_sales_raw['주문일시']):
         df_sales_raw['주문일시'] = pd.to_datetime(df_sales_raw['주문일시'])
 
@@ -1499,16 +1498,20 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     
     with sales_tab2:
         st.markdown("##### 📅 일별 매출 상세")
-        # --- [수정] reset_index()를 사용하여 인덱스를 컬럼으로 변환 ---
         daily_display_df = daily_pivot.reset_index()
-        st.dataframe(daily_display_df.style.format("{:,.0f}"))
+        
+        # --- [오류 수정] 숫자 형식의 열에만 서식 적용 ---
+        numeric_cols = daily_display_df.columns.drop(['연', '월', '일'])
+        st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols))
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 매출 상세")
-        # --- [수정] reset_index()를 사용하여 인덱스를 컬럼으로 변환 ---
         monthly_display_df = monthly_pivot.reset_index()
-        st.dataframe(monthly_display_df.style.format("{:,.0f}"))
         
+        # --- [오류 수정] 숫자 형식의 열에만 서식 적용 ---
+        numeric_cols = monthly_display_df.columns.drop(['연', '월'])
+        st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols))
+
     st.divider()
     summary_data = {
         'total_sales': total_sales, 'total_supply': total_supply,
