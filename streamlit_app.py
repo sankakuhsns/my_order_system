@@ -1102,7 +1102,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                     if not items_to_add.empty:
                         current_cart = st.session_state.production_cart
                         
-                        # --- [KeyError 수정] agg()에 '분류'를 추가하여 데이터 유지 ---
+                        # --- [KeyError 수정] agg()에 '분류'를 추가하여 데이터가 누락되지 않도록 함 ---
                         updated_cart = pd.concat([current_cart, items_to_add]).groupby('품목코드').agg({
                             '분류': 'last', 
                             '품목명': 'last', 
