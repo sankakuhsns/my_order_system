@@ -354,7 +354,7 @@ def make_item_transaction_statement_excel(order_df: pd.DataFrame, supplier_info:
     return output
 
 # [개선사항 3] 기간별 거래명세서 서식 전면 개선
-def make_multi_date_item_statement_excel(orders_df: pd.DataFrame, store_info: pd.Series, dt_from: date, dt_to: date) -> BytesIO:
+def make_multi_date_item_statement_excel(orders_df: pd.DataFrame, supplier_info: pd.Series, customer_info: pd.Series, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     if orders_df.empty: return output
 
@@ -362,6 +362,7 @@ def make_multi_date_item_statement_excel(orders_df: pd.DataFrame, store_info: pd
         workbook = writer.book
         worksheet = workbook.add_worksheet("기간별_품목거래명세서")
         
+        # (서식 정의는 기존과 동일)
         fmt_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_h2 = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info = workbook.add_format({'font_size': 10, 'border': 1, 'align': 'left', 'valign': 'vcenter'})
@@ -372,7 +373,7 @@ def make_multi_date_item_statement_excel(orders_df: pd.DataFrame, store_info: pd
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#FFF2CC', 'border': 1})
         fmt_daily_total = workbook.add_format({'bold': True, 'bg_color': '#FFF2CC', 'border': 1, 'num_format': '#,##0'})
         fmt_grand_total = workbook.add_format({'bold': True, 'font_size': 13, 'bg_color': '#DDEBF7', 'border': 1, 'num_format': '#,##0'})
-
+        
         worksheet.set_column('A:A', 5); worksheet.set_column('B:B', 20); worksheet.set_column('C:C', 18)
         worksheet.set_column('D:E', 8); worksheet.set_column('F:I', 14)
 
@@ -380,8 +381,24 @@ def make_multi_date_item_statement_excel(orders_df: pd.DataFrame, store_info: pd
         worksheet.write('F5', '거래기간', fmt_h2)
         worksheet.merge_range('G5:I5', f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}", fmt_info)
         
-        # 공급자/받는자 정보 (단일 명세서와 동일)
-        # ... (생략, 필요시 단일 명세서 코드 복사)
+        # [수정] 공급자/공급받는자 정보 동적 기입 (함수 전체에 적용)
+        for i in range(7, 12):
+            worksheet.set_row(i, 20)
+        
+        worksheet.merge_range('A7:A11', '공\n급\n하\n는\n자', fmt_h2)
+        worksheet.write('B7', '사업자등록번호', fmt_h2); worksheet.merge_range('C7:E7', supplier_info.get('사업자등록번호', ''), fmt_info)
+        worksheet.write('B8', '상호', fmt_h2); worksheet.write('C8', supplier_info.get('상호명', ''), fmt_info)
+        worksheet.write('D8', '대표', fmt_h2); worksheet.write('E8', supplier_info.get('대표자명', ''), fmt_info)
+        worksheet.write('B9', '사업장 주소', fmt_h2); worksheet.merge_range('C9:E9', supplier_info.get('사업장주소', ''), fmt_info)
+        worksheet.write('B10', '업태', fmt_h2); worksheet.write('C10', supplier_info.get('업태', ''), fmt_info)
+        worksheet.write('D10', '종목', fmt_h2); worksheet.write('E10', supplier_info.get('종목', ''), fmt_info)
+
+        worksheet.merge_range('F7:F11', '공\n급\n받\n는\n자', fmt_h2)
+        worksheet.write('G7', '상호', fmt_h2); worksheet.write('H7', customer_info.get('상호명', ''), fmt_info)
+        worksheet.write('G8', '사업장 주소', fmt_h2); worksheet.write('H8', customer_info.get('사업장주소', ''), fmt_info)
+        worksheet.write('G9', '대표', fmt_h2); worksheet.write('H9', customer_info.get('대표자명', ''), fmt_info)
+        worksheet.write('G10', '업태', fmt_h2); worksheet.write('H10', customer_info.get('업태', ''), fmt_info)
+        worksheet.write('G11', '종목', fmt_h2); worksheet.write('H11', customer_info.get('종목', ''), fmt_info)
         
         headers = ["No", "품목명", "발주번호", "단위", "수량", "단가", "공급가액", "세액", "합계금액"]
         
@@ -902,14 +919,25 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             st.session_state.store_orders_selection[row['발주번호']] = row['선택']
 
     v_spacer(16)
+    
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
         selected_ids = [k for k, v in st.session_state.store_orders_selection.items() if v]
         if len(selected_ids) == 1:
-            # ... (상세 조회 표시 로직은 변경 없음) ...
+            target_id = selected_ids[0]
+            target_df = df_user[df_user["발주번호"] == target_id]
+            total_amount = target_df['합계금액'].sum()
+            
+            st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
+            
+            display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+            display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
+            display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
+            
+            st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
 
+            # --- [오류 수정] 다운로드 버튼 로직을 if 블록 안으로 이동 ---
             if target_df.iloc[0]['상태'] in ["승인", "출고완료"]:
-                # --- [수정] 공급자/공급받는 자 정보 전달 ---
                 supplier_info = store_info_df[store_info_df['역할'] == 'admin'].iloc[0]
                 customer_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
                 
@@ -918,19 +946,17 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
-
+            
 def page_store_documents(store_info_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     user = st.session_state.auth
     
-    c1, c2, c3, _ = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
     
-    # [개선사항 4] 세금계산서 삭제
     doc_type = c3.selectbox("서류 종류", ["금전 거래내역서", "품목 거래명세서"])
-    
-    my_store_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
+    c4.empty() # 네 번째 열 비우기
 
     if doc_type == "금전 거래내역서":
         transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
@@ -961,6 +987,14 @@ def page_store_documents(store_info_df: pd.DataFrame):
             st.warning("선택한 기간 내에 승인/출고된 발주 내역이 없습니다.")
             return
 
+        st.dataframe(filtered_orders, use_container_width=True, hide_index=True)
+        
+        # --- [수정] 공급자/공급받는 자 정보 동적 전달 ---
+        supplier_info = store_info_df[store_info_df['역할'] == 'admin'].iloc[0]
+        customer_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
+
+        buf = make_multi_date_item_statement_excel(filtered_orders, supplier_info, customer_info, dt_from, dt_to)
+        st.download_button(f"'{dt_from}~{dt_to}' 기간 전체 다운로드", data=buf, file_name=f"기간별_거래명세서_{user['name']}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
         # [개선사항 4] 다운로드 방식 선택 UI
         dl_col1, dl_col2 = st.columns(2)
         with dl_col1:
@@ -1321,11 +1355,12 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
             with st.spinner("승인 취소 및 재고 복원 중..."):
                 orders_to_revert_df = df_all[df_all['발주번호'].isin(selected_shipped_ids)]
                 items_to_restore = orders_to_revert_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
-                items_to_restore['수량변경'] = items_to_restore['수량'] # 양수로 복원
+                items_to_restore['수량변경'] = items_to_restore['수량']
 
                 ref_id = ", ".join(selected_shipped_ids)
                 
-                if update_inventory(items_to_restore, "승인취소", st.session_state.auth['name'], ref_id=ref_id):
+                # --- [버그 수정] working_date 인자 전달 ---
+                if update_inventory(items_to_restore, "승인취소", st.session_state.auth['name'], date.today(), ref_id=ref_id):
                     update_order_status(selected_shipped_ids, "요청", "")
                     st.session_state.success_message = f"{len(selected_shipped_ids)}건이 '요청' 상태로 변경되고 재고가 복원되었습니다."
                 else:
