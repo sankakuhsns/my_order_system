@@ -947,11 +947,10 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
             
-def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame): # 👈 master_df를 인자로 추가
+def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
     user = st.session_state.auth
     
-    # [수정] UI 4열로 통일
     c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
@@ -997,18 +996,22 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame): 
         order_options = ["(기간 전체)"] + filtered_orders['발주번호'].unique().tolist()
         selected_order_id = c4.selectbox("발주번호 선택", order_options, key="store_doc_order_select")
 
-        preview_df = filtered_orders
-        if selected_order_id != "(기간 전체)":
+        supplier_info = store_info_df[store_info_df['역할'] == 'admin'].iloc[0]
+        customer_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
+
+        # --- [오류 수정] 선택에 따라 다른 함수 호출 및 미리보기 로직 수정 ---
+        if selected_order_id == "(기간 전체)":
+            preview_df = filtered_orders
+            st.dataframe(preview_df, use_container_width=True, hide_index=True)
+            if not preview_df.empty:
+                buf = make_multi_date_item_statement_excel(preview_df, supplier_info, customer_info, dt_from, dt_to)
+                st.download_button("기간 전체 명세서 다운로드", data=buf, file_name=f"기간별_거래명세서_{user['name']}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+        else:
             preview_df = filtered_orders[filtered_orders['발주번호'] == selected_order_id]
-
-        st.dataframe(preview_df, use_container_width=True, hide_index=True)
-
-        if not preview_df.empty:
-            supplier_info = store_info_df[store_info_df['역할'] == 'admin'].iloc[0]
-            customer_info = store_info_df[store_info_df['지점ID'] == user['user_id']].iloc[0]
-
-            buf = make_multi_date_item_statement_excel(preview_df, supplier_info, customer_info, dt_from, dt_to)
-            st.download_button("엑셀 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{selected_order_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+            st.dataframe(preview_df, use_container_width=True, hide_index=True)
+            if not preview_df.empty:
+                buf = make_item_transaction_statement_excel(preview_df, supplier_info, customer_info)
+                st.download_button(f"'{selected_order_id}' 명세서 다운로드", data=buf, file_name=f"거래명세서_{user['name']}_{selected_order_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
