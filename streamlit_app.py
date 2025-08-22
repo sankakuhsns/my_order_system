@@ -1189,7 +1189,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         st.info("발주 데이터가 없습니다.")
         return
     
-    # --- 필터링 UI ---
+    # --- 필터링 및 데이터 분리 로직 (변경 없음) ---
     c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
     dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
@@ -1197,20 +1197,17 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     store = c3.selectbox("지점", stores, key="admin_mng_store")
     order_id_search = c4.text_input("발주번호로 검색", key="admin_mng_order_id", placeholder="전체 또는 일부 입력")
     
-    # --- 데이터 필터링 ---
     df = df_all.copy()
     if order_id_search:
         df = df[df["발주번호"].str.contains(order_id_search, na=False)]
     else:
-        # '주문일시'가 datetime 객체인지 확인하고 변환
         if not pd.api.types.is_datetime64_any_dtype(df['주문일시']):
-            df['주문일시'] = pd.to_datetime(df['주문일시'])
+            df['주문일시'] = pd.to_datetime(df['주문일시'], errors='coerce')
         df['주문일시_dt'] = df['주문일시'].dt.date
         df = df[(df['주문일시_dt'] >= dt_from) & (df['주문일시_dt'] <= dt_to)]
         if store != "(전체)":
             df = df[df["지점명"] == store]
     
-    # --- 상태별 데이터 분리 ---
     orders = df.groupby("발주번호").agg(
         주문일시=("주문일시", "first"), 
         지점명=("지점명", "first"), 
@@ -1272,19 +1269,18 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                     st.error(f"🚨 재고 부족으로 승인할 수 없습니다:\n{details_str}")
                 else:
                     with st.spinner("발주 승인 및 재고 차감 처리 중..."):
-                        # 선 재고 변경, 후 상태 업데이트
                         items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
                         items_to_deduct['수량변경'] = -items_to_deduct['수량']
                         ref_id = ", ".join(selected_pending_ids)
                         
-                        if update_inventory(items_to_deduct, "발주출고", "system_auto", ref_id=ref_id):
+                        # --- [오류 수정] working_date 인자(오늘 날짜) 추가 ---
+                        if update_inventory(items_to_deduct, "발주출고", "system_auto", date.today(), ref_id=ref_id):
                             if update_order_status(selected_pending_ids, "승인", st.session_state.auth["name"]):
                                 st.session_state.success_message = f"{len(selected_pending_ids)}건이 승인 처리되고 재고가 차감되었습니다."
                                 st.session_state.admin_orders_selection.clear()
                                 st.rerun()
                             else:
-                                # 재고는 차감했으나 상태 변경 실패 시 복구 로직 (심화) - 여기서는 에러 메시지로 대체
-                                st.session_state.error_message = "치명적 오류: 재고는 차감되었으나 발주 상태 변경에 실패했습니다. 관리자에게 문의하세요."
+                                st.session_state.error_message = "치명적 오류: 재고는 차감되었으나 발주 상태 변경에 실패했습니다."
                         else:
                             st.session_state.error_message = "발주 승인 중 재고 차감 단계에서 오류가 발생했습니다."
                         st.rerun()
@@ -1349,10 +1345,9 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                 orders_to_revert_df = df_all[df_all['발주번호'].isin(selected_shipped_ids)]
                 items_to_restore = orders_to_revert_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
                 items_to_restore['수량변경'] = items_to_restore['수량']
-
                 ref_id = ", ".join(selected_shipped_ids)
                 
-                # --- [버그 수정] working_date 인자 전달 ---
+                # --- [오류 수정] working_date 인자(오늘 날짜) 추가 ---
                 if update_inventory(items_to_restore, "승인취소", st.session_state.auth['name'], date.today(), ref_id=ref_id):
                     update_order_status(selected_shipped_ids, "요청", "")
                     st.session_state.success_message = f"{len(selected_shipped_ids)}건이 '요청' 상태로 변경되고 재고가 복원되었습니다."
