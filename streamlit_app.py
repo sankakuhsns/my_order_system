@@ -1165,12 +1165,15 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
 
     inventory_tabs = st.tabs(["현재고 현황", "재고 변동 내역", "재고 수동 조정"])
 
+    # --- [수정] 모든 탭에서 재사용하기 위해 재고 계산을 함수 상단으로 이동 ---
+    current_inv_df = get_inventory_from_log(master_df)
+
     with inventory_tabs[0]:
         st.markdown("##### 📦 현재고 현황")
         inv_status_tabs = st.tabs(["전체 현황", "재고 보유 현황"])
         
-        current_inv_df = get_inventory_from_log(master_df)
         orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+        active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
         
         pending_orders = orders_df[orders_df['상태'] == '요청']
         pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
@@ -1181,19 +1184,18 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0).astype(int)
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
         
+        # --- [수정] '활성' 품목만 표시되도록 필터링 ---
+        active_codes = active_master_df['품목코드'].tolist()
+        display_inv = display_inv[display_inv['품목코드'].isin(active_codes)]
+        
         cols_display_order = ['품목코드', '분류', '품목명', '현재고수량', '출고 대기 수량', '실질 가용 재고']
-        inv_column_config = {
-            "현재고수량": st.column_config.NumberColumn(format="%,d"),
-            "출고 대기 수량": st.column_config.NumberColumn(format="%,d"),
-            "실질 가용 재고": st.column_config.NumberColumn(format="%,d")
-        }
         
         with inv_status_tabs[0]:
-            st.dataframe(display_inv[cols_display_order], use_container_width=True, hide_index=True, column_config=inv_column_config)
+            st.dataframe(display_inv[cols_display_order], use_container_width=True, hide_index=True)
             
         with inv_status_tabs[1]:
-            st.dataframe(display_inv[display_inv['현재고수량'] > 0], use_container_width=True, hide_index=True)
-
+            st.dataframe(display_inv[display_inv['현재고수량'] > 0][cols_display_order], use_container_width=True, hide_index=True)
+            
     with inventory_tabs[1]:
         st.markdown("##### 📜 재고 변동 내역")
         log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
@@ -1222,12 +1224,23 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         st.markdown("##### ✍️ 재고 수동 조정")
         st.warning("이 기능은 전산 재고와 실물 재고가 맞지 않을 때만 사용하세요. 모든 조정 내역은 영구적으로 기록됩니다.")
 
+        # --- [수정] 품목 선택과 현재고 표시를 form 밖으로 이동하여 즉시 반응하도록 개선 ---
+        c1, c2 = st.columns(2)
+        item_list = sorted(master_df['품목명'].unique().tolist())
+        selected_item = c1.selectbox("조정할 품목 선택", item_list, key="adj_item_select")
+
+        current_stock = 0
+        if selected_item:
+            stock_info = current_inv_df[current_inv_df['품목명'] == selected_item]
+            if not stock_info.empty:
+                current_stock = stock_info.iloc[0]['현재고수량']
+        
+        c2.metric("현재고", f"{current_stock} 개")
+
         with st.form("adj_form", border=True):
-            item_list = sorted(master_df['품목명'].unique().tolist())
-            c1, c2, c3 = st.columns(3)
-            selected_item = c1.selectbox("조정할 품목 선택", item_list)
-            adj_qty = c2.number_input("조정 수량 (+/-)", step=1, help="증가시키려면 양수, 감소시키려면 음수를 입력하세요.")
-            adj_reason = c3.text_input("조정 사유 (필수)", placeholder="예: 실사 재고 오차, 파손 폐기 등")
+            c1, c2 = st.columns(2)
+            adj_qty = c1.number_input("조정 수량 (+/-)", step=1, help="증가시키려면 양수, 감소시키려면 음수를 입력하세요.")
+            adj_reason = c2.text_input("조정 사유 (필수)", placeholder="예: 실사 재고 오차, 파손 폐기 등")
             
             if st.form_submit_button("재고 조정 실행", type="primary"):
                 if not (selected_item and adj_reason and adj_qty != 0):
