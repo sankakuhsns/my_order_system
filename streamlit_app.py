@@ -544,7 +544,8 @@ def add_to_cart(rows_df: pd.DataFrame, master_df: pd.DataFrame):
     add_with_qty = rows_df[rows_df["수량"] > 0].copy()
     if add_with_qty.empty: return
 
-    add_merged = pd.merge(add_with_qty, master_df[['품목코드', '과세구분', '분류']], on='품목코드', how='left')
+    # --- [수정] rows_df에 이미 있는 '분류'를 제외하고, 없는 '과세구분'만 merge 하도록 변경 ---
+    add_merged = pd.merge(add_with_qty, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
     add_merged['단가(VAT포함)'] = add_merged.apply(get_vat_inclusive_price, axis=1)
     
     cart = st.session_state.cart.copy()
@@ -689,7 +690,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
         st.markdown("##### 🧺 장바구니 및 최종 확인")
         cart_now = st.session_state.cart.copy()
 
-        # --- [KeyError 수정] 이전 세션의 장바구니에 '분류'가 없을 경우를 대비한 방어 코드 ---
+        # --- [수정] 이전 세션의 장바구니 데이터 처리 로직 보강 ---
         if '분류' not in cart_now.columns and not cart_now.empty:
             cart_now = pd.merge(
                 cart_now,
@@ -697,7 +698,8 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                 on='품목코드',
                 how='left'
             )
-            # 현재 세션의 장바구니 데이터를 영구적으로 수정하여 오류 재발 방지
+            # 마스터에 없는 품목으로 인해 '분류'가 None이 될 경우 '미지정'으로 채움
+            cart_now['분류'] = cart_now['분류'].fillna('미지정')
             st.session_state.cart = cart_now.copy()
         
         if cart_now.empty:
