@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v16.0 - 생산/재고 관리 기능 통합)
+# 📦 Streamlit 식자재 발주 시스템 (v17.0 - 작업일자 도입 및 최종 개선)
 #
-# - 주요 변경 사항 (v15.0 -> v16.0):
-#   - 신규 시트 '재고로그', '현재고' 연동 및 관련 로직 추가
-#   - 관리자용 '일일 생산 보고' 탭 신설 (생산량 입력 기능)
-#   - 관리자용 '생산/재고 관리' 탭 신설 (현재고, 변동내역, 재고조정 기능)
-#   - 발주 승인 시, 재고 부족을 차단하는 대신 '경고 메시지' 표시로 로직 변경
-#   - 증빙서류 다운로드 UI 개선 및 생산/재고 관련 리포트 추가
-#   - 매출 순위 시각화를 표 내부 막대그래프 스타일로 변경
-#   - pivot table 관련 'ArrowInvalid' 오류 해결
+# - 주요 변경 사항 (v16.0 -> v17.0):
+#   - '재고로그'에 '작업일자' 컬럼 추가하여 시스템 기록시간과 실제 작업일 분리
+#   - 생산보고, 발주승인, 재고조정 시 '작업일자'가 올바르게 기록되도록 수정
+#   - 모든 재고 관련 조회 및 리포트(증빙서류)가 '작업일자' 기준으로 작동하도록 변경
+#   - 발주 승인 시 재고 부족하면 상세 내역과 함께 승인 차단
+#   - 생산/재고 관리 UI 개선 (전체/보유 현황 분리)
+#   - 일일생산보고 UI 개선 (생산일자 표시)
+#   - 관리설정 UI 개선 (지점ID 수정불가, 경고문구)
 # =============================================================================
 
 from io import BytesIO
@@ -28,7 +28,6 @@ import xlsxwriter
 # =============================================================================
 st.set_page_config(page_title="산카쿠 식자재 발주 시스템", page_icon="📦", layout="wide")
 THEME = { "BORDER": "#e8e8ee", "PRIMARY": "#1C6758", "BG": "#f7f8fa", "TEXT": "#222" }
-# (스타일 설정은 이전과 동일)
 st.markdown(f"""<br><style>
     .stTabs [data-baseweb="tab-list"] {{ gap: 12px; }}
     .stTabs [data-baseweb="tab"] {{ height: 42px; border: 1px solid {THEME['BORDER']}; border-radius: 12px; background-color: #fff; padding: 10px 14px; box-shadow: 0 1px 6px rgba(0,0,0,0.04); }}
@@ -68,18 +67,15 @@ def v_spacer(height: int):
 # =============================================================================
 # 1) 시트/스키마 정의
 # =============================================================================
-# --- 기존 시트 ---
 SHEET_NAME_STORES = "지점마스터"
 SHEET_NAME_MASTER = "상품마스터"
 SHEET_NAME_ORDERS = "발주"
 SHEET_NAME_BALANCE = "잔액마스터"
 SHEET_NAME_CHARGE_REQ = "충전요청"
 SHEET_NAME_TRANSACTIONS = "거래내역"
-# --- 신규 재고 시트 ---
 SHEET_NAME_INVENTORY_LOG = "재고로그"
 SHEET_NAME_CURRENT_INVENTORY = "현재고"
 
-# --- 기존 스키마 ---
 STORES_COLUMNS = ["지점ID", "지점PW", "역할", "지점명", "사업자등록번호", "상호명", "대표자명", "사업장주소", "업태", "종목"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자", "반려사유"]
@@ -87,8 +83,8 @@ CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "단가(VAT포�
 BALANCE_COLUMNS = ["지점ID", "지점명", "선충전잔액", "여신한도", "사용여신액"]
 CHARGE_REQ_COLUMNS = ["요청일시", "지점ID", "지점명", "입금자명", "입금액", "종류", "상태", "처리사유"]
 TRANSACTIONS_COLUMNS = ["일시", "지점ID", "지점명", "구분", "내용", "금액", "처리후선충전잔액", "처리후사용여신액", "관련발주번호", "처리자"]
-# --- 신규 재고 스키마 ---
-INVENTORY_LOG_COLUMNS = ["로그일시", "품목코드", "품목명", "구분", "수량변경", "처리후재고", "관련번호", "처리자", "사유"]
+# --- [수정] 작업일자 컬럼 추가 ---
+INVENTORY_LOG_COLUMNS = ["로그일시", "작업일자", "품목코드", "품목명", "구분", "수량변경", "처리후재고", "관련번호", "처리자", "사유"]
 CURRENT_INVENTORY_COLUMNS = ["품목코드", "품목명", "현재고수량", "최종갱신일시"]
 
 # =============================================================================
@@ -141,11 +137,11 @@ def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
                     df[col] = default_value
             df = df[columns]
             
-        sort_key_map = {'주문일시': "주문일시", '요청일시': "요청일시", '일시': "일시", '로그일시': "로그일시"}
+        sort_key_map = {'로그일시': "로그일시", '주문일시': "주문일시", '요청일시': "요청일시", '일시': "일시"}
         for col, key in sort_key_map.items():
             if col in df.columns:
                 try:
-                    df[key] = pd.to_datetime(df[key])
+                    df[key] = pd.to_datetime(df[key], errors='coerce')
                     df = df.sort_values(by=key, ascending=False)
                 except Exception:
                     pass
@@ -545,20 +541,18 @@ def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFr
     return output
 
 # =============================================================================
-# 5) 유틸리티 함수 (재고 관련 추가)
+# 5) 유틸리티 함수 (재고 관련 수정)
 # =============================================================================
 def init_session_state():
     defaults = {
         "cart": pd.DataFrame(columns=CART_COLUMNS), 
         "store_editor_ver": 0, 
         "production_cart": pd.DataFrame(),
-        "production_date_to_log": date.today(), # 👈 이 줄 추가
+        "production_date_to_log": date.today(),
+        "production_change_reason": "",
         "production_editor_ver": 0,
-        "success_message": "",
-        "error_message": "",
-        "warning_message": "",
-        "store_orders_selection": {},
-        "admin_orders_selection": {}
+        "success_message": "", "error_message": "", "warning_message": "",
+        "store_orders_selection": {}, "admin_orders_selection": {}
     }
     for key, value in defaults.items():
         if key not in st.session_state: st.session_state[key] = value
@@ -594,8 +588,8 @@ def add_to_cart(rows_df: pd.DataFrame, master_df: pd.DataFrame):
     merged["합계금액(VAT포함)"] = merged["단가(VAT포함)"] * merged["수량"]
     st.session_state.cart = merged[CART_COLUMNS]
 
-# --- 신규 재고 처리 함수 ---
-def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: str, ref_id: str = "", reason: str = ""):
+# --- [수정] 작업일자를 받는 재고 처리 함수 ---
+def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: str, working_date: date, ref_id: str = "", reason: str = ""):
     if items_to_update.empty:
         return True
     
@@ -607,11 +601,9 @@ def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: s
         item_name = item['품목명']
         quantity_change = int(item['수량변경'])
         
-        # 현재고 조회
         current_stock_series = current_inventory_df[current_inventory_df['품목코드'] == item_code]
         if current_stock_series.empty:
             current_stock = 0
-            # 현재고 시트에 없는 품목이면 새로 추가
             new_inv_row = pd.DataFrame([{'품목코드': item_code, '품목명': item_name, '현재고수량': 0, '최종갱신일시': ''}])
             current_inventory_df = pd.concat([current_inventory_df, new_inv_row], ignore_index=True)
         else:
@@ -619,24 +611,18 @@ def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: s
             
         new_stock = current_stock + quantity_change
         
-        # 재고로그 기록 준비
         log_rows.append({
             "로그일시": now_kst_str(),
-            "품목코드": item_code,
-            "품목명": item_name,
-            "구분": change_type,
-            "수량변경": quantity_change,
-            "처리후재고": new_stock,
-            "관련번호": ref_id,
-            "처리자": handler,
-            "사유": reason
+            "작업일자": working_date.strftime('%Y-%m-%d'), # 작업일자 기록
+            "품목코드": item_code, "품목명": item_name,
+            "구분": change_type, "수량변경": quantity_change,
+            "처리후재고": new_stock, "관련번호": ref_id,
+            "처리자": handler, "사유": reason
         })
         
-        # 현재고 데이터프레임 업데이트
         current_inventory_df.loc[current_inventory_df['품목코드'] == item_code, '현재고수량'] = new_stock
         current_inventory_df.loc[current_inventory_df['품목코드'] == item_code, '최종갱신일시'] = now_kst_str()
 
-    # 시트에 한 번에 저장
     if append_rows_to_sheet(SHEET_NAME_INVENTORY_LOG, log_rows, INVENTORY_LOG_COLUMNS):
         if save_df_to_sheet(SHEET_NAME_CURRENT_INVENTORY, current_inventory_df):
             return True
@@ -1026,7 +1012,7 @@ def page_store_master_view(master_df: pd.DataFrame):
 # 7) 관리자 페이지 (대폭 수정 및 신설)
 # =============================================================================
 
-### 🏭 7-1) 신규: 일일 생산 보고
+### 1. `page_admin_daily_production` 함수 수정
 def page_admin_daily_production(master_df: pd.DataFrame):
     st.subheader("📝 일일 생산 보고")
     user = st.session_state.auth
@@ -1036,9 +1022,8 @@ def page_admin_daily_production(master_df: pd.DataFrame):
         
         with st.form(key="add_production_form"):
             production_date = st.date_input("생산일자")
-            change_reason = "" # 사유 초기화
+            change_reason = ""
 
-            # --- [수정] 생산일자 변경 시 사유 입력 로직 ---
             if production_date != date.today():
                 change_reason = st.text_input("생산일자 변경 사유 (필수)", placeholder="예: 어제 누락분 입력")
 
@@ -1056,23 +1041,21 @@ def page_admin_daily_production(master_df: pd.DataFrame):
             if st.form_submit_button("생산 목록에 추가", type="primary", use_container_width=True):
                 if production_date != date.today() and not change_reason:
                     st.warning("생산일자를 변경한 경우, 변경 사유를 반드시 입력해야 합니다.")
-                    st.stop()
-
-                items_to_add = edited_production[edited_production['생산수량'] > 0]
-                if not items_to_add.empty:
-                    current_cart = st.session_state.production_cart
-                    updated_cart = pd.concat([current_cart, items_to_add]).groupby('품목코드').agg({
-                        '품목명': 'last', '단위': 'last', '생산수량': 'sum'
-                    }).reset_index()
-                    st.session_state.production_cart = updated_cart
-                    st.session_state.production_editor_ver += 1
-                    st.session_state.production_date_to_log = production_date
-                    st.session_state.production_change_reason = change_reason # 사유도 세션에 저장
-                    st.session_state.success_message = "생산 목록에 추가되었습니다."
                 else:
-                    st.session_state.warning_message = "생산수량을 입력한 품목이 없습니다."
-                st.rerun()
-
+                    items_to_add = edited_production[edited_production['생산수량'] > 0]
+                    if not items_to_add.empty:
+                        current_cart = st.session_state.production_cart
+                        updated_cart = pd.concat([current_cart, items_to_add]).groupby('품목코드').agg({
+                            '품목명': 'last', '단위': 'last', '생산수량': 'sum'
+                        }).reset_index()
+                        st.session_state.production_cart = updated_cart
+                        st.session_state.production_editor_ver += 1
+                        st.session_state.production_date_to_log = production_date
+                        st.session_state.production_change_reason = change_reason
+                        st.session_state.success_message = "생산 목록에 추가되었습니다."
+                    else:
+                        st.session_state.warning_message = "생산수량을 입력한 품목이 없습니다."
+                    st.rerun()
     v_spacer(16)
 
     with st.container(border=True):
@@ -1097,9 +1080,9 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                         change_reason_final = st.session_state.get("production_change_reason", "")
                         
                         with st.spinner("생산 기록 및 재고 업데이트 중..."):
-                            if update_inventory(items_to_log, "생산입고", user['name'], reason=change_reason_final):
+                            if update_inventory(items_to_log, "생산입고", user['name'], production_log_date, reason=change_reason_final):
                                 st.session_state.success_message = f"{len(items_to_log)}개 품목의 생산 기록이 저장되었습니다."
-                                st.session_state.production_cart = pd.DataFrame() # 목록 비우기
+                                st.session_state.production_cart = pd.DataFrame()
                                 st.rerun()
                             else:
                                 st.session_state.error_message = "생산 기록 저장 중 오류가 발생했습니다."
@@ -1110,19 +1093,16 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                         st.session_state.success_message = "생산 목록을 모두 삭제했습니다."
                         st.rerun()
 
-### 🏭 7-2) 신규: 생산/재고 관리
+### 2. `page_admin_inventory_management` 함수 수정
 def page_admin_inventory_management(master_df: pd.DataFrame):
     st.subheader("📊 생산/재고 관리")
 
     inventory_tabs = st.tabs(["현재고 현황", "재고 변동 내역", "재고 수동 조정"])
 
-    with inventory_tabs[0]: # 현재고 현황
+    with inventory_tabs[0]:
         st.markdown("##### 📦 현재고 현황")
-        
-        # --- [수정] '전체 현황'과 '재고 보유 현황' 탭으로 분리 ---
         inv_status_tabs = st.tabs(["전체 현황", "재고 보유 현황"])
         
-        # 데이터 계산은 한 번만 수행
         current_inv_df = load_data(SHEET_NAME_CURRENT_INVENTORY, CURRENT_INVENTORY_COLUMNS)
         orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
         active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
@@ -1130,26 +1110,23 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         pending_orders = orders_df[orders_df['상태'] == '요청']
         pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
 
-        # 상품 마스터를 기준으로 Left Join하여 모든 품목 표시
         display_inv = pd.merge(active_master_df[['품목코드', '품목명']], current_inv_df[['품목코드', '현재고수량']], on='품목코드', how='left')
         display_inv = pd.merge(display_inv, pending_qty, on='품목코드', how='left').fillna(0)
         
         display_inv['현재고수량'] = pd.to_numeric(display_inv['현재고수량'], errors='coerce').fillna(0).astype(int)
         display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0).astype(int)
-        
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
         
-        with inv_status_tabs[0]: # 전체 현황
+        with inv_status_tabs[0]:
             st.dataframe(display_inv, use_container_width=True, hide_index=True)
             
-        with inv_status_tabs[1]: # 재고 보유 현황
+        with inv_status_tabs[1]:
             st.dataframe(display_inv[display_inv['현재고수량'] > 0], use_container_width=True, hide_index=True)
 
-    with inventory_tabs[1]: # 재고 변동 내역
+    with inventory_tabs[1]:
         st.markdown("##### 📜 재고 변동 내역")
         log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
         
-        # --- 오류 수정: log_df가 비어있을 경우를 먼저 처리 ---
         if log_df.empty:
             st.info("재고 변동 기록이 없습니다.")
         else:
@@ -1161,16 +1138,16 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             item_filter = c3.selectbox("품목 필터", item_list, key="log_item_filter")
             
             filtered_log = log_df.copy()
+            if not pd.api.types.is_datetime64_any_dtype(filtered_log['작업일자']):
+                filtered_log['작업일자'] = pd.to_datetime(filtered_log['작업일자'], errors='coerce')
             
-            filtered_log['로그일시_dt'] = pd.to_datetime(filtered_log['로그일시']).dt.date
-            filtered_log = filtered_log[(filtered_log['로그일시_dt'] >= dt_from) & (filtered_log['로그일시_dt'] <= dt_to)]
+            filtered_log = filtered_log[(filtered_log['작업일자'].dt.date >= dt_from) & (filtered_log['작업일자'].dt.date <= dt_to)]
             if item_filter != "(전체)":
                 filtered_log = filtered_log[filtered_log['품목명'] == item_filter]
             
-            # 이 블록 안에서만 drop을 실행하므로 안전함
-            st.dataframe(filtered_log.drop(columns=['로그일시_dt']), use_container_width=True, hide_index=True)
+            st.dataframe(filtered_log, use_container_width=True, hide_index=True)
 
-    with inventory_tabs[2]: # 재고 수동 조정
+    with inventory_tabs[2]:
         st.markdown("##### ✍️ 재고 수동 조정")
         st.warning("이 기능은 전산 재고와 실물 재고가 맞지 않을 때만 사용하세요. 모든 조정 내역은 영구적으로 기록됩니다.")
 
@@ -1186,18 +1163,13 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
                     st.warning("모든 필드를 올바르게 입력해주세요.")
                 else:
                     item_info = master_df[master_df['품목명'] == selected_item].iloc[0]
-                    item_to_update = pd.DataFrame([{
-                        '품목코드': item_info['품목코드'],
-                        '품목명': selected_item,
-                        '수량변경': adj_qty
-                    }])
+                    item_to_update = pd.DataFrame([{'품목코드': item_info['품목코드'], '품목명': selected_item, '수량변경': adj_qty}])
                     
-                    if update_inventory(item_to_update, "재고조정", st.session_state.auth['name'], reason=adj_reason):
+                    if update_inventory(item_to_update, "재고조정", st.session_state.auth['name'], date.today(), reason=adj_reason):
                         st.session_state.success_message = f"'{selected_item}'의 재고가 성공적으로 조정되었습니다."
                         st.rerun()
                     else:
                         st.session_state.error_message = "재고 조정 중 오류가 발생했습니다."
-
 
 ### 📋 7-3) 기존: 발주요청 조회 (재고 연동 강화)
 def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
@@ -1539,56 +1511,51 @@ def page_admin_documents(store_info_df: pd.DataFrame):
     if selected_entity == "대전 가공장 (Admin)":
         doc_type = c4.selectbox("서류 종류", ["품목 생산 보고서", "품목 재고 변동 보고서", "현재고 현황 보고서"], key="admin_doc_type_admin")
         
-        # --- [수정] '현재고 현황 보고서' 선택 시 종료일 자동 변경 ---
         dt_to_value = dt_from if doc_type == "현재고 현황 보고서" else date.today()
         dt_to_disabled = True if doc_type == "현재고 현황 보고서" else False
         dt_to = c2.date_input("조회 종료일", dt_to_value, key="admin_doc_to", disabled=dt_to_disabled)
         
+        log_df_raw = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
+        if not log_df_raw.empty and not pd.api.types.is_datetime64_any_dtype(log_df_raw['작업일자']):
+            log_df_raw['작업일자'] = pd.to_datetime(log_df_raw['작업일자'], errors='coerce')
+
         if doc_type == "품목 생산 보고서":
-            log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
-            production_log = log_df[log_df['구분'] == '생산입고'].copy()
-            if not production_log.empty:
-                production_log['로그일시_dt'] = pd.to_datetime(production_log['로그일시']).dt.date
-                report_df = production_log[(production_log['로그일시_dt'] >= dt_from) & (production_log['로그일시_dt'] <= dt_to)]
-                st.dataframe(report_df.drop(columns=['로그일시_dt']), use_container_width=True, hide_index=True)
-                
-                if not report_df.empty:
-                    buf = make_inventory_report_excel(report_df, "품목 생산 보고서", dt_from, dt_to)
-                    st.download_button("엑셀 다운로드", data=buf, file_name=f"품목생산보고서_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
-            else:
+            if log_df_raw.empty:
                 st.info("생산 기록이 없습니다.")
+                return
+            production_log = log_df_raw[log_df_raw['구분'] == '생산입고'].copy()
+            report_df = production_log[(production_log['작업일자'].dt.date >= dt_from) & (production_log['작업일자'].dt.date <= dt_to)]
+            st.dataframe(report_df, use_container_width=True, hide_index=True)
+            if not report_df.empty:
+                buf = make_inventory_report_excel(report_df, "품목 생산 보고서", dt_from, dt_to)
+                st.download_button("엑셀 다운로드", data=buf, file_name=f"품목생산보고서_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
         elif doc_type == "품목 재고 변동 보고서":
-            log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
-            if not log_df.empty:
-                log_df['로그일시_dt'] = pd.to_datetime(log_df['로그일시']).dt.date
-                report_df = log_df[(log_df['로그일시_dt'] >= dt_from) & (log_df['로그일시_dt'] <= dt_to)]
-                st.dataframe(report_df.drop(columns=['로그일시_dt']), use_container_width=True, hide_index=True)
-
-                if not report_df.empty:
-                    buf = make_inventory_report_excel(report_df, "품목 재고 변동 보고서", dt_from, dt_to)
-                    st.download_button("엑셀 다운로드", data=buf, file_name=f"품목재고변동보고서_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
-            else:
+            if log_df_raw.empty:
                 st.info("재고 변동 기록이 없습니다.")
+                return
+            report_df = log_df_raw[(log_df_raw['작업일자'].dt.date >= dt_from) & (log_df_raw['작업일자'].dt.date <= dt_to)]
+            st.dataframe(report_df, use_container_width=True, hide_index=True)
+            if not report_df.empty:
+                buf = make_inventory_report_excel(report_df, "품목 재고 변동 보고서", dt_from, dt_to)
+                st.download_button("엑셀 다운로드", data=buf, file_name=f"품목재고변동보고서_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
         elif doc_type == "현재고 현황 보고서":
             st.info(f"{dt_from.strftime('%Y-%m-%d')} 기준의 현재고 현황을 조회합니다.")
-            log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
-            if not log_df.empty:
-                log_df['로그일시_dt'] = pd.to_datetime(log_df['로그일시']).dt.date
-                filtered_log = log_df[log_df['로그일시_dt'] <= dt_from]
-                
-                if not filtered_log.empty:
-                    report_df = filtered_log.groupby(['품목코드', '품목명'])['수량변경'].sum().reset_index()
-                    report_df.rename(columns={'수량변경': '현재고수량'}, inplace=True)
-                    st.dataframe(report_df, use_container_width=True, hide_index=True)
+            if log_df_raw.empty:
+                st.info("재고 기록이 없습니다.")
+                return
+            filtered_log = log_df_raw[log_df_raw['작업일자'].dt.date <= dt_from]
+            
+            if not filtered_log.empty:
+                report_df = filtered_log.groupby(['품목코드', '품목명'])['수량변경'].sum().reset_index()
+                report_df = report_df.rename(columns={'수량변경': '현재고수량'})
+                st.dataframe(report_df, use_container_width=True, hide_index=True)
 
-                    buf = make_inventory_report_excel(report_df, "현재고 현황 보고서", dt_from, dt_from)
-                    st.download_button("엑셀 다운로드", data=buf, file_name=f"현재고현황보고서_{dt_from}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
-                else:
-                    st.info("해당 날짜까지의 재고 기록이 없습니다.")
+                buf = make_inventory_report_excel(report_df, "현재고 현황 보고서", dt_from, dt_from)
+                st.download_button("엑셀 다운로드", data=buf, file_name=f"현재고현황보고서_{dt_from}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
             else:
-                st.info("재고 기록이 없습니다.")    
+                st.info("해당 날짜까지의 재고 기록이 없습니다.")
 
     else: # 일반 지점 선택 시
         dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to_store")        
@@ -1719,7 +1686,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     
     with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
-            # --- [수정] '대전 가공장'을 제외한 지점 목록 생성 ---
             store_info_filtered = store_info_df[store_info_df['지점명'] != '대전 가공장']
             stores = sorted(store_info_filtered["지점명"].dropna().unique().tolist())
             
