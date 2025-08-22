@@ -1549,19 +1549,18 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     df_sales['월'] = df_sales['주문일시'].dt.month
     df_sales['일'] = df_sales['주문일시'].dt.day
 
-    daily_pivot = df_sales.pivot_table(index=['연', '월', '일'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
-    monthly_pivot = df_sales.pivot_table(index=['연', '월'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
+    # --- [수정] margins_name을 ''으로 변경하여 '합계' 텍스트 제거 ---
+    daily_pivot = df_sales.pivot_table(index=['연', '월', '일'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='')
+    monthly_pivot = df_sales.pivot_table(index=['연', '월'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='')
     
     with sales_tab2:
-        st.markdown("##### 📅 일별 매출 상세")
+        st.markdown("##### 📅 일별 상세")
         daily_display_df = daily_pivot.reset_index()
-        # --- [수정] .style을 사용하는 초기 방식으로 원복 ---
         st.dataframe(daily_display_df, use_container_width=True, hide_index=True)
         
     with sales_tab3:
-        st.markdown("##### 🗓️ 월별 매출 상세")
+        st.markdown("##### 🗓️ 월별 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        # --- [수정] .style을 사용하는 초기 방식으로 원복 ---
         st.dataframe(monthly_display_df, use_container_width=True, hide_index=True)
 
     st.divider()
