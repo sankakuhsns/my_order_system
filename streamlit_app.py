@@ -532,7 +532,7 @@ def init_session_state():
         "production_change_reason": "",
         "production_editor_ver": 0,
         "success_message": "", "error_message": "", "warning_message": "",
-        "store_orders_selection": {}, "admin_orders_selection": {}
+        "store_orders_selection": {}, "admin_orders_selection": {}, # <-- 여기에 쉼표(,)가 빠졌습니다.
         "charge_type_radio": "선충전", "charge_amount": 1000
     }
     for key, value in defaults.items():
