@@ -1204,7 +1204,7 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
 
     with inventory_tabs[0]:
         st.markdown("##### 📦 현재고 현황")
-        inv_status_tabs = st.tabs(["전체 현황", "재고 보유 현황"])
+        inv_status_tabs = st.tabs(["전체품목 현황", "보유재고 현황"])
         
         orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
         active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
