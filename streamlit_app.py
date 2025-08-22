@@ -1742,6 +1742,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     
+    # 데이터 로드는 기존과 동일
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '요청']
@@ -1758,19 +1759,42 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         action = c2.selectbox("처리 방식", ["승인", "반려"])
         reason = c3.text_input("반려 사유 (반려 시 필수)")
 
+        # ------------------- [수정된 부분 시작] -------------------
         if st.button("처리 실행", type="primary", use_container_width=True):
-            if selected_req_str and (action == "승인" or (action == "반려" and reason)):
-                selected_req = req_options[selected_req_str]
-                store_id = selected_req['지점ID']
-                
-                all_charge_requests = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
-                req_index = all_charge_requests[(all_charge_requests['요청일시'] == selected_req['요청일시']) & (all_charge_requests['지점ID'] == store_id)].index
+            if not selected_req_str or (action == "반려" and not reason):
+                st.warning("처리할 요청을 선택하고, 반려 시 사유를 입력해야 합니다.")
+                st.stop()
 
-                if not req_index.empty:
+            try:
+                with st.spinner("요청 처리 중..."):
+                    ws_charge_req = open_spreadsheet().worksheet(SHEET_NAME_CHARGE_REQ)
+                    all_data = ws_charge_req.get_all_values()
+                    header = all_data[0]
+                    
+                    selected_req = req_options[selected_req_str]
+                    target_row_index = -1
+                    
+                    # 요청일시와 지점ID를 기준으로 시트에서 실제 행 번호 찾기
+                    for i, row in enumerate(all_data[1:], start=2):
+                        if row[header.index('요청일시')] == selected_req['요청일시'] and row[header.index('지점ID')] == selected_req['지점ID']:
+                            target_row_index = i
+                            break
+
+                    if target_row_index == -1:
+                        st.error("처리할 요청을 시트에서 찾을 수 없습니다. 페이지를 새로고침하고 다시 시도하세요.")
+                        st.stop()
+                    
+                    # 업데이트할 셀(들)을 담을 리스트
+                    cells_to_update = []
+                    status_col_index = header.index('상태') + 1
+                    reason_col_index = header.index('처리사유') + 1
+
                     if action == "승인":
+                        # 잔액 업데이트 및 거래내역 추가 로직 (기존과 동일)
+                        store_id = selected_req['지점ID']
                         current_balance_info = balance_df[balance_df['지점ID'] == store_id]
                         if current_balance_info.empty:
-                            st.session_state.error_message = f"'{selected_req['지점명']}'의 잔액 정보가 없습니다."
+                            st.error(f"'{selected_req['지점명']}'의 잔액 정보가 없습니다.")
                             st.rerun()
 
                         current_balance = current_balance_info.iloc[0]
@@ -1782,7 +1806,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                         if selected_req['종류'] == '선충전':
                             new_prepaid += amount
                             trans_record = {"구분": "선충전승인", "내용": f"선충전 입금 확인 ({selected_req['입금자명']})"}
-                        else: # 여신상환
+                        else:  # 여신상환
                             new_used_credit -= amount
                             trans_record = {"구분": "여신상환승인", "내용": f"여신 상환 입금 확인 ({selected_req['입금자명']})"}
                             if new_used_credit < 0:
@@ -1798,28 +1822,37 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             }
                             append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [full_trans_record], TRANSACTIONS_COLUMNS)
                             
-                            all_charge_requests.loc[req_index, '상태'] = '승인'
+                            # 성공 시, '상태' 셀을 '승인'으로 업데이트하도록 준비
+                            cells_to_update.append(gspread.Cell(target_row_index, status_col_index, '승인'))
                             st.session_state.success_message = "요청이 승인 처리되고 거래내역에 기록되었습니다."
                         else:
                             st.session_state.error_message = "잔액 정보 업데이트에 실패했습니다."
+                            st.rerun()
 
-                    else: # 반려
-                        all_charge_requests.loc[req_index, '상태'] = '반려'
-                        all_charge_requests.loc[req_index, '처리사유'] = reason
+                    else:  # 반려
+                        # '상태' 셀을 '반려'로, '처리사유' 셀을 입력된 내용으로 업데이트하도록 준비
+                        cells_to_update.append(gspread.Cell(target_row_index, status_col_index, '반려'))
+                        cells_to_update.append(gspread.Cell(target_row_index, reason_col_index, reason))
                         st.session_state.success_message = "요청이 반려 처리되었습니다."
-                    
-                    save_df_to_sheet(SHEET_NAME_CHARGE_REQ, all_charge_requests)
+
+                    # 준비된 셀 업데이트를 시트에 일괄 적용
+                    if cells_to_update:
+                        ws_charge_req.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+
+                    st.cache_data.clear() # 최신 데이터를 다시 불러오도록 캐시 비우기
                     st.rerun()
-            else:
-                st.warning("처리할 요청을 선택하고, 반려 시 사유를 입력해야 합니다.")
+
+            except Exception as e:
+                st.error(f"처리 중 오류가 발생했습니다: {e}")
+        # ------------------- [수정된 부분 끝] -------------------
 
     st.markdown("---")
     st.markdown("##### 🏢 지점별 잔액 현황")
     st.dataframe(balance_df, hide_index=True, use_container_width=True)
     
+    # '잔액/여신 수동 조정' 부분은 기존 코드와 동일하게 유지 (문제가 없는 부분이므로)
     with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
-            
             store_info_filtered = store_info_df[store_info_df['역할'] != 'admin']
             stores = sorted(store_info_filtered["지점명"].dropna().unique().tolist())
             
