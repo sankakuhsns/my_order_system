@@ -68,7 +68,7 @@ SHEET_NAME_INVENTORY_LOG = "재고로그"
 STORES_COLUMNS = ["지점ID", "지점PW", "역할", "지점명", "사업자등록번호", "상호명", "대표자명", "사업장주소", "업태", "종목"]
 MASTER_COLUMNS = ["품목코드", "품목명", "품목규격", "분류", "단위", "단가", "과세구분", "활성"]
 ORDERS_COLUMNS = ["주문일시", "발주번호", "지점ID", "지점명", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액", "비고", "상태", "처리일시", "처리자", "반려사유"]
-CART_COLUMNS = ["품목코드", "품목명", "단위", "단가", "단가(VAT포함)", "수량", "합계금액(VAT포함)"]
+CART_COLUMNS = ["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)", "수량", "합계금액(VAT포함)"]
 BALANCE_COLUMNS = ["지점ID", "지점명", "선충전잔액", "여신한도", "사용여신액"]
 CHARGE_REQ_COLUMNS = ["요청일시", "지점ID", "지점명", "입금자명", "입금액", "종류", "상태", "처리사유"]
 TRANSACTIONS_COLUMNS = ["일시", "지점ID", "지점명", "구분", "내용", "금액", "처리후선충전잔액", "처리후사용여신액", "관련발주번호", "처리자"]
@@ -533,6 +533,7 @@ def init_session_state():
         "production_editor_ver": 0,
         "success_message": "", "error_message": "", "warning_message": "",
         "store_orders_selection": {}, "admin_orders_selection": {}
+        "charge_type_radio": "선충전", "charge_amount": 1000
     }
     for key, value in defaults.items():
         if key not in st.session_state: st.session_state[key] = value
@@ -551,12 +552,15 @@ def add_to_cart(rows_df: pd.DataFrame, master_df: pd.DataFrame):
     add_with_qty = rows_df[rows_df["수량"] > 0].copy()
     if add_with_qty.empty: return
 
-    add_merged = pd.merge(add_with_qty, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+    # --- [수정] merge 시 '분류'를 포함하도록 변경 ---
+    add_merged = pd.merge(add_with_qty, master_df[['품목코드', '과세구분', '분류']], on='품목코드', how='left')
     add_merged['단가(VAT포함)'] = add_merged.apply(get_vat_inclusive_price, axis=1)
     
     cart = st.session_state.cart.copy()
     
     merged = pd.concat([cart, add_merged]).groupby("품목코드", as_index=False).agg({
+        # --- [수정] '분류' 집계 추가 ---
+        "분류": "last",
         "품목명": "last", 
         "단위": "last", 
         "단가": "last", 
@@ -579,7 +583,8 @@ def get_inventory_from_log(master_df: pd.DataFrame, target_date: date = None) ->
 
     log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
     if log_df.empty:
-        inventory_df = master_df[['품목코드', '품목명']].copy()
+        # --- [수정] '분류' 열 추가 ---
+        inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
         inventory_df['현재고수량'] = 0
         return inventory_df
 
@@ -588,15 +593,18 @@ def get_inventory_from_log(master_df: pd.DataFrame, target_date: date = None) ->
     filtered_log = log_df[log_df['작업일자'] <= target_date]
 
     if filtered_log.empty:
-        inventory_df = master_df[['품목코드', '품목명']].copy()
+        # --- [수정] '분류' 열 추가 ---
+        inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
         inventory_df['현재고수량'] = 0
         return inventory_df
+
 
     calculated_stock = filtered_log.groupby('품목코드')['수량변경'].sum().reset_index()
     calculated_stock.rename(columns={'수량변경': '현재고수량'}, inplace=True)
 
     final_inventory = pd.merge(
-        master_df[['품목코드', '품목명']],
+        # --- [수정] '분류' 열 추가 ---
+        master_df[['품목코드', '분류', '품목명']],
         calculated_stock,
         on='품목코드',
         how='left'
@@ -685,20 +693,22 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             df_edit["수량"] = 0
             
             edited_disp = st.data_editor(
-                df_edit[["품목코드", "품목명", "단위", "단가", "단가(VAT포함)", "수량"]], 
+                # --- [수정] '분류' 열 추가 ---
+                df_edit[["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)", "수량"]], 
                 key=f"editor_v{st.session_state.store_editor_ver}", 
                 hide_index=True, 
-                disabled=["품목코드", "품목명", "단위", "단가", "단가(VAT포함)"], 
+                disabled=["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)"], 
                 use_container_width=True, 
                 column_config={
-                    "단가": st.column_config.NumberColumn(format="%d원"), 
-                    "단가(VAT포함)": st.column_config.NumberColumn(format="%d원"),
-                    "수량": st.column_config.NumberColumn(min_value=0)
+                    # --- [수정] 쉼표 서식 적용 ---
+                    "단가": st.column_config.NumberColumn(format="%,d원"), 
+                    "단가(VAT포함)": st.column_config.NumberColumn(format="%,d원"),
+                    "수량": st.column_config.NumberColumn(min_value=0, format="%d")
                 }
             )
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-                items_to_add = coerce_cart_df(edited_disp)
+                items_to_add = pd.merge(coerce_cart_df(edited_disp), master_df[['품목코드', '분류']], on='품목코드', how='left')
                 if not items_to_add[items_to_add["수량"] > 0].empty:
                     add_to_cart(items_to_add, master_df)
                     st.session_state.store_editor_ver += 1
@@ -709,18 +719,21 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
     
     with st.container(border=True):
         st.markdown("##### 🧺 장바구니 및 최종 확인")
-        cart_now = coerce_cart_df(st.session_state.cart)
+        # --- [수정] 장바구니 표시에 '분류' 열 추가 ---
+        cart_now = st.session_state.cart.copy()
+        cart_display = pd.merge(cart_now, master_df[['품목코드', '분류']], on='품목코드', how='left')
         
-        if cart_now.empty:
+        if cart_display.empty:
             st.info("장바구니가 비어 있습니다.")
         else:
             st.dataframe(
-                cart_now[["품목코드", "품목명", "단위", "단가(VAT포함)", "수량", "합계금액(VAT포함)"]], 
+                cart_display[["품목코드", "분류", "품목명", "단위", "단가(VAT포함)", "수량", "합계금액(VAT포함)"]], 
                 hide_index=True, 
                 use_container_width=True,
                 column_config={
-                    "단가(VAT포함)": st.column_config.NumberColumn(format="%d원"), 
-                    "합계금액(VAT포함)": st.column_config.NumberColumn(format="%d원")
+                    "단가(VAT포함)": st.column_config.NumberColumn(format="%,d원"), 
+                    "수량": st.column_config.NumberColumn(format="%,d"),
+                    "합계금액(VAT포함)": st.column_config.NumberColumn(format="%,d원")
                 }
             )
             
@@ -785,8 +798,6 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                         st.session_state.success_message = "장바구니를 비웠습니다."
                         st.rerun()
 
-# (이하 page_store_balance, page_store_orders_change 등 다른 지점 페이지 함수들은 변경 없음)
-
 def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series):
     st.subheader("💰 결제 관리")
     user = st.session_state.auth
@@ -805,15 +816,35 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
             st.warning("⚠️ 여신 한도가 20% 미만으로 남았습니다.")
     
     st.info("**입금 계좌: OOO은행 123-456-789 (주)산카쿠**\n\n위 계좌로 입금하신 후, 아래 양식을 작성하여 '알림 보내기' 버튼을 눌러주세요.")
+    
+    # --- [신규] 여신상환 시 금액 자동 입력을 위한 콜백 함수 ---
+    def update_charge_amount():
+        if st.session_state.charge_type_radio == '여신상환':
+            st.session_state.charge_amount = used_credit
+
     with st.form("charge_request_form", border=True):
         st.markdown("##### 입금 완료 알림 보내기")
         c1, c2, c3 = st.columns(3)
         depositor_name = c1.text_input("입금자명")
-        charge_amount = c2.number_input("입금액", min_value=1000, step=1000, format="%d")
-        charge_type = c3.radio("종류", ["선충전", "여신상환"], horizontal=True)
+        
+        charge_type = c3.radio(
+            "종류", ["선충전", "여신상환"], 
+            key="charge_type_radio", 
+            horizontal=True,
+            on_change=update_charge_amount # 종류 변경 시 콜백 함수 실행
+        )
+
+        is_disabled = st.session_state.charge_type_radio == '여신상환'
+        
+        charge_amount = c2.number_input(
+            "입금액", min_value=0, step=1000, 
+            key="charge_amount", disabled=is_disabled, format="%d"
+        )
         
         if st.form_submit_button("알림 보내기", type="primary"):
-            if depositor_name and charge_amount > 0:
+            final_charge_amount = used_credit if charge_type == '여신상환' else charge_amount
+
+            if depositor_name and final_charge_amount > 0:
                 new_request = {
                     "요청일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
                     "입금자명": depositor_name, "입금액": charge_amount, "종류": charge_type, "상태": "요청", "처리사유": ""
@@ -1063,23 +1094,32 @@ def page_admin_daily_production(master_df: pd.DataFrame):
     
     with st.container(border=True):
         st.markdown("##### 📦 생산 수량 입력")
-        
         with st.form(key="add_production_form"):
-            production_date = st.date_input("생산일자")
-            change_reason = ""
+            c1, c2 = st.columns(2)
+            production_date = c1.date_input("생산일자")
+            
+            # --- [신규] 분류 필터 추가 ---
+            cat_opt = ["(전체)"] + sorted(master_df["분류"].dropna().unique().tolist())
+            cat_sel = c2.selectbox("분류(선택)", cat_opt, key="prod_reg_category")
 
+            change_reason = ""
             if production_date != date.today():
                 change_reason = st.text_input("생산일자 변경 사유 (필수)", placeholder="예: 어제 누락분 입력")
-
+            
             df_producible = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
+            # --- [수정] 분류 필터링 로직 추가 ---
+            if cat_sel != "(전체)":
+                df_producible = df_producible[df_producible["분류"] == cat_sel]
+
             df_producible['생산수량'] = 0
             
             edited_production = st.data_editor(
-                df_producible[['품목코드', '품목명', '단위', '생산수량']],
+                # --- [수정] '분류' 열 추가 ---
+                df_producible[['품목코드', '분류', '품목명', '단위', '생산수량']],
                 key=f"production_editor_{st.session_state.production_editor_ver}",
                 use_container_width=True, hide_index=True,
-                disabled=['품목코드', '품목명', '단위'],
-                column_config={"생산수량": st.column_config.NumberColumn(min_value=0, step=1)}
+                disabled=['품목코드', '분류', '품목명', '단위'],
+                column_config={"생산수량": st.column_config.NumberColumn(min_value=0, step=1, format="%d")}
             )
 
             if st.form_submit_button("생산 목록에 추가", type="primary", use_container_width=True):
@@ -1156,19 +1196,27 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         pending_orders = orders_df[orders_df['상태'] == '요청']
         pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
 
-        display_inv = pd.merge(active_master_df[['품목코드', '품목명']], current_inv_df[['품목코드', '현재고수량']], on='품목코드', how='left')
-        display_inv = pd.merge(display_inv, pending_qty, on='품목코드', how='left').fillna(0)
+        # --- [수정] merge 시 master_df가 아닌 current_inv_df를 사용 (분류가 이미 포함됨) ---
+        display_inv = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
         
         display_inv['현재고수량'] = pd.to_numeric(display_inv['현재고수량'], errors='coerce').fillna(0).astype(int)
         display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0).astype(int)
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
         
+        # --- [신규] '분류' 열 순서 조정 및 서식 적용 ---
+        cols_display_order = ['품목코드', '분류', '품목명', '현재고수량', '출고 대기 수량', '실질 가용 재고']
+        inv_column_config = {
+            "현재고수량": st.column_config.NumberColumn(format="%,d"),
+            "출고 대기 수량": st.column_config.NumberColumn(format="%,d"),
+            "실질 가용 재고": st.column_config.NumberColumn(format="%,d")
+        }
+        
         with inv_status_tabs[0]:
-            st.dataframe(display_inv, use_container_width=True, hide_index=True)
+            st.dataframe(display_inv[cols_display_order], use_container_width=True, hide_index=True, column_config=inv_column_config)
             
         with inv_status_tabs[1]:
-            st.dataframe(display_inv[display_inv['현재고수량'] > 0], use_container_width=True, hide_index=True)
-
+            st.dataframe(display_inv[display_inv['현재고수량'] > 0][cols_display_order], use_container_width=True, hide_index=True, column_config=inv_column_config)
+            
     with inventory_tabs[1]:
         st.markdown("##### 📜 재고 변동 내역")
         log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
@@ -1525,16 +1573,16 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     with sales_tab2:
         st.markdown("##### 📅 일별 매출 상세")
         daily_display_df = daily_pivot.reset_index()
-        
         numeric_cols = daily_display_df.select_dtypes(include='number').columns
-        st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols))
+        # --- [수정] hide_index=True 추가 ---
+        st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols), hide_index=True)
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 매출 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        
         numeric_cols = monthly_display_df.select_dtypes(include='number').columns
-        st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols))
+        # --- [수정] hide_index=True 추가 ---
+        st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols), hide_index=True)
 
     st.divider()
     summary_data = {
