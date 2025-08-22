@@ -551,7 +551,8 @@ def init_session_state():
     defaults = {
         "cart": pd.DataFrame(columns=CART_COLUMNS), 
         "store_editor_ver": 0, 
-        "production_cart": pd.DataFrame(), # 👈 이 줄 추가
+        "production_cart": pd.DataFrame(),
+        "production_date_to_log": date.today(), # 👈 이 줄 추가
         "production_editor_ver": 0,
         "success_message": "",
         "error_message": "",
@@ -1030,18 +1031,19 @@ def page_admin_daily_production(master_df: pd.DataFrame):
     st.subheader("📝 일일 생산 보고")
     user = st.session_state.auth
     
-    # --- 1. 생산 수량 입력 부분 ---
     with st.container(border=True):
         st.markdown("##### 📦 생산 수량 입력")
-        df_producible = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
-        df_producible['생산수량'] = 0
         
         with st.form(key="add_production_form"):
+            production_date = st.date_input("생산일자") # 날짜 선택 위젯
+            
+            df_producible = master_df[master_df['활성'].astype(str).str.lower() == 'true'].copy()
+            df_producible['생산수량'] = 0
+            
             edited_production = st.data_editor(
                 df_producible[['품목코드', '품목명', '단위', '생산수량']],
                 key=f"production_editor_{st.session_state.production_editor_ver}",
-                use_container_width=True,
-                hide_index=True,
+                use_container_width=True, hide_index=True,
                 disabled=['품목코드', '품목명', '단위'],
                 column_config={"생산수량": st.column_config.NumberColumn(min_value=0, step=1)}
             )
@@ -1067,12 +1069,16 @@ def page_admin_daily_production(master_df: pd.DataFrame):
 
     # --- 2. 생산 목록 확인 및 최종 저장 부분 ---
     with st.container(border=True):
-        st.markdown("##### 📦 최종 생산 기록 목록")
         production_cart = st.session_state.production_cart
         
         if production_cart.empty:
+            st.markdown("##### 📦 최종 생산 기록 목록")
             st.info("기록할 생산 목록이 없습니다.")
         else:
+            # --- [수정] 생산일자 표시 추가 ---
+            production_log_date = st.session_state.production_date_to_log
+            st.markdown(f"##### 📦 최종 생산 기록 목록 ({production_log_date.strftime('%Y년 %m월 %d일')})")
+            
             st.dataframe(production_cart[['품목코드', '품목명', '단위', '생산수량']], use_container_width=True, hide_index=True)
             
             with st.form("finalize_production_form"):
@@ -1104,25 +1110,32 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
 
     with inventory_tabs[0]: # 현재고 현황
         st.markdown("##### 📦 현재고 현황")
+        
+        # --- [수정] '전체 현황'과 '재고 보유 현황' 탭으로 분리 ---
+        inv_status_tabs = st.tabs(["전체 현황", "재고 보유 현황"])
+        
+        # 데이터 계산은 한 번만 수행
         current_inv_df = load_data(SHEET_NAME_CURRENT_INVENTORY, CURRENT_INVENTORY_COLUMNS)
         orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+        active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
         
         pending_orders = orders_df[orders_df['상태'] == '요청']
         pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
 
-        # 현재고 데이터가 없을 경우를 대비해 빈 데이터프레임 생성
-        if current_inv_df.empty:
-            current_inv_df = pd.DataFrame(columns=CURRENT_INVENTORY_COLUMNS)
-
-        display_inv = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
+        # 상품 마스터를 기준으로 Left Join하여 모든 품목 표시
+        display_inv = pd.merge(active_master_df[['품목코드', '품목명']], current_inv_df[['품목코드', '현재고수량']], on='품목코드', how='left')
+        display_inv = pd.merge(display_inv, pending_qty, on='품목코드', how='left').fillna(0)
         
-        # '현재고수량'과 '출고 대기 수량'이 숫자가 아닐 경우를 대비
-        display_inv['현재고수량'] = pd.to_numeric(display_inv['현재고수량'], errors='coerce').fillna(0)
-        display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0)
+        display_inv['현재고수량'] = pd.to_numeric(display_inv['현재고수량'], errors='coerce').fillna(0).astype(int)
+        display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0).astype(int)
         
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
         
-        st.dataframe(display_inv, use_container_width=True, hide_index=True)
+        with inv_status_tabs[0]: # 전체 현황
+            st.dataframe(display_inv, use_container_width=True, hide_index=True)
+            
+        with inv_status_tabs[1]: # 재고 보유 현황
+            st.dataframe(display_inv[display_inv['현재고수량'] > 0], use_container_width=True, hide_index=True)
 
     with inventory_tabs[1]: # 재고 변동 내역
         st.markdown("##### 📜 재고 변동 내역")
@@ -1177,6 +1190,7 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
                     else:
                         st.session_state.error_message = "재고 조정 중 오류가 발생했습니다."
 
+
 ### 📋 7-3) 기존: 발주요청 조회 (재고 연동 강화)
 def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📋 발주요청 조회·수정")
@@ -1198,7 +1212,10 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     if order_id_search:
         df = df[df["발주번호"].str.contains(order_id_search, na=False)]
     else:
-        df['주문일시_dt'] = pd.to_datetime(df['주문일시']).dt.date
+        # '주문일시'가 datetime 객체인지 확인하고 변환
+        if not pd.api.types.is_datetime64_any_dtype(df['주문일시']):
+            df['주문일시'] = pd.to_datetime(df['주문일시'])
+        df['주문일시_dt'] = df['주문일시'].dt.date
         df = df[(df['주문일시_dt'] >= dt_from) & (df['주문일시_dt'] <= dt_to)]
         if store != "(전체)":
             df = df[df["지점명"] == store]
@@ -1219,7 +1236,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     shipped = orders[orders["상태"].isin(["승인", "출고완료"])].copy()
     rejected = orders[orders["상태"] == "반려"].copy()
     
-    # --- 탭 UI ---
     tab1, tab2, tab3 = st.tabs([f"📦 발주 요청 ({len(pending)}건)", f"✅ 승인/출고 ({len(shipped)}건)", f"❌ 반려 ({len(rejected)}건)"])
     
     with tab1:
@@ -1236,7 +1252,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         
         with btn_cols[0]:
             if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, key="admin_approve_btn", use_container_width=True, type="primary"):
-                # --- 재고 확인 로직 ---
+                # --- [수정] 재고 부족 시 승인 차단 및 상세 내역 표시 로직 ---
                 current_inv_df = load_data(SHEET_NAME_CURRENT_INVENTORY, CURRENT_INVENTORY_COLUMNS)
                 all_pending_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS).query("상태 == '요청'")
                 
@@ -1246,35 +1262,43 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                 inventory_check = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
                 inventory_check['실질 가용 재고'] = inventory_check['현재고수량'] - inventory_check['출고 대기 수량']
                 
-                lacking_items = []
+                lacking_items_details = []
                 orders_to_approve_df = df_all[df_all['발주번호'].isin(selected_pending_ids)]
                 items_needed = orders_to_approve_df.groupby('품목코드')['수량'].sum().reset_index()
                 
                 for _, needed in items_needed.iterrows():
                     item_code = needed['품목코드']
+                    needed_qty = needed['수량']
                     stock_info = inventory_check.query(f"품목코드 == '{item_code}'")
-                    available_stock = stock_info.iloc[0]['실질 가용 재고'] if not stock_info.empty else 0
-                    if needed['수량'] > available_stock:
+                    available_stock = int(stock_info.iloc[0]['실질 가용 재고']) if not stock_info.empty else 0
+                    
+                    if needed_qty > available_stock:
                         item_name = master_df.loc[master_df['품목코드'] == item_code, '품목명'].iloc[0]
-                        lacking_items.append(item_name)
+                        shortfall = needed_qty - available_stock
+                        lacking_items_details.append(f"- **{item_name}** (부족: **{shortfall}**개 / 필요: {needed_qty}개 / 가용: {available_stock}개)")
                 
-                if lacking_items:
-                    st.session_state.warning_message = f"⚠️ 재고 부족 경고: {', '.join(lacking_items)}의 재고가 부족하여 발송이 지연될 수 있습니다. 그대로 진행합니다."
-                
-                with st.spinner("발주 승인 및 재고 차감 처리 중..."):
-                    if update_order_status(selected_pending_ids, "승인", st.session_state.auth["name"]):
+                if lacking_items_details:
+                    details_str = "\n".join(lacking_items_details)
+                    st.error(f"🚨 재고 부족으로 승인할 수 없습니다:\n{details_str}")
+                else:
+                    with st.spinner("발주 승인 및 재고 차감 처리 중..."):
+                        # 선 재고 변경, 후 상태 업데이트
                         items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
                         items_to_deduct['수량변경'] = -items_to_deduct['수량']
                         ref_id = ", ".join(selected_pending_ids)
                         
                         if update_inventory(items_to_deduct, "발주출고", "system_auto", ref_id=ref_id):
-                            st.session_state.success_message = f"{len(selected_pending_ids)}건이 승인 처리되고 재고가 차감되었습니다."
+                            if update_order_status(selected_pending_ids, "승인", st.session_state.auth["name"]):
+                                st.session_state.success_message = f"{len(selected_pending_ids)}건이 승인 처리되고 재고가 차감되었습니다."
+                                st.session_state.admin_orders_selection.clear()
+                                st.rerun()
+                            else:
+                                # 재고는 차감했으나 상태 변경 실패 시 복구 로직 (심화) - 여기서는 에러 메시지로 대체
+                                st.session_state.error_message = "치명적 오류: 재고는 차감되었으나 발주 상태 변경에 실패했습니다. 관리자에게 문의하세요."
                         else:
-                            st.session_state.error_message = "발주 승인 후 재고 차감 중 오류가 발생했습니다."
-                        
-                        st.session_state.admin_orders_selection.clear()
+                            st.session_state.error_message = "발주 승인 중 재고 차감 단계에서 오류가 발생했습니다."
                         st.rerun()
-
+                        
         with btn_cols[1]:
             # --- 오류 수정: 누락된 '반려' 로직 시작 ---
             if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
@@ -1388,7 +1412,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         else:
             st.info("상세 내용을 보려면 위 목록에서 발주를 **하나만** 선택하세요.")
 
-### 📈 7-4) 기존: 매출 조회 (오류 수정 및 시각화 변경)
 ### 📈 7-4) 기존: 매출 조회 (오류 수정 및 시각화 변경)
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.subheader("📈 매출 조회")
