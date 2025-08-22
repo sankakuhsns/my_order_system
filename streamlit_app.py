@@ -1541,12 +1541,7 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
             
             st.dataframe(
                 item_sales,
-                column_config={
-                    "매출액(%)": st.column_config.ProgressColumn(
-                        "매출액(%)", format="%.1f%%",
-                        min_value=0, max_value=item_sales['매출액(%)'].max(),
-                    ),
-                },
+                column_config={ "매출액(%)": st.column_config.ProgressColumn( "매출액(%)", format="%.1f%%", min_value=0, max_value=item_sales['매출액(%)'].max()) },
                 use_container_width=True, hide_index=True
             )
 
@@ -1560,18 +1555,14 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     with sales_tab2:
         st.markdown("##### 📅 일별 매출 상세")
         daily_display_df = daily_pivot.reset_index()
-        numeric_cols = daily_display_df.select_dtypes(include='number').columns
-        
-        # --- [수정] st.dataframe과 .style.format을 사용하는 방식으로 원복 ---
-        st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols), use_container_width=True, hide_index=True)
+        # --- [수정] .style을 사용하는 초기 방식으로 원복 ---
+        st.dataframe(daily_display_df, use_container_width=True, hide_index=True)
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 매출 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        numeric_cols = monthly_display_df.select_dtypes(include='number').columns
-
-        # --- [수정] st.dataframe과 .style.format을 사용하는 방식으로 원복 ---
-        st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols), use_container_width=True, hide_index=True)
+        # --- [수정] .style을 사용하는 초기 방식으로 원복 ---
+        st.dataframe(monthly_display_df, use_container_width=True, hide_index=True)
 
     st.divider()
     summary_data = {
