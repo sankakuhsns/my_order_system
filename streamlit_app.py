@@ -618,19 +618,24 @@ def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: s
         log_rows.append({
             "로그일시": now_kst_str(),
             "작업일자": working_date.strftime('%Y-%m-%d'),
-            "품목코드": item_code, "품목명": item_name,
-            "구분": change_type, "수량변경": quantity_change,
-            "처리후재고": new_stock, 
+            "품목코드": item_code, 
+            "품목명": item_name,
+            "구분": change_type, 
+            # --- [오류 수정] 모든 숫자 값을 표준 int 타입으로 변환 ---
+            "수량변경": int(quantity_change), 
+            "처리후재고": int(new_stock), 
             "관련번호": ref_id,
-            "처리자": handler, "사유": reason
+            "처리자": handler, 
+            "사유": reason
         })
 
+    # 오직 '재고로그' 시트에 로그만 추가합니다.
     if append_rows_to_sheet(SHEET_NAME_INVENTORY_LOG, log_rows, INVENTORY_LOG_COLUMNS):
         st.cache_data.clear()
         return True
         
     return False
-
+    
 # =============================================================================
 # 6) 지점 페이지
 # =============================================================================
