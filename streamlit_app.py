@@ -853,8 +853,6 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
             else: 
                 st.warning("입금자명과 0원 이상의 입금액을 올바르게 입력해주세요.")
             
-            st.session_state.charge_type_index = 0
-            st.session_state.charge_amount = 1000
             st.rerun()
             
     st.markdown("---")
