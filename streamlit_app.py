@@ -1865,7 +1865,7 @@ if __name__ == "__main__":
     
     user = st.session_state.auth
     
-    # --- 오류 수정: 공통 데이터 로드를 if문 밖으로 이동 ---
+    # --- 공통 데이터 로드 ---
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
     store_info_df_raw = load_data(SHEET_NAME_STORES, STORES_COLUMNS)
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
@@ -1880,20 +1880,18 @@ if __name__ == "__main__":
         with tabs[2]: page_admin_unified_management(orders_df, store_info_df_raw, master_df)
         with tabs[3]: page_admin_sales_inquiry(master_df)
         with tabs[4]: page_admin_balance_management(store_info_df_raw)
-        with tabs[5]: page_admin_documents(store_info_df_raw)
+        with tabs[5]: page_admin_documents(store_info_df_raw, master_df)
         with tabs[6]: page_admin_settings(store_info_df_raw, master_df)
 
     else: # store
         tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
         
-        # 이제 balance_df가 존재하므로 이 코드가 정상적으로 작동합니다.
         my_balance_series = balance_df[balance_df['지점ID'] == user['user_id']]
         my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype='object')
         
-        my_store_info = store_info_df_raw[store_info_df_raw['지점ID'] == user['user_id']]
-
+        # --- [오류 수정] 필터링된 my_store_info 대신, 전체 store_info_df_raw를 전달 ---
         with tabs[0]: page_store_register_confirm(master_df, my_balance_info)
-        with tabs[1]: page_store_orders_change(my_store_info, master_df)
+        with tabs[1]: page_store_orders_change(store_info_df_raw, master_df)
         with tabs[2]: page_store_balance(charge_requests_df, my_balance_info)
-        with tabs[3]: page_store_documents(my_store_info)
+        with tabs[3]: page_store_documents(store_info_df_raw, master_df)
         with tabs[4]: page_store_master_view(master_df)
