@@ -2003,7 +2003,8 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             
 def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame, orders_df: pd.DataFrame, balance_df: pd.DataFrame, transactions_df: pd.DataFrame, inventory_log_df: pd.DataFrame):
     st.subheader("🛠️ 관리 설정")
-    tab1, tab2, tab3 = st.tabs(["품목 관리", "지점 관리", "데이터 감사 🔍"])
+    # --- [수정] 탭 이름 변경 ---
+    tab1, tab2, tab3 = st.tabs(["품목 관리", "지점 관리", "시스템 점검 🩺"])
 
     with tab1:
         st.markdown("##### 🏷️ 품목 정보 설정")
@@ -2026,7 +2027,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
         )
         if st.button("지점 정보 저장", type="primary", key="save_stores"):
             if save_df_to_sheet(SHEET_NAME_STORES, edited_store_df):
-                # ... (기존 지점 저장 로직은 변경 없음)
                 balance_df_for_check = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
                 store_ids_set = set(edited_store_df['지점ID'].unique())
                 balance_ids_set = set(balance_df_for_check['지점ID'].unique())
@@ -2051,10 +2051,33 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                 st.rerun()
 
     with tab3:
-        st.markdown("##### 📊 시스템 데이터 무결성 검사")
-        st.info("이 기능을 사용하여 시스템의 모든 데이터가 논리적으로 일치하는지 검사할 수 있습니다. 검사에는 몇 초 정도 소요될 수 있습니다.")
+        # --- [수정] 제목 변경 ---
+        st.markdown("##### 🩺 시스템 점검")
         
-        if st.button("🚀 전체 데이터 감사 시작", use_container_width=True, type="primary"):
+        # --- [추가] 도움말 Expander ---
+        with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
+            st.markdown("""
+            각 점검 항목은 우리 시스템의 데이터가 서로 잘 맞물려 정확하게 돌아가고 있는지 확인하는 **'시스템 건강 검진'** 과정입니다.
+
+            ---
+            * **💰 재무 점검**
+                * **무엇을?** 최종 잔액과 모든 입출금 내역의 합산이 일치하는지 검사합니다.
+                * **왜?** 시스템의 장부와 실제 돈의 흐름이 정확히 일치하는지 확인하여 재무 데이터의 신뢰성을 보장합니다.
+
+            * **🔗 거래 점검**
+                * **무엇을?** 모든 거래 기록(결제, 환불 등)이 실제 '발주' 내역과 1:1로 연결되는지, 금액은 정확한지 검사합니다.
+                * **왜?** 주문 없는 '유령 거래'나 계산 오류를 찾아내어 모든 거래의 투명성을 보장합니다.
+
+            * **📦 재고 점검**
+                * **무엇을?** '승인'된 주문 건에 대해 재고가 빠짐없이 출고 처리되었는지 검사합니다.
+                * **왜?** 판매는 되었지만 재고가 차감되지 않는 실수를 막아, 시스템 재고 수량의 정확성을 유지합니다.
+
+            * **🏛️ 무결성 점검**
+                * **무엇을?** 모든 기록에 사용된 '지점 ID'나 '품목 코드'가 현재 시스템에 등록된 유효한 정보인지 검사합니다.
+                * **왜?** 삭제된 지점이나 단종된 상품 데이터가 일으킬 수 있는 혼란을 막고, 모든 데이터가 깨끗하고 유효한 상태임을 보장합니다.
+            """)
+        
+        if st.button("🚀 전체 시스템 점검 시작", use_container_width=True, type="primary"):
             with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
                 results = {}
                 results['financial'] = audit_financial_data(balance_df, transactions_df)
@@ -2064,24 +2087,31 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                 st.session_state['audit_results'] = results
 
         if 'audit_results' in st.session_state:
-            st.markdown(f"##### ✅ 감사 결과 ({now_kst_str('%Y-%m-%d %H:%M:%S')} 기준)")
+            st.markdown(f"##### ✅ 점검 결과 ({now_kst_str('%Y-%m-%d %H:%M:%S')} 기준)")
             results = st.session_state['audit_results']
             
-            # 결과 요약 표시
             cols = st.columns(4)
-            status_map = { "재무": results['financial'], "거래": results['links'], "재고": results['inventory'], "무결성": results['integrity'] }
+            status_map = {
+                "재무": results['financial'], 
+                "거래": results['links'], 
+                "재고": results['inventory'], 
+                "무결성": results['integrity']
+            }
             
             for i, (title, (status, issues)) in enumerate(status_map.items()):
                 with cols[i]:
-                    st.metric(f"{title} 감사", status, f"{len(issues)}건 문제" if issues else "문제 없음", 
-                              delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal")
+                    st.metric(
+                        f"{title} 점검", 
+                        status, 
+                        f"{len(issues)}건 문제" if issues else "문제 없음", 
+                        delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal"
+                    )
 
-            # 상세 내역 표시
             for key, (title, (status, issues)) in zip(['links', 'inventory', 'financial', 'integrity'], 
-                                                       [("🔗 거래 감사", results['links']), 
-                                                        ("📦 재고 감사", results['inventory']),
-                                                        ("💰 재무 감사", results['financial']),
-                                                        ("🏛️ 무결성 감사", results['integrity'])]):
+                                                       [("🔗 거래 점검", results['links']), 
+                                                        ("📦 재고 점검", results['inventory']),
+                                                        ("💰 재무 점검", results['financial']),
+                                                        ("🏛️ 무결성 점검", results['integrity'])]):
                 if issues:
                     with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
                         st.markdown("\n".join(issues))
