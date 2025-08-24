@@ -2096,11 +2096,15 @@ if __name__ == "__main__":
     
     user = st.session_state.auth
     
+    # --- [수정] 모든 데이터 로딩을 역할(role) 분기 전에 실행 ---
     master_df = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
     store_info_df_raw = load_data(SHEET_NAME_STORES, STORES_COLUMNS)
     orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
     balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
     charge_requests_df = load_data(SHEET_NAME_CHARGE_REQ, CHARGE_REQ_COLUMNS)
+    transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+    inventory_log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
+    # --- 수정 끝 ---
     
     if user["role"] == "admin":
         tabs = st.tabs(["🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"])
@@ -2112,8 +2116,6 @@ if __name__ == "__main__":
         with tabs[4]: page_admin_balance_management(store_info_df_raw)
         with tabs[5]: page_admin_documents(store_info_df_raw, master_df)
         with tabs[6]: 
-            # --- [수정] page_admin_settings에 필요한 모든 DataFrame 전달 ---
-            inventory_log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
             page_admin_settings(
                 store_info_df_raw, 
                 master_df, 
