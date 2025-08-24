@@ -1100,6 +1100,96 @@ def page_store_master_view(master_df: pd.DataFrame):
 # =============================================================================
 # 7) 관리자 페이지
 # =============================================================================
+# 헬퍼 함수: 재무 데이터 감사
+def audit_financial_data(balance_df, transactions_df):
+    issues = []
+    store_ids = balance_df['지점ID'].unique()
+
+    for store_id in store_ids:
+        store_balance = balance_df[balance_df['지점ID'] == store_id].iloc[0]
+        store_tx = transactions_df[transactions_df['지점ID'] == store_id]
+
+        # 선충전 잔액 계산
+        prepaid_tx = store_tx[store_tx['구분'].str.contains('선충전|발주취소|발주반려|수동조정\(충전\)')]
+        calculated_prepaid = prepaid_tx['금액'].sum()
+        
+        # 사용 여신액 계산
+        credit_tx = store_tx[store_tx['구분'].str.contains('여신결제|여신상환|수동조정\(여신\)')]
+        # 여신결제는 +, 상환은 - 이므로 그대로 sum
+        calculated_credit = credit_tx[credit_tx['구분'].str.contains('여신결제')]['금액'].abs().sum() - credit_tx[credit_tx['구분'].str.contains('여신상환')]['금액'].abs().sum()
+
+
+        master_prepaid = int(store_balance['선충전잔액'])
+        master_credit = int(store_balance['사용여신액'])
+
+        if master_prepaid != calculated_prepaid:
+            issues.append(f"- **{store_balance['지점명']}**: 선충전 잔액 불일치 (장부: {master_prepaid: ,}원 / 계산: {calculated_prepaid: ,}원)")
+        if master_credit != calculated_credit:
+            issues.append(f"- **{store_balance['지점명']}**: 사용 여신액 불일치 (장부: {master_credit: ,}원 / 계산: {calculated_credit: ,}원)")
+
+    if issues:
+        return "❌ 오류", issues
+    return "✅ 정상", []
+
+# 헬퍼 함수: 거래-발주 데이터 교차 감사
+def audit_transaction_links(transactions_df, orders_df):
+    issues = []
+    order_related_tx = transactions_df[transactions_df['구분'].str.contains('발주|여신결제')]
+    valid_order_ids = set(orders_df['발주번호'])
+
+    for _, tx in order_related_tx.iterrows():
+        order_id = tx['관련발주번호']
+        if not order_id: continue
+
+        if order_id not in valid_order_ids:
+            issues.append(f"- **유령 거래:** `거래내역`에 발주번호 `{order_id}`가 있으나, `발주` 시트에는 해당 주문이 없습니다.")
+        else:
+            order_amount = int(orders_df[orders_df['발주번호'] == order_id]['합계금액'].sum())
+            tx_amount = int(abs(tx['금액']))
+            if order_amount != tx_amount:
+                issues.append(f"- **금액 불일치:** 발주번호 `{order_id}`의 금액이 다릅니다 (발주: {order_amount:,}원 / 거래: {tx_amount:,}원).")
+
+    if issues:
+        return "❌ 오류", issues
+    return "✅ 정상", []
+
+# 헬퍼 함수: 재고 데이터 감사
+def audit_inventory_logs(inventory_log_df, orders_df):
+    issues = []
+    approved_orders = orders_df[orders_df['상태'].isin(['승인', '출고완료'])]
+    shipped_order_ids = set(inventory_log_df[inventory_log_df['구분'] == '발주출고']['관련번호'].str.split(', ').explode())
+
+    for _, order in approved_orders.iterrows():
+        if order['발주번호'] not in shipped_order_ids:
+            issues.append(f"- **재고 차감 누락:** 주문 `{order['발주번호']}`({order['지점명']})는 '승인' 상태이나, 재고 출고 기록이 없습니다.")
+
+    if issues:
+        return "⚠️ 경고", issues
+    return "✅ 정상", []
+
+# 헬퍼 함수: 데이터 무결성 감사
+def audit_data_integrity(orders_df, transactions_df, store_info_df, master_df):
+    issues = []
+    valid_store_ids = set(store_info_df['지점ID'])
+    valid_item_codes = set(master_df['품목코드'])
+
+    # 지점ID 검사
+    for df, name in [(orders_df, '발주'), (transactions_df, '거래내역')]:
+        invalid_stores = df[~df['지점ID'].isin(valid_store_ids)]
+        if not invalid_stores.empty:
+            for _, row in invalid_stores.iterrows():
+                issues.append(f"- **잘못된 지점ID:** `{name}` 시트에 존재하지 않는 지점ID `{row['지점ID']}`가 사용되었습니다.")
+    
+    # 품목코드 검사
+    invalid_items = orders_df[~orders_df['품목코드'].isin(valid_item_codes)]
+    if not invalid_items.empty:
+        for _, row in invalid_items.iterrows():
+            issues.append(f"- **잘못된 품목코드:** `발주` 시트에 존재하지 않는 품목코드 `{row['품목코드']}`가 사용되었습니다.")
+            
+    if issues:
+        return "❌ 오류", issues
+    return "✅ 정상", []
+
 def page_admin_daily_production(master_df: pd.DataFrame):
     st.subheader("📝 일일 생산 보고")
     user = st.session_state.auth
@@ -1442,7 +1532,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         with btn_cols[2]:
             st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input", placeholder="예: 재고 부족")
     
-    # (이하 tab2, tab3, 상세조회 로직은 변경 없음)
     with tab2:
         shipped_display = shipped.copy()
         shipped_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in shipped['발주번호']])
@@ -1912,9 +2001,9 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                                 st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 조정되고 거래내역에 기록되었습니다."
                             st.rerun()
                             
-def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame):
+def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame, orders_df: pd.DataFrame, balance_df: pd.DataFrame, transactions_df: pd.DataFrame, inventory_log_df: pd.DataFrame):
     st.subheader("🛠️ 관리 설정")
-    tab1, tab2 = st.tabs(["품목 관리", "지점 관리"])
+    tab1, tab2, tab3 = st.tabs(["품목 관리", "지점 관리", "데이터 감사 🔍"])
 
     with tab1:
         st.markdown("##### 🏷️ 품목 정보 설정")
@@ -1926,30 +2015,22 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
 
     with tab2:
         st.markdown("##### 🏢 지점(사용자) 정보 설정")
-        
         st.info("ℹ️ 신규 지점 추가 시 ID는 신중히 입력해주세요. 저장 후에는 변경할 수 없습니다.")
-        
         edited_store_df = st.data_editor(
             store_info_df_raw, 
             num_rows="dynamic", 
             use_container_width=True, 
             key="store_editor",
             disabled=["지점ID"],
-            column_config={
-                "지점ID": st.column_config.TextColumn(
-                    help="지점 ID는 한번 생성하면 수정할 수 없습니다."
-                )
-            }
+            column_config={"지점ID": st.column_config.TextColumn(help="지점 ID는 한번 생성하면 수정할 수 없습니다.")}
         )
-        
         if st.button("지점 정보 저장", type="primary", key="save_stores"):
             if save_df_to_sheet(SHEET_NAME_STORES, edited_store_df):
-                balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-                
+                # ... (기존 지점 저장 로직은 변경 없음)
+                balance_df_for_check = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
                 store_ids_set = set(edited_store_df['지점ID'].unique())
-                balance_ids_set = set(balance_df['지점ID'].unique())
+                balance_ids_set = set(balance_df_for_check['지점ID'].unique())
                 new_store_ids = store_ids_set - balance_ids_set
-                
                 new_stores_added = 0
                 if new_store_ids:
                     new_balance_rows = []
@@ -1957,21 +2038,53 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                         if new_id:
                             store_info = edited_store_df[edited_store_df['지점ID'] == new_id].iloc[0]
                             new_balance_rows.append({
-                                "지점ID": new_id,
-                                "지점명": store_info['지점명'],
-                                "선충전잔액": 0,
-                                "여신한도": 0,
-                                "사용여신액": 0
+                                "지점ID": new_id, "지점명": store_info['지점명'],
+                                "선충전잔액": 0, "여신한도": 0, "사용여신액": 0
                             })
                     if new_balance_rows:
                         append_rows_to_sheet(SHEET_NAME_BALANCE, new_balance_rows, BALANCE_COLUMNS)
                         new_stores_added = len(new_balance_rows)
-
                 success_msg = "지점 정보가 성공적으로 저장되었습니다."
                 if new_stores_added > 0:
                     success_msg += f" {new_stores_added}개의 신규 지점이 잔액 마스터에 자동 추가되었습니다."
                 st.session_state.success_message = success_msg
                 st.rerun()
+
+    with tab3:
+        st.markdown("##### 📊 시스템 데이터 무결성 검사")
+        st.info("이 기능을 사용하여 시스템의 모든 데이터가 논리적으로 일치하는지 검사할 수 있습니다. 검사에는 몇 초 정도 소요될 수 있습니다.")
+        
+        if st.button("🚀 전체 데이터 감사 시작", use_container_width=True, type="primary"):
+            with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
+                results = {}
+                results['financial'] = audit_financial_data(balance_df, transactions_df)
+                results['links'] = audit_transaction_links(transactions_df, orders_df)
+                results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
+                results['integrity'] = audit_data_integrity(orders_df, transactions_df, store_info_df_raw, master_df_raw)
+                st.session_state['audit_results'] = results
+
+        if 'audit_results' in st.session_state:
+            st.markdown(f"##### ✅ 감사 결과 ({now_kst_str('%Y-%m-%d %H:%M:%S')} 기준)")
+            results = st.session_state['audit_results']
+            
+            # 결과 요약 표시
+            cols = st.columns(4)
+            status_map = { "재무": results['financial'], "거래": results['links'], "재고": results['inventory'], "무결성": results['integrity'] }
+            
+            for i, (title, (status, issues)) in enumerate(status_map.items()):
+                with cols[i]:
+                    st.metric(f"{title} 감사", status, f"{len(issues)}건 문제" if issues else "문제 없음", 
+                              delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal")
+
+            # 상세 내역 표시
+            for key, (title, (status, issues)) in zip(['links', 'inventory', 'financial', 'integrity'], 
+                                                       [("🔗 거래 감사", results['links']), 
+                                                        ("📦 재고 감사", results['inventory']),
+                                                        ("💰 재무 감사", results['financial']),
+                                                        ("🏛️ 무결성 감사", results['integrity'])]):
+                if issues:
+                    with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
+                        st.markdown("\n".join(issues))
 # =============================================================================
 # 8) 라우팅
 # =============================================================================
@@ -1991,13 +2104,24 @@ if __name__ == "__main__":
     
     if user["role"] == "admin":
         tabs = st.tabs(["🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"])
+        
         with tabs[0]: page_admin_daily_production(master_df)
         with tabs[1]: page_admin_inventory_management(master_df)
         with tabs[2]: page_admin_unified_management(orders_df, store_info_df_raw, master_df)
         with tabs[3]: page_admin_sales_inquiry(master_df)
         with tabs[4]: page_admin_balance_management(store_info_df_raw)
         with tabs[5]: page_admin_documents(store_info_df_raw, master_df)
-        with tabs[6]: page_admin_settings(store_info_df_raw, master_df)
+        with tabs[6]: 
+            # --- [수정] page_admin_settings에 필요한 모든 DataFrame 전달 ---
+            inventory_log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
+            page_admin_settings(
+                store_info_df_raw, 
+                master_df, 
+                orders_df, 
+                balance_df, 
+                transactions_df, 
+                inventory_log_df
+            )
 
     else: # store
         tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회"])
