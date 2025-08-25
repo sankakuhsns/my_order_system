@@ -1649,13 +1649,11 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
     pending_display = pending_orders.iloc[start_idx:end_idx].copy()
     pending_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in pending_display['발주번호']])
     
-    st.data_editor(pending_display, key="admin_pending_editor", on_change=lambda: st.rerun(), hide_index=True, disabled=pending_display.columns.drop("선택"), column_order=("선택", "주문일시", "발주번호", "지점명", "건수", "합계금액(원)", "상태"))
+    edited_pending = st.data_editor(pending_display, key="admin_pending_editor", hide_index=True, disabled=pending_display.columns.drop("선택"), column_order=("선택", "주문일시", "발주번호", "지점명", "건수", "합계금액(원)", "상태"))
     
-    edited_rows = st.session_state.admin_pending_editor.get("edited_rows", {})
-    for idx, changes in edited_rows.items():
-        order_id = pending_display.iloc[idx]['발주번호']
-        st.session_state.admin_orders_selection[order_id] = changes.get('선택', st.session_state.admin_orders_selection.get(order_id, False))
-
+    for _, row in edited_pending.iterrows():
+        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
+    
     selected_pending_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in pending_orders['발주번호'].values]
     
     st.markdown("---")
@@ -1664,8 +1662,44 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
     btn_cols = st.columns(2)
     with btn_cols[0]:
         if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, use_container_width=True, type="primary"):
-            # (이하 승인 로직은 기존과 동일)
-            # ...
+            current_inv_df = get_inventory_from_log(master_df)
+            all_pending_orders = get_orders_df().query(f"상태 == '{CONFIG['ORDER_STATUS']['PENDING']}'")
+            other_pending_orders = all_pending_orders[~all_pending_orders['발주번호'].isin(selected_pending_ids)]
+            pending_qty = other_pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
+            inventory_check = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
+            inventory_check['실질 가용 재고'] = inventory_check['현재고수량'] - inventory_check['출고 대기 수량']
+            lacking_items_details = []
+            orders_to_approve_df = df_all[df_all['발주번호'].isin(selected_pending_ids)]
+            items_needed = orders_to_approve_df.groupby('품목코드')['수량'].sum().reset_index()
+            for _, needed in items_needed.iterrows():
+                item_code = needed['품목코드']
+                needed_qty = needed['수량']
+                stock_info = inventory_check.query(f"품목코드 == '{item_code}'")
+                available_stock = int(stock_info.iloc[0]['실질 가용 재고']) if not stock_info.empty else 0
+                if needed_qty > available_stock:
+                    item_name_series = master_df.loc[master_df['품목코드'] == item_code, '품목명']
+                    item_name = item_name_series.iloc[0] if not item_name_series.empty else item_code
+                    shortfall = needed_qty - available_stock
+                    lacking_items_details.append(f"- **{item_name}** (부족: **{shortfall}**개 / 필요: {needed_qty}개 / 가용: {available_stock}개)")
+            if lacking_items_details:
+                details_str = "\n".join(lacking_items_details)
+                st.error(f"🚨 재고 부족으로 승인할 수 없습니다:\n{details_str}")
+            else:
+                with st.spinner("발주 승인 및 재고 차감 처리 중..."):
+                    items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
+                    items_to_deduct['수량변경'] = -items_to_deduct['수량']
+                    ref_id = ", ".join(selected_pending_ids)
+                    if update_inventory(items_to_deduct, CONFIG['INV_CHANGE_TYPE']['SHIPMENT'], "system_auto", date.today(), ref_id=ref_id):
+                        if update_order_status(selected_pending_ids, CONFIG['ORDER_STATUS']['APPROVED'], st.session_state.auth["name"]):
+                            st.session_state.success_message = f"{len(selected_pending_ids)}건이 승인 처리되고 재고가 차감되었습니다."
+                            st.session_state.admin_orders_selection.clear()
+                            st.rerun()
+                        else:
+                            st.session_state.error_message = "치명적 오류: 재고는 차감되었으나 발주 상태 변경에 실패했습니다."
+                    else:
+                        st.session_state.error_message = "발주 승인 중 재고 차감 단계에서 오류가 발생했습니다."
+                    st.rerun()
+
     with btn_cols[1]:
         if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
             rejection_reason = st.session_state.get("rejection_reason_input", "")
@@ -1687,13 +1721,11 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
     shipped_display = shipped_orders.iloc[start_idx:end_idx].copy()
 
     shipped_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in shipped_display['발주번호']])
-    st.data_editor(shipped_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '처리일시']], key="admin_shipped_editor", on_change=lambda: st.rerun(), hide_index=True, disabled=shipped_orders.columns)
+    edited_shipped = st.data_editor(shipped_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '처리일시']], key="admin_shipped_editor", hide_index=True, disabled=shipped_orders.columns)
     
-    edited_rows = st.session_state.admin_shipped_editor.get("edited_rows", {})
-    for idx, changes in edited_rows.items():
-        order_id = shipped_display.iloc[idx]['발주번호']
-        st.session_state.admin_orders_selection[order_id] = changes.get('선택', st.session_state.admin_orders_selection.get(order_id, False))
-
+    for _, row in edited_shipped.iterrows():
+        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
+        
     selected_shipped_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in shipped_orders['발주번호'].values]
     
     if st.button("↩️ 선택 건 요청 상태로 되돌리기", key="revert_shipped", disabled=not selected_shipped_ids, use_container_width=True):
@@ -1710,13 +1742,11 @@ def render_rejected_orders_tab(rejected_orders: pd.DataFrame):
     rejected_display = rejected_orders.iloc[start_idx:end_idx].copy()
 
     rejected_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in rejected_display['발주번호']])
-    st.data_editor(rejected_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '반려사유']], key="admin_rejected_editor", on_change=lambda: st.rerun(), hide_index=True, disabled=rejected_orders.columns)
+    edited_rejected = st.data_editor(rejected_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '반려사유']], key="admin_rejected_editor", hide_index=True, disabled=rejected_orders.columns)
 
-    edited_rows = st.session_state.admin_rejected_editor.get("edited_rows", {})
-    for idx, changes in edited_rows.items():
-        order_id = rejected_display.iloc[idx]['발주번호']
-        st.session_state.admin_orders_selection[order_id] = changes.get('선택', st.session_state.admin_orders_selection.get(order_id, False))
-        
+    for _, row in edited_rejected.iterrows():
+        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
+            
     selected_rejected_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in rejected_orders['발주번호'].values]
 
     if st.button("↩️ 선택 건 요청 상태로 되돌리기", key="revert_rejected", disabled=not selected_rejected_ids, use_container_width=True):
@@ -2198,6 +2228,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             st.rerun()
                             
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
+    """품목 관리 탭 UI를 렌더링합니다."""
     st.markdown("##### 🏷️ 품목 정보 설정")
     edited_master_df = st.data_editor(master_df_raw, num_rows="dynamic", use_container_width=True, key="master_editor")
     if st.button("품목 정보 저장", type="primary", key="save_master"):
@@ -2207,6 +2238,7 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
             st.rerun()
 
 def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
+    """지점 관리 탭 UI를 렌더링합니다."""
     st.markdown("##### 🏢 지점(사용자) 정보 설정")
     st.info(
         """
@@ -2285,11 +2317,11 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                     st.rerun()
 
 def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df):
+    """시스템 점검 탭 UI를 렌더링합니다."""
     st.markdown("##### 🩺 시스템 점검")
     with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
         st.markdown("""
-        각 점검 항목은 우리 시스템의 데이터가 서로 잘 맞물려 정확하게 돌아가고 있는지 확인하는 **'시스템 건강 검진'** 과정입니다.
-        (이하 도움말 내용은 기존과 동일)
+        (도움말 내용은 기존과 동일...)
         """)
     if st.button("🚀 전체 시스템 점검 시작", use_container_width=True, type="primary"):
         with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
@@ -2310,7 +2342,7 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
                     f"{title} 점검", status, f"{len(issues)}건 문제" if issues else "문제 없음", 
                     delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal"
                 )
-        for _, (title, (_, issues)) in status_map.items():
+        for key, (title, (status, issues)) in status_map.items():
             if issues:
                 with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
                     st.markdown("\n".join(issues))
