@@ -242,42 +242,30 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def authenticate_user(uid, pwd, store_master_df):
-    """[디버깅 모드] 사용자 인증 과정을 화면에 출력합니다."""
-    st.info("--- 🕵️‍♂️ 디버깅 정보 ---")
-    st.write(f"1. 입력된 ID: `{uid}`")
-    st.write(f"2. 입력된 PW: `{pwd}`")
-    
+    """사용자 ID와 비밀번호를 인증합니다."""
     if uid and pwd:
+        # 1. 입력된 ID와 일치하는 사용자 정보 조회
         user_info = store_master_df[store_master_df['지점ID'] == uid]
-        
+
+        # 2. 사용자 정보가 존재하는지 확인
         if not user_info.empty:
-            st.write("3. 시트에서 사용자 정보를 찾았습니다.")
             user_record = user_info.iloc[0]
             
+            # 3. 시트에 저장된 해시값과 입력된 비밀번호의 해시값 비교
             stored_pw_hash = user_record['지점PW']
             input_pw_hash = hash_password(pwd)
-            
-            st.write(f"4. 시트에 저장된 해시: `{stored_pw_hash}`")
-            st.write(f"5. 방금 입력한 PW의 해시: `{input_pw_hash}`")
-            
-            # [중요] 두 해시 값의 길이를 비교하여 공백 등 문제를 찾습니다.
-            st.write(f"   - (저장된 해시 길이: {len(stored_pw_hash)}, 입력된 해시 길이: {len(input_pw_hash)})")
 
-            comparison_result = (stored_pw_hash.strip() == input_pw_hash.strip())
-            st.write(f"6. 해시 비교 결과: **{comparison_result}**")
-            st.write("--------------------")
-
-            if comparison_result:
+            if stored_pw_hash.strip() == input_pw_hash.strip():
+                # 4. 계정 활성 상태 확인
                 if str(user_record['활성']).upper() != 'TRUE':
                     return {"login": False, "message": "비활성화된 계정입니다."}
                 
+                # 5. 인증 성공 시 사용자 정보 반환
                 role = user_record['역할']
                 name = user_record['지점명']
                 return {"login": True, "user_id": uid, "name": name, "role": role}
-    else:
-        st.write("3. ID 또는 PW가 입력되지 않았습니다.")
-        st.write("--------------------")
 
+    # 인증 실패 시
     return {"login": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."}
     
 def convert_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
