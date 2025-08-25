@@ -242,23 +242,44 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def authenticate_user(uid, pwd, store_master_df):
-    """사용자 인증을 수행합니다. 비밀번호는 해시하여 비교합니다."""
+    """[디버깅 모드] 사용자 인증 과정을 화면에 출력합니다."""
+    st.info("--- 🕵️‍♂️ 디버깅 정보 ---")
+    st.write(f"1. 입력된 ID: `{uid}`")
+    st.write(f"2. 입력된 PW: `{pwd}`")
+    
     if uid and pwd:
         user_info = store_master_df[store_master_df['지점ID'] == uid]
+        
         if not user_info.empty:
-            # [보안] 비활성화된 계정은 로그인 불가
-            if str(user_info.iloc[0]['활성']).upper() != 'TRUE':
-                return {"login": False, "message": "비활성화된 계정입니다."}
+            st.write("3. 시트에서 사용자 정보를 찾았습니다.")
+            user_record = user_info.iloc[0]
             
-            stored_pw_hash = user_info.iloc[0]['지점PW']
+            stored_pw_hash = user_record['지점PW']
             input_pw_hash = hash_password(pwd)
             
-            if stored_pw_hash == input_pw_hash:
-                role = user_info.iloc[0]['역할']
-                name = user_info.iloc[0]['지점명']
-                return {"login": True, "user_id": uid, "name": name, "role": role}
-    return {"login": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."}
+            st.write(f"4. 시트에 저장된 해시: `{stored_pw_hash}`")
+            st.write(f"5. 방금 입력한 PW의 해시: `{input_pw_hash}`")
+            
+            # [중요] 두 해시 값의 길이를 비교하여 공백 등 문제를 찾습니다.
+            st.write(f"   - (저장된 해시 길이: {len(stored_pw_hash)}, 입력된 해시 길이: {len(input_pw_hash)})")
 
+            comparison_result = (stored_pw_hash.strip() == input_pw_hash.strip())
+            st.write(f"6. 해시 비교 결과: **{comparison_result}**")
+            st.write("--------------------")
+
+            if comparison_result:
+                if str(user_record['활성']).upper() != 'TRUE':
+                    return {"login": False, "message": "비활성화된 계정입니다."}
+                
+                role = user_record['역할']
+                name = user_record['지점명']
+                return {"login": True, "user_id": uid, "name": name, "role": role}
+    else:
+        st.write("3. ID 또는 PW가 입력되지 않았습니다.")
+        st.write("--------------------")
+
+    return {"login": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."}
+    
 def convert_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
     """데이터프레임의 날짜/시간 관련 열을 datetime 객체로 변환합니다."""
     for col in ['주문일시', '요청일시', '처리일시', '일시', '로그일시', '작업일자']:
