@@ -2155,7 +2155,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
     with tab2:
         st.markdown("##### 🏢 지점(사용자) 정보 설정")
         
-        # [수정] 안내 문구 변경
         st.info(
             """
             이 표에서는 지점의 기본 정보(상호명, 사업자 정보, 주소 등)만 수정할 수 있습니다.
@@ -2166,13 +2165,12 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
             """
         )
 
-        # [수정] num_rows, disabled 속성 변경
         edited_store_df = st.data_editor(
             store_info_df_raw, 
-            num_rows="fixed",  # 행 추가/삭제 기능 비활성화
+            num_rows="fixed",
             use_container_width=True, 
             key="store_editor", 
-            disabled=["지점ID", "지점PW", "역할", "활성"] # 역할, 활성 수정 비활성화
+            disabled=["지점ID", "지점PW", "역할", "활성"]
         )
         if st.button("기본 정보 저장", type="primary", key="save_stores"):
             save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df)
@@ -2189,7 +2187,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                 new_id = c1.text_input("지점ID (로그인 아이디, 변경 불가)")
                 new_pw = c2.text_input("초기 비밀번호", type="password")
                 new_name = c3.text_input("지점명")
-                # [삭제] 역할 선택 selectbox 삭제
                 
                 if st.form_submit_button("신규 지점 생성"):
                     if not (new_id and new_pw and new_name):
@@ -2202,7 +2199,7 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                             "지점ID": new_id, 
                             "지점PW": hash_password(new_pw), 
                             "지점명": new_name, 
-                            "역할": "store",  # [수정] 역할을 'store'로 고정
+                            "역할": "store",
                             "활성": "TRUE"
                         })
                         
@@ -2229,6 +2226,8 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
             selected_store_info = store_info_df_raw[store_info_df_raw['지점명'] == selected_store_name].iloc[0]
             store_id = selected_store_info['지점ID']
             is_active = str(selected_store_info.get('활성', 'FALSE')).upper() == 'TRUE'
+            # [추가] 선택된 지점의 역할을 가져옴
+            role = selected_store_info['역할']
 
             c1, c2 = st.columns(2)
             with c1:
@@ -2246,23 +2245,25 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     else:
                         st.error("시트에서 해당 지점을 찾을 수 없습니다.")
             
-            with c2:
-                ws_stores = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
-                cell_stores = ws_stores.find(store_id, in_column=1)
-                
-                if cell_stores:
-                    if is_active:
-                        if st.button("🔒 계정 비활성화", key=f"deactivate_{store_id}", use_container_width=True):
-                            active_col_idx = ws_stores.row_values(1).index('활성') + 1
-                            ws_stores.update_cell(cell_stores.row, active_col_idx, 'FALSE')
-                            clear_data_cache()
-                            st.rerun()
-                    else:
-                        if st.button("✅ 계정 활성화", key=f"activate_{store_id}", use_container_width=True):
-                            active_col_idx = ws_stores.row_values(1).index('활성') + 1
-                            ws_stores.update_cell(cell_stores.row, active_col_idx, 'TRUE')
-                            clear_data_cache()
-                            st.rerun()
+            # [수정] admin 역할이 아닐 때만 활성화/비활성화 버튼을 보여줌
+            if role != 'admin':
+                with c2:
+                    ws_stores = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
+                    cell_stores = ws_stores.find(store_id, in_column=1)
+                    
+                    if cell_stores:
+                        if is_active:
+                            if st.button("🔒 계정 비활성화", key=f"deactivate_{store_id}", use_container_width=True):
+                                active_col_idx = ws_stores.row_values(1).index('활성') + 1
+                                ws_stores.update_cell(cell_stores.row, active_col_idx, 'FALSE')
+                                clear_data_cache()
+                                st.rerun()
+                        else:
+                            if st.button("✅ 계정 활성화", key=f"activate_{store_id}", use_container_width=True):
+                                active_col_idx = ws_stores.row_values(1).index('활성') + 1
+                                ws_stores.update_cell(cell_stores.row, active_col_idx, 'TRUE')
+                                clear_data_cache()
+                                st.rerun()
 
     with tab3:
         # (시스템 점검 탭 로직은 기존과 동일)
