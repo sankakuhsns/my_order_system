@@ -961,9 +961,10 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
     
-    df_all_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
-    df_all_transactions = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
-    df_balance = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
+    # [수정] 데이터 로더 함수 사용
+    df_all_orders = get_orders_df()
+    df_all_transactions = get_transactions_df()
+    df_balance = get_balance_df()
     user = st.session_state.auth
     
     df_user = df_all_orders[df_all_orders["지점ID"] == user["user_id"]]
@@ -1430,7 +1431,8 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         st.markdown("##### 📦 현재고 현황")
         inv_status_tabs = st.tabs(["전체품목 현황", "보유재고 현황"])
         
-        orders_df = get_orders_df() # [수정]
+        # [수정] 데이터 로더 함수 사용
+        orders_df = get_orders_df() 
         active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
         
         pending_orders = orders_df[orders_df['상태'] == '요청']
@@ -1442,7 +1444,6 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
         display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0).astype(int)
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
         
-        # --- [수정] '활성' 품목만 표시되도록 필터링 ---
         active_codes = active_master_df['품목코드'].tolist()
         display_inv = display_inv[display_inv['품목코드'].isin(active_codes)]
         
@@ -1456,7 +1457,9 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             
     with inventory_tabs[1]:
         st.markdown("##### 📜 재고 변동 내역")
-        log_df = get_inventory_log_df() # [수정]
+        
+        # [수정] 데이터 로더 함수 사용
+        log_df = get_inventory_log_df()
         
         if log_df.empty:
             st.info("재고 변동 기록이 없습니다.")
@@ -1469,7 +1472,10 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             item_filter = c3.selectbox("품목 필터", item_list, key="log_item_filter")
             
             filtered_log = log_df.copy()
-            filtered_log['작업일자_dt'] = pd.to_datetime(filtered_log['작업일자'], errors='coerce').dt.date
+            
+            if '작업일자_dt' not in filtered_log.columns:
+                 filtered_log['작업일자_dt'] = pd.to_datetime(filtered_log['작업일자'], errors='coerce').dt.date
+
             filtered_log.dropna(subset=['작업일자_dt'], inplace=True)
             
             filtered_log = filtered_log[(filtered_log['작업일자_dt'] >= dt_from) & (filtered_log['작업일자_dt'] <= dt_to)]
@@ -1479,10 +1485,9 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             st.dataframe(filtered_log.drop(columns=['작업일자_dt']), use_container_width=True, hide_index=True)
 
     with inventory_tabs[2]:
+        # (이하 내용은 기존과 동일)
         st.markdown("##### ✍️ 재고 수동 조정")
         st.warning("이 기능은 전산 재고와 실물 재고가 맞지 않을 때만 사용하세요. 모든 조정 내역은 영구적으로 기록됩니다.")
-
-        # --- [수정] 품목 선택과 현재고 표시를 form 밖으로 이동하여 즉시 반응하도록 개선 ---
         c1, c2 = st.columns(2)
         item_list = sorted(master_df['품목명'].unique().tolist())
         selected_item = c1.selectbox("조정할 품목 선택", item_list, key="adj_item_select")
@@ -1572,6 +1577,11 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         
         with btn_cols[0]:
             if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, key="admin_approve_btn", use_container_width=True, type="primary"):
+                current_inv_df = get_inventory_from_log(master_df)
+                
+                # [수정] 데이터 로더 함수 사용
+                all_pending_orders = get_orders_df().query("상태 == '요청'")
+                
                 # --- [수정] 로그 기반으로 현재고를 실시간 계산 ---
                 current_inv_df = get_inventory_from_log(master_df)
                 
@@ -1626,8 +1636,9 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                     st.warning("반려 사유를 반드시 입력해야 합니다.")
                 else:
                     with st.spinner("발주 반려 및 환불 처리 중..."):
-                        balance_df = load_data(SHEET_NAME_BALANCE, BALANCE_COLUMNS)
-                        transactions_df = load_data(SHEET_NAME_TRANSACTIONS, TRANSACTIONS_COLUMNS)
+                        # [수정] 데이터 로더 함수 사용
+                        balance_df = get_balance_df()
+                        transactions_df = get_transactions_df()
                         
                         for order_id in selected_pending_ids:
                             order_items = df_all[df_all['발주번호'] == order_id]
@@ -1741,7 +1752,10 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
 
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.subheader("📈 매출 조회")
-    df_orders = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+    
+    # [수정] 데이터 로더 함수 사용
+    df_orders = get_orders_df() 
+    
     df_sales_raw = df_orders[df_orders['상태'].isin(['승인', '출고완료'])].copy()
     if df_sales_raw.empty: 
         st.info("매출 데이터가 없습니다.")
@@ -1753,7 +1767,10 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     stores = ["(전체 통합)"] + sorted(df_sales_raw["지점명"].dropna().unique().tolist())
     store_sel = c3.selectbox("조회 지점", stores, key="admin_sales_store")
     
-    df_sales_raw['주문일시'] = pd.to_datetime(df_sales_raw['주문일시'], errors='coerce')
+    # '주문일시'가 datetime 객체가 아닐 경우 변환
+    if not pd.api.types.is_datetime64_any_dtype(df_sales_raw['주문일시']):
+        df_sales_raw['주문일시'] = pd.to_datetime(df_sales_raw['주문일시'], errors='coerce')
+    
     df_sales_raw.dropna(subset=['주문일시'], inplace=True)
 
     df_sales_raw['주문일시_dt'] = df_sales_raw['주문일시'].dt.date
@@ -1812,14 +1829,12 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     with sales_tab2:
         st.markdown("##### 📅 일별 상세")
         daily_display_df = daily_pivot.reset_index()
-        # --- [원복] '연', '월', '일'을 제외한 숫자 열에만 서식을 적용하는 초기 방식으로 변경 ---
         numeric_cols = daily_display_df.columns.drop(['연', '월', '일'])
         st.dataframe(daily_display_df.style.format("{:,.0f}", subset=numeric_cols), use_container_width=True, hide_index=True)
         
     with sales_tab3:
         st.markdown("##### 🗓️ 월별 상세")
         monthly_display_df = monthly_pivot.reset_index()
-        # --- [원복] '연', '월'을 제외한 숫자 열에만 서식을 적용하는 초기 방식으로 변경 ---
         numeric_cols = monthly_display_df.columns.drop(['연', '월'])
         st.dataframe(monthly_display_df.style.format("{:,.0f}", subset=numeric_cols), use_container_width=True, hide_index=True)
 
