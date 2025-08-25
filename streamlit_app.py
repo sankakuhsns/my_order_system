@@ -1037,7 +1037,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                                 "금액": refund_amount, "처리후선충전잔액": new_prepaid,
                                 "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
                             }
-                            append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [refund_record], TRANSACTIONS_COLUMNS)
+                            append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
                 
                 update_order_status(selected_to_cancel, "취소", user["name"])
                 st.session_state.success_message = f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다."
@@ -1656,7 +1656,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                                 "금액": refund_amount, "처리후선충전잔액": new_prepaid,
                                 "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": st.session_state.auth["name"]
                             }
-                            append_rows_to_sheet(SHEET_NAME_TRANSACTIONS, [refund_record], TRANSACTIONS_COLUMNS)
+                            append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
 
                         update_order_status(selected_pending_ids, "반려", st.session_state.auth["name"], reason=rejection_reason)
                         st.session_state.success_message = f"{len(selected_pending_ids)}건이 반려 처리되고 환불되었습니다."
@@ -2305,41 +2305,45 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
 # 8) 라우팅
 # =============================================================================
 if __name__ == "__main__":
-    if not require_login(): st.stop()
+    # [수정] 로그인 체크 로직을 CONFIG 정의 이후로 이동하고 구조 변경
     init_session_state()
-    st.title("📦 식자재 발주 시스템")
-    display_feedback()
     
-    user = st.session_state.auth
-    
-    if user["role"] == "admin":
-        tabs = st.tabs(["🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"])
+    if not st.session_state.get("auth", {}).get("login"):
+        require_login()
+    else:
+        st.title("📦 식자재 발주 시스템")
+        display_feedback()
         
-        with tabs[0]: page_admin_daily_production(get_master_df())
-        with tabs[1]: page_admin_inventory_management(get_master_df())
-        with tabs[2]: page_admin_unified_management(get_orders_df(), get_stores_df(), get_master_df())
-        with tabs[3]: page_admin_sales_inquiry(get_master_df())
-        with tabs[4]: page_admin_balance_management(get_stores_df())
-        with tabs[5]: page_admin_documents(get_stores_df(), get_master_df())
-        with tabs[6]:
-            page_admin_settings(
-                get_stores_df(), get_master_df(), get_orders_df(), 
-                get_balance_df(), get_transactions_df(), get_inventory_log_df()
-            )
+        user = st.session_state.auth
+        
+        if user["role"] == "admin":
+            tabs = st.tabs(["🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"])
+            
+            with tabs[0]: page_admin_daily_production(get_master_df())
+            with tabs[1]: page_admin_inventory_management(get_master_df())
+            with tabs[2]: page_admin_unified_management(get_orders_df(), get_stores_df(), get_master_df())
+            with tabs[3]: page_admin_sales_inquiry(get_master_df())
+            with tabs[4]: page_admin_balance_management(get_stores_df())
+            with tabs[5]: page_admin_documents(get_stores_df(), get_master_df())
+            with tabs[6]:
+                page_admin_settings(
+                    get_stores_df(), get_master_df(), get_orders_df(), 
+                    get_balance_df(), get_transactions_df(), get_inventory_log_df()
+                )
 
-    else: # store
-        tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회", "👤 내 정보 관리"])
-        
-        balance_df = get_balance_df()
-        my_balance_series = balance_df[balance_df['지점ID'] == user['user_id']]
-        my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype='object')
-        
-        stores_df = get_stores_df()
-        master_df = get_master_df()
-        
-        with tabs[0]: page_store_register_confirm(master_df, my_balance_info)
-        with tabs[1]: page_store_orders_change(stores_df, master_df)
-        with tabs[2]: page_store_balance(get_charge_requests_df(), my_balance_info)
-        with tabs[3]: page_store_documents(stores_df, master_df)
-        with tabs[4]: page_store_master_view(master_df)
-        with tabs[5]: page_store_my_info()
+        else: # store
+            tabs = st.tabs(["🛒 발주 요청", "🧾 발주 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🏷️ 품목 단가 조회", "👤 내 정보 관리"])
+            
+            balance_df = get_balance_df()
+            my_balance_series = balance_df[balance_df['지점ID'] == user['user_id']]
+            my_balance_info = my_balance_series.iloc[0] if not my_balance_series.empty else pd.Series(dtype='object')
+            
+            stores_df = get_stores_df()
+            master_df = get_master_df()
+            
+            with tabs[0]: page_store_register_confirm(master_df, my_balance_info)
+            with tabs[1]: page_store_orders_change(stores_df, master_df)
+            with tabs[2]: page_store_balance(get_charge_requests_df(), my_balance_info)
+            with tabs[3]: page_store_documents(stores_df, master_df)
+            with tabs[4]: page_store_master_view(master_df)
+            with tabs[5]: page_store_my_info()
