@@ -1531,7 +1531,7 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         st.info("발주 데이터가 없습니다.")
         return
     
-    # --- 필터링 로직 (변경 없음) ---
+    # --- 필터링 로직 (기존과 동일) ---
     c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
     dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
@@ -1576,10 +1576,14 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
         
         st.markdown("---")
         st.markdown("##### 📦 선택한 발주 처리")
-        btn_cols = st.columns([1, 1, 2])
+
+        # =============================================================================
+        # [UI 수정] 버튼 및 입력창 레이아웃 변경
+        # =============================================================================
+        btn_cols = st.columns(2) # 버튼을 위한 2개 열 생성
         
         with btn_cols[0]:
-            if st.button("✅ 선택 발주 승인", ...):
+            if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, use_container_width=True, type="primary"):
                 current_inv_df = get_inventory_from_log(master_df)
                 all_pending_orders = get_orders_df().query("상태 == '요청'")
                 
@@ -1624,15 +1628,15 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                         else:
                             st.session_state.error_message = "발주 승인 중 재고 차감 단계에서 오류가 발생했습니다."
                         st.rerun()
-                        
+        
         with btn_cols[1]:
+            # 반려 버튼은 그대로 두되, 반려 사유 입력창은 아래로 이동
             if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
                 rejection_reason = st.session_state.get("rejection_reason_input", "")
                 if not rejection_reason:
                     st.warning("반려 사유를 반드시 입력해야 합니다.")
                 else:
                     with st.spinner("발주 반려 및 환불 처리 중..."):
-                        # [수정] 데이터 로더 함수 사용
                         balance_df = get_balance_df()
                         transactions_df = get_transactions_df()
                         
@@ -1672,9 +1676,11 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
                         st.session_state.success_message = f"{len(selected_pending_ids)}건이 반려 처리되고 환불되었습니다."
                         st.session_state.admin_orders_selection.clear()
                         st.rerun()
-        with btn_cols[2]:
-            st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input", placeholder="예: 재고 부족")
-    
+
+        # 반려 사유 입력창을 버튼 아래에 배치
+        st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input", placeholder="예: 재고 부족")
+        # =============================================================================
+
     with tab2:
         shipped_display = shipped.copy()
         shipped_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in shipped['발주번호']])
