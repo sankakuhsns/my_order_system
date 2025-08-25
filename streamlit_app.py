@@ -763,7 +763,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             df_edit["수량"] = 0
             
             edited_disp = st.data_editor(
-                df_edit[["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)", "수량"]], 
+                df_edit[CONFIG['CART']['cols'][:-1] + ["수량"]], # Use config
                 key=f"editor_v{st.session_state.store_editor_ver}", 
                 hide_index=True, 
                 disabled=["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)"], 
@@ -771,7 +771,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             )
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-                items_to_add = coerce_cart_df(edited_disp)
+                items_to_add = coerce_cart_df(pd.DataFrame(edited_disp))
                 if not items_to_add[items_to_add["수량"] > 0].empty:
                     add_to_cart(items_to_add, master_df)
                     st.session_state.store_editor_ver += 1
@@ -784,15 +784,13 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
         st.markdown("##### 🧺 장바구니 및 최종 확인")
         cart_now = st.session_state.cart.copy()
 
-        # --- [수정] 이전 세션의 장바구니 데이터 처리 로직 보강 ---
         if '분류' not in cart_now.columns and not cart_now.empty:
             cart_now = pd.merge(
-                cart_now,
+                cart_now.drop(columns=['분류'], errors='ignore'),
                 master_df[['품목코드', '분류']],
                 on='품목코드',
                 how='left'
             )
-            # 마스터에 없는 품목으로 인해 '분류'가 None이 될 경우 '미지정'으로 채움
             cart_now['분류'] = cart_now['분류'].fillna('미지정')
             st.session_state.cart = cart_now.copy()
         
@@ -800,7 +798,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             st.info("장바구니가 비어 있습니다.")
         else:
             st.dataframe(
-                cart_now[["품목코드", "분류", "품목명", "단위", "단가(VAT포함)", "수량", "합계금액(VAT포함)"]], 
+                cart_now[CONFIG['CART']['cols']], 
                 hide_index=True, 
                 use_container_width=True
             )
@@ -828,56 +826,52 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                 payment_method = st.radio("결제 방식 선택", payment_options, key="payment_method", horizontal=True) if payment_options else None
                 
                 c1, c2 = st.columns(2)
+                
+                # --- [수정] 아래 두 블록에 들여쓰기 추가 ---
                 with c1:
-            if st.form_submit_button("📦 발주 제출 및 결제", type="primary", use_container_width=True, disabled=not payment_method):
-                order_id = make_order_id(user["user_id"])
-                # ... (rows 생성 로직 동일) ...
-                
-                # --- [안정성] 수동 롤백(Rollback) 로직 적용 ---
-                original_balance = {
-                    "선충전잔액": prepaid_balance,
-                    "사용여신액": used_credit
-                }
-                
-                # 1단계: 잔액/여신 먼저 차감
-                if payment_method == "선충전 잔액 결제":
-                    new_balance = prepaid_balance - total_final_amount_sum
-                    new_used_credit = used_credit
-                    trans_desc = "선충전결제"
-                else: # 여신 결제
-                    new_balance = prepaid_balance
-                    new_used_credit = used_credit + total_final_amount_sum
-                    trans_desc = "여신결제"
+                    if st.form_submit_button("📦 발주 제출 및 결제", type="primary", use_container_width=True, disabled=not payment_method):
+                        order_id = make_order_id(user["user_id"])
+                        rows = []
+                        for _, r in cart_with_master.iterrows():
+                            rows.append({"주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], "품목코드": r["품목코드"], "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"], "단가": r["단가"], "공급가액": r['공급가액'], "세액": r['세액'], "합계금액": r['합계금액_final'], "비고": memo, "상태": "요청", "처리자": "", "처리일시": "", "반려사유":""})
 
-                if update_balance_sheet(user["user_id"], {"선충전잔액": new_balance, "사용여신액": new_used_credit}):
-                    try:
-                        # 2단계: 발주 및 거래내역 기록
-                        append_rows_to_sheet(CONFIG['ORDERS']['name'], rows, CONFIG['ORDERS']['cols'])
-                        transaction_record = {
-                            "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
-                            "구분": trans_desc, "내용": f"{cart_now.iloc[0]['품목명']} 등 {len(cart_now)}건 발주",
-                            "금액": -total_final_amount_sum, "처리후선충전잔액": new_balance,
-                            "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
-                        }
-                        append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [transaction_record], CONFIG['TRANSACTIONS']['cols'])
+                        original_balance = {"선충전잔액": prepaid_balance, "사용여신액": used_credit}
                         
-                        st.session_state.success_message = "발주 및 결제가 성공적으로 완료되었습니다."
-                        st.session_state.cart = pd.DataFrame(columns=CONFIG['CART']['cols'])
-                        clear_data_cache() # 성공 시 캐시 클리어
-                        st.rerun()
+                        if payment_method == "선충전 잔액 결제":
+                            new_balance = prepaid_balance - total_final_amount_sum
+                            new_used_credit = used_credit
+                            trans_desc = "선충전결제"
+                        else:
+                            new_balance = prepaid_balance
+                            new_used_credit = used_credit + total_final_amount_sum
+                            trans_desc = "여신결제"
 
-                    except Exception as e:
-                        # 2단계 실패 시 1단계 원상복구 (롤백)
-                        st.error(f"발주/거래 기록 중 오류 발생: {e}. 결제를 원상복구합니다.")
-                        update_balance_sheet(user["user_id"], original_balance)
-                        clear_data_cache()
-                        st.rerun()
-                else:
-                    st.session_state.error_message = "결제 처리 중 오류가 발생했습니다."
-                    st.rerun()
+                        if update_balance_sheet(user["user_id"], {"선충전잔액": new_balance, "사용여신액": new_used_credit}):
+                            try:
+                                append_rows_to_sheet(CONFIG['ORDERS']['name'], rows, CONFIG['ORDERS']['cols'])
+                                transaction_record = {
+                                    "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                                    "구분": trans_desc, "내용": f"{cart_now.iloc[0]['품목명']} 등 {len(cart_now)}건 발주",
+                                    "금액": -total_final_amount_sum, "처리후선충전잔액": new_balance,
+                                    "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                                }
+                                append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [transaction_record], CONFIG['TRANSACTIONS']['cols'])
+                                
+                                st.session_state.success_message = "발주 및 결제가 성공적으로 완료되었습니다."
+                                st.session_state.cart = pd.DataFrame(columns=CONFIG['CART']['cols'])
+                                clear_data_cache()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"발주/거래 기록 중 오류 발생: {e}. 결제를 원상복구합니다.")
+                                update_balance_sheet(user["user_id"], original_balance)
+                                clear_data_cache()
+                                st.rerun()
+                        else:
+                            st.session_state.error_message = "결제 처리 중 오류가 발생했습니다."
+                            st.rerun()
                 with c2:
                     if st.form_submit_button("🗑️ 장바구니 비우기", use_container_width=True):
-                        st.session_state.cart = pd.DataFrame(columns=CART_COLUMNS)
+                        st.session_state.cart = pd.DataFrame(columns=CONFIG['CART']['cols'])
                         st.session_state.success_message = "장바구니를 비웠습니다."
                         st.rerun()
                         
