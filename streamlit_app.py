@@ -784,7 +784,7 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             df_edit["수량"] = 0
             
             edited_disp = st.data_editor(
-                df_edit[CONFIG['CART']['cols'][:-1] + ["수량"]], # Use config
+                df_edit[CONFIG['CART']['cols'][:-1]], # Corrected line: removed '+ ["수량"]'
                 key=f"editor_v{st.session_state.store_editor_ver}", 
                 hide_index=True, 
                 disabled=["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)"], 
