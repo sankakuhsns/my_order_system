@@ -187,10 +187,10 @@ def append_rows_to_sheet(sheet_name: str, rows_data: List[Dict], columns_order: 
 
 def update_balance_sheet(store_id: str, updates: Dict):
     try:
-        ws = open_spreadsheet().worksheet(SHEET_NAME_BALANCE)
+        ws = open_spreadsheet().worksheet(CONFIG['BALANCE']['name']) # [수정]
         cell = ws.find(store_id, in_column=1)
         if not cell:
-            st.error(f"'{SHEET_NAME_BALANCE}' 시트에서 지점ID '{store_id}'를 찾을 수 없습니다.")
+            st.error(f"'{CONFIG['BALANCE']['name']}' 시트에서 지점ID '{store_id}'를 찾을 수 없습니다.") # [수정]
             return False
         header = ws.row_values(1)
         for key, value in updates.items():
@@ -202,11 +202,11 @@ def update_balance_sheet(store_id: str, updates: Dict):
     except Exception as e:
         st.error(f"잔액/여신 정보 업데이트 중 오류 발생: {e}")
         return False
-        
+
 def update_order_status(selected_ids: List[str], new_status: str, handler: str, reason: str = "") -> bool:
     if not selected_ids: return True
     try:
-        ws = open_spreadsheet().worksheet(SHEET_NAME_ORDERS)
+        ws = open_spreadsheet().worksheet(CONFIG['ORDERS']['name']) # [수정]
         all_data = ws.get_all_values()
         header = all_data[0]
         id_col_idx = header.index("발주번호")
@@ -234,7 +234,6 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
     except Exception as e:
         st.error(f"발주 상태 업데이트 중 오류가 발생했습니다: {e}")
         return False
-
 # =============================================================================
 # 3) 로그인, 인증 및 데이터 로더
 # =============================================================================
@@ -620,19 +619,19 @@ def init_session_state():
 
 def coerce_cart_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    for col in CART_COLUMNS:
+    cart_cols = CONFIG['CART']['cols'] # [수정]
+    for col in cart_cols:
         if col not in out.columns: out[col] = 0 if '금액' in col or '단가' in col or '수량' in col else ""
     out["수량"] = pd.to_numeric(out["수량"], errors="coerce").fillna(0).astype(int)
     out["단가"] = pd.to_numeric(out["단가"], errors="coerce").fillna(0).astype(int)
     out["단가(VAT포함)"] = pd.to_numeric(out["단가(VAT포함)"], errors="coerce").fillna(0).astype(int)
     out["합계금액(VAT포함)"] = out["단가(VAT포함)"] * out["수량"]
-    return out[CART_COLUMNS]
+    return out[cart_cols] # [수정]
 
 def add_to_cart(rows_df: pd.DataFrame, master_df: pd.DataFrame):
     add_with_qty = rows_df[rows_df["수량"] > 0].copy()
     if add_with_qty.empty: return
 
-    # --- [수정] rows_df에 이미 있는 '분류'를 제외하고, 없는 '과세구분'만 merge 하도록 변경 ---
     add_merged = pd.merge(add_with_qty, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
     add_merged['단가(VAT포함)'] = add_merged.apply(get_vat_inclusive_price, axis=1)
     
@@ -648,22 +647,27 @@ def add_to_cart(rows_df: pd.DataFrame, master_df: pd.DataFrame):
     })
     
     merged["합계금액(VAT포함)"] = merged["단가(VAT포함)"] * merged["수량"]
-    st.session_state.cart = merged[CART_COLUMNS]
+    st.session_state.cart = merged[CONFIG['CART']['cols']] # [수정]
 
 @st.cache_data(ttl=60)
 def get_inventory_from_log(master_df: pd.DataFrame, target_date: date = None) -> pd.DataFrame:
     if target_date is None:
         target_date = date.today()
 
-    log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
+    # [수정] CONFIG 참조로 변경
+    log_df = get_inventory_log_df() # 데이터 로더 함수 사용
+    
     if log_df.empty:
         inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
         inventory_df['현재고수량'] = 0
         return inventory_df
 
-    log_df['작업일자'] = pd.to_datetime(log_df['작업일자'], errors='coerce').dt.date
+    # '작업일자'가 datetime 객체가 아닐 경우 변환
+    if not pd.api.types.is_datetime64_any_dtype(log_df['작업일자']):
+        log_df['작업일자'] = pd.to_datetime(log_df['작업일자'], errors='coerce')
+
     log_df.dropna(subset=['작업일자'], inplace=True)
-    filtered_log = log_df[log_df['작업일자'] <= target_date]
+    filtered_log = log_df[log_df['작업일자'].dt.date <= target_date]
 
     if filtered_log.empty:
         inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
@@ -686,8 +690,8 @@ def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: s
     if items_to_update.empty:
         return True
 
-    master_df_for_inv = load_data(SHEET_NAME_MASTER, MASTER_COLUMNS)
-    inventory_before_change = get_inventory_from_log(master_df_for_inv)
+    master_df = get_master_df()
+    inventory_before_change = get_inventory_from_log(master_df) # [수정] 함수 호출 방식 변경
     
     log_rows = []
     
@@ -709,7 +713,6 @@ def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: s
             "품목코드": item_code, 
             "품목명": item_name,
             "구분": change_type, 
-            # --- [오류 수정] 모든 숫자 값을 표준 int 타입으로 변환 ---
             "수량변경": int(quantity_change), 
             "처리후재고": int(new_stock), 
             "관련번호": ref_id,
@@ -717,9 +720,9 @@ def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: s
             "사유": reason
         })
 
-    # 오직 '재고로그' 시트에 로그만 추가합니다.
-    if append_rows_to_sheet(SHEET_NAME_INVENTORY_LOG, log_rows, INVENTORY_LOG_COLUMNS):
-        st.cache_data.clear()
+    # [수정] CONFIG 참조로 변경
+    if append_rows_to_sheet(CONFIG['INVENTORY_LOG']['name'], log_rows, CONFIG['INVENTORY_LOG']['cols']):
+        clear_data_cache()
         return True
         
     return False
@@ -1421,14 +1424,13 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
 
     inventory_tabs = st.tabs(["현재고 현황", "재고 변동 내역", "재고 수동 조정"])
 
-    # --- [수정] 모든 탭에서 재사용하기 위해 재고 계산을 함수 상단으로 이동 ---
     current_inv_df = get_inventory_from_log(master_df)
 
     with inventory_tabs[0]:
         st.markdown("##### 📦 현재고 현황")
         inv_status_tabs = st.tabs(["전체품목 현황", "보유재고 현황"])
         
-        orders_df = load_data(SHEET_NAME_ORDERS, ORDERS_COLUMNS)
+        orders_df = get_orders_df() # [수정]
         active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
         
         pending_orders = orders_df[orders_df['상태'] == '요청']
@@ -1454,7 +1456,7 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             
     with inventory_tabs[1]:
         st.markdown("##### 📜 재고 변동 내역")
-        log_df = load_data(SHEET_NAME_INVENTORY_LOG, INVENTORY_LOG_COLUMNS)
+        log_df = get_inventory_log_df() # [수정]
         
         if log_df.empty:
             st.info("재고 변동 기록이 없습니다.")
