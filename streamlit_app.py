@@ -2155,10 +2155,24 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
     with tab2:
         st.markdown("##### 🏢 지점(사용자) 정보 설정")
         
-        st.info("이 표에서는 지점의 기본 정보(주소, 연락처 등)를 수정할 수 있습니다. 신규 생성 및 비밀번호 관리는 아래 전용 메뉴를 이용해주세요.")
+        # [수정] 안내 문구 변경
+        st.info(
+            """
+            이 표에서는 지점의 기본 정보(상호명, 사업자 정보, 주소 등)만 수정할 수 있습니다.
+            **지점ID, 역할, 활성 상태, 비밀번호**는 이 표에서 직접 관리할 수 없습니다.
+            
+            특히, 지점 비밀번호(지점PW)는 보안을 위해 **암호화**되어 별도로 관리됩니다.
+            비밀번호 초기화나 계정 활성/비활성화는 하단의 '개별 지점 관리' 메뉴를 이용해주세요.
+            """
+        )
+
+        # [수정] num_rows, disabled 속성 변경
         edited_store_df = st.data_editor(
-            store_info_df_raw, num_rows="dynamic", use_container_width=True, 
-            key="store_editor", disabled=["지점ID", "지점PW"]
+            store_info_df_raw, 
+            num_rows="fixed",  # 행 추가/삭제 기능 비활성화
+            use_container_width=True, 
+            key="store_editor", 
+            disabled=["지점ID", "지점PW", "역할", "활성"] # 역할, 활성 수정 비활성화
         )
         if st.button("기본 정보 저장", type="primary", key="save_stores"):
             save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df)
@@ -2175,7 +2189,7 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                 new_id = c1.text_input("지점ID (로그인 아이디, 변경 불가)")
                 new_pw = c2.text_input("초기 비밀번호", type="password")
                 new_name = c3.text_input("지점명")
-                new_role = st.selectbox("역할", ["store", "admin"])
+                # [삭제] 역할 선택 selectbox 삭제
                 
                 if st.form_submit_button("신규 지점 생성"):
                     if not (new_id and new_pw and new_name):
@@ -2185,8 +2199,11 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     else:
                         new_store_data = {col: '' for col in CONFIG['STORES']['cols']}
                         new_store_data.update({
-                            "지점ID": new_id, "지점PW": hash_password(new_pw), "지점명": new_name, 
-                            "역할": new_role, "활성": "TRUE"
+                            "지점ID": new_id, 
+                            "지점PW": hash_password(new_pw), 
+                            "지점명": new_name, 
+                            "역할": "store",  # [수정] 역할을 'store'로 고정
+                            "활성": "TRUE"
                         })
                         
                         new_balance_data = {
@@ -2304,10 +2321,10 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     )
 
             for key, (title, (status, issues)) in zip(['links', 'inventory', 'financial', 'integrity'], 
-                                                       [("🔗 거래 점검", results['links']), 
-                                                        ("📦 재고 점검", results['inventory']),
-                                                        ("💰 재무 점검", results['financial']),
-                                                        ("🏛️ 무결성 점검", results['integrity'])]):
+                                                        [("🔗 거래 점검", results['links']), 
+                                                         ("📦 재고 점검", results['inventory']),
+                                                         ("💰 재무 점검", results['financial']),
+                                                         ("🏛️ 무결성 점검", results['integrity'])]):
                 if issues:
                     with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
                         st.markdown("\n".join(issues))
