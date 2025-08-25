@@ -2173,7 +2173,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     elif not store_info_df_raw[store_info_df_raw['지점ID'] == new_id].empty:
                         st.error("이미 존재하는 지점ID입니다.")
                     else:
-                        # [수정] CONFIG의 모든 열을 기준으로 빈 데이터를 만들고 값을 채워넣음
                         new_store_data = {col: '' for col in CONFIG['STORES']['cols']}
                         new_store_data.update({
                             "지점ID": new_id, "지점PW": hash_password(new_pw), "지점명": new_name, 
@@ -2212,11 +2211,13 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     
                     ws = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
                     cell = ws.find(store_id, in_column=1)
-                    pw_col_idx = ws.row_values(1).index('지점PW') + 1
-                    ws.update_cell(cell.row, pw_col_idx, hashed_pw)
-                    
-                    clear_data_cache()
-                    st.info(f"'{selected_store_name}'의 비밀번호가 임시 비밀번호 '{temp_pw}' (으)로 초기화되었습니다. 사용자에게 전달해주세요.")
+                    if cell:
+                        pw_col_idx = ws.row_values(1).index('지점PW') + 1
+                        ws.update_cell(cell.row, pw_col_idx, hashed_pw)
+                        clear_data_cache()
+                        st.info(f"'{selected_store_name}'의 비밀번호가 임시 비밀번호 '{temp_pw}' (으)로 초기화되었습니다. 사용자에게 전달해주세요.")
+                    else:
+                        st.error("시트에서 해당 지점을 찾을 수 없습니다.")
             
             with c2:
                 ws_stores = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
