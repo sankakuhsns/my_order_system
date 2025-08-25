@@ -336,13 +336,12 @@ def require_login():
         st.sidebar.markdown(f"### 로그인 정보")
         st.sidebar.markdown(f"**{user['name']}** ({user['role']})님 환영합니다.")
         if st.sidebar.button("로그아웃"):
-            # 로그아웃 시 모든 세션 상태 초기화
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
         return True
     
-    store_master_df = get_stores_df() # 로그인 시에는 지점 마스터 로드
+    store_master_df = get_stores_df()
     if store_master_df.empty:
         st.error("'지점마스터' 시트를 찾을 수 없거나 비어있습니다. 관리자에게 문의하세요.")
         st.stop()
@@ -351,7 +350,9 @@ def require_login():
     _, mid, _ = st.columns([3, 2, 3])
     with mid.form("login_form"):
         uid = st.text_input("아이디 (지점ID)", key="login_uid")
-        pwd = st.text_input("비밀번호", type="text", key="login_pw") # type을 "text"로 변경
+        
+        # [수정] type을 다시 "password"로 원상 복구
+        pwd = st.text_input("비밀번호", type="password", key="login_pw")
         
         if st.form_submit_button("로그인", use_container_width=True):
             auth_result = authenticate_user(uid, pwd, store_master_df)
