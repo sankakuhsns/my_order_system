@@ -2356,14 +2356,28 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
         st.markdown(f"##### ✅ 점검 결과 ({now_kst_str('%Y-%m-%d %H:%M:%S')} 기준)")
         results = st.session_state['audit_results']
         cols = st.columns(4)
-        status_map = {"재무": results['financial'], "거래": results['links'], "재고": results['inventory'], "무결성": results['integrity']}
-        for i, (title, (status, issues)) in enumerate(status_map.items()):
+        status_map = {
+            "재무": results['financial'], "거래": results['links'],
+            "재고": results['inventory'], "무결성": results['integrity']
+        }
+        
+        # [수정] 반복문의 변수 구조를 (key, (status, issues))로 변경
+        for i, (key, (status, issues)) in enumerate(status_map.items()):
             with cols[i]:
                 st.metric(
-                    f"{title} 점검", status, f"{len(issues)}건 문제" if issues else "문제 없음", 
+                    f"{key} 점검", status, f"{len(issues)}건 문제" if issues else "문제 없음", 
                     delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal"
                 )
-        for key, (title, (status, issues)) in status_map.items():
+
+        # 상세 내역을 보여주는 두 번째 반복문은 구조가 올바르므로 그대로 둡니다.
+        # (단, 가독성을 위해 zip 대신 status_map을 재활용하도록 수정)
+        display_map = {
+            "links": ("🔗 거래 점검", results['links']),
+            "inventory": ("📦 재고 점검", results['inventory']),
+            "financial": ("💰 재무 점검", results['financial']),
+            "integrity": ("🏛️ 무결성 점검", results['integrity'])
+        }
+        for key, (title, (status, issues)) in display_map.items():
             if issues:
                 with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
                     st.markdown("\n".join(issues))
