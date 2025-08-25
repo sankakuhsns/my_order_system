@@ -351,7 +351,7 @@ def require_login():
     _, mid, _ = st.columns([3, 2, 3])
     with mid.form("login_form"):
         uid = st.text_input("아이디 (지점ID)", key="login_uid")
-        pwd = st.text_input("비밀번호", type="password", key="login_pw")
+        pwd = st.text_input("비밀번호", type="text", key="login_pw") # type을 "text"로 변경
         
         if st.form_submit_button("로그인", use_container_width=True):
             auth_result = authenticate_user(uid, pwd, store_master_df)
