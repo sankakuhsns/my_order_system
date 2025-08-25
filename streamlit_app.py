@@ -2131,28 +2131,26 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             
 def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame, orders_df: pd.DataFrame, balance_df: pd.DataFrame, transactions_df: pd.DataFrame, inventory_log_df: pd.DataFrame):
     st.subheader("🛠️ 관리 설정")
-    # --- [수정] 탭 이름 변경 ---
     tab1, tab2, tab3 = st.tabs(["품목 관리", "지점 관리", "시스템 점검 🩺"])
 
     with tab1:
         st.markdown("##### 🏷️ 품목 정보 설정")
         edited_master_df = st.data_editor(master_df_raw, num_rows="dynamic", use_container_width=True, key="master_editor")
         if st.button("품목 정보 저장", type="primary", key="save_master"):
-            if save_df_to_sheet(SHEET_NAME_MASTER, edited_master_df):
+            if save_df_to_sheet(CONFIG['MASTER']['name'], edited_master_df):
                 st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
+                clear_data_cache()
                 st.rerun()
 
     with tab2:
         st.markdown("##### 🏢 지점(사용자) 정보 설정")
         
-        # 기능 1: 지점 목록 조회 및 기본 정보 수정
         st.info("이 표에서는 지점의 기본 정보(주소, 연락처 등)를 수정할 수 있습니다. 신규 생성 및 비밀번호 관리는 아래 전용 메뉴를 이용해주세요.")
         edited_store_df = st.data_editor(
             store_info_df_raw, num_rows="dynamic", use_container_width=True, 
             key="store_editor", disabled=["지점ID", "지점PW"]
         )
         if st.button("기본 정보 저장", type="primary", key="save_stores"):
-            # ... (기존 저장 로직 중 balance 자동 추가 부분은 신규 생성 로직으로 이동) ...
             save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df)
             clear_data_cache()
             st.session_state.success_message = "지점 정보가 성공적으로 저장되었습니다."
@@ -2160,7 +2158,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
 
         st.divider()
 
-        # 기능 2: 신규 지점 생성
         with st.expander("➕ 신규 지점 생성"):
             with st.form("new_store_form"):
                 st.markdown("###### 신규 지점 정보 입력")
@@ -2169,19 +2166,20 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                 new_pw = c2.text_input("초기 비밀번호", type="password")
                 new_name = c3.text_input("지점명")
                 new_role = st.selectbox("역할", ["store", "admin"])
-                # ... (필요시 다른 필드 추가) ...
-
+                
                 if st.form_submit_button("신규 지점 생성"):
                     if not (new_id and new_pw and new_name):
                         st.warning("지점ID, 초기 비밀번호, 지점명은 필수입니다.")
                     elif not store_info_df_raw[store_info_df_raw['지점ID'] == new_id].empty:
                         st.error("이미 존재하는 지점ID입니다.")
                     else:
-                        new_store_data = {
+                        # [수정] CONFIG의 모든 열을 기준으로 빈 데이터를 만들고 값을 채워넣음
+                        new_store_data = {col: '' for col in CONFIG['STORES']['cols']}
+                        new_store_data.update({
                             "지점ID": new_id, "지점PW": hash_password(new_pw), "지점명": new_name, 
-                            "역할": new_role, "활성": "TRUE", 
-                            # ... (다른 필드 기본값 설정) ...
-                        }
+                            "역할": new_role, "활성": "TRUE"
+                        })
+                        
                         new_balance_data = {
                             "지점ID": new_id, "지점명": new_name,
                             "선충전잔액": 0, "여신한도": 0, "사용여신액": 0
@@ -2197,7 +2195,6 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
         
         st.divider()
 
-        # 기능 3: 개별 지점 관리
         st.markdown("##### 🔧 개별 지점 관리")
         all_stores = store_info_df_raw['지점명'].tolist()
         selected_store_name = st.selectbox("관리할 지점 선택", all_stores)
@@ -2205,7 +2202,7 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
         if selected_store_name:
             selected_store_info = store_info_df_raw[store_info_df_raw['지점명'] == selected_store_name].iloc[0]
             store_id = selected_store_info['지점ID']
-            is_active = str(selected_store_info['활성']).upper() == 'TRUE'
+            is_active = str(selected_store_info.get('활성', 'FALSE')).upper() == 'TRUE'
 
             c1, c2 = st.columns(2)
             with c1:
@@ -2222,30 +2219,27 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                     st.info(f"'{selected_store_name}'의 비밀번호가 임시 비밀번호 '{temp_pw}' (으)로 초기화되었습니다. 사용자에게 전달해주세요.")
             
             with c2:
-                if is_active:
-                    if st.button("🔒 계정 비활성화", key=f"deactivate_{store_id}", use_container_width=True):
-                        # 상태 변경 로직
-                        ws = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
-                        cell = ws.find(store_id, in_column=1)
-                        active_col_idx = ws.row_values(1).index('활성') + 1
-                        ws.update_cell(cell.row, active_col_idx, 'FALSE')
-                        clear_data_cache()
-                        st.rerun()
-                else:
-                    if st.button("✅ 계정 활성화", key=f"activate_{store_id}", use_container_width=True):
-                        # 상태 변경 로직
-                        ws = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
-                        cell = ws.find(store_id, in_column=1)
-                        active_col_idx = ws.row_values(1).index('활성') + 1
-                        ws.update_cell(cell.row, active_col_idx, 'TRUE')
-                        clear_data_cache()
-                        st.rerun()
+                ws_stores = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
+                cell_stores = ws_stores.find(store_id, in_column=1)
+                
+                if cell_stores:
+                    if is_active:
+                        if st.button("🔒 계정 비활성화", key=f"deactivate_{store_id}", use_container_width=True):
+                            active_col_idx = ws_stores.row_values(1).index('활성') + 1
+                            ws_stores.update_cell(cell_stores.row, active_col_idx, 'FALSE')
+                            clear_data_cache()
+                            st.rerun()
+                    else:
+                        if st.button("✅ 계정 활성화", key=f"activate_{store_id}", use_container_width=True):
+                            active_col_idx = ws_stores.row_values(1).index('활성') + 1
+                            ws_stores.update_cell(cell_stores.row, active_col_idx, 'TRUE')
+                            clear_data_cache()
+                            st.rerun()
 
     with tab3:
-        # --- [수정] 제목 변경 ---
+        # (시스템 점검 탭 로직은 기존과 동일)
         st.markdown("##### 🩺 시스템 점검")
         
-        # --- [추가] 도움말 Expander ---
         with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
             st.markdown("""
             각 점검 항목은 우리 시스템의 데이터가 서로 잘 맞물려 정확하게 돌아가고 있는지 확인하는 **'시스템 건강 검진'** 과정입니다.
