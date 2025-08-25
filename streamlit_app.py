@@ -604,7 +604,7 @@ def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFr
 # =============================================================================
 def init_session_state():
     defaults = {
-        "cart": pd.DataFrame(columns=CART_COLUMNS), 
+        "cart": pd.DataFrame(columns=CONFIG['CART']['cols']), # <-- [수정] CART_COLUMNS를 CONFIG 참조로 변경
         "store_editor_ver": 0, 
         "production_cart": pd.DataFrame(),
         "production_date_to_log": date.today(),
@@ -613,7 +613,6 @@ def init_session_state():
         "success_message": "", "error_message": "", "warning_message": "",
         "store_orders_selection": {}, "admin_orders_selection": {},
         "charge_type_radio": "선충전", "charge_amount": 1000,
-        # --- [수정] 라디오 버튼 인덱스 관리를 위한 상태 추가 ---
         "charge_type_index": 0 
     }
     for key, value in defaults.items():
