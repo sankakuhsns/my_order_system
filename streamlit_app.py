@@ -2318,9 +2318,7 @@ if __name__ == "__main__":
     # [수정] 로그인 체크 로직을 CONFIG 정의 이후로 이동하고 구조 변경
     init_session_state()
     
-    if not st.session_state.get("auth", {}).get("login"):
-        require_login()
-    else:
+    if require_login(): # require_login()을 항상 호출하도록 변경
         st.title("📦 식자재 발주 시스템")
         display_feedback()
         
