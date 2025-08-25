@@ -1349,6 +1349,7 @@ def audit_data_integrity(orders_df, transactions_df, store_info_df, master_df):
 # [신규] 관리자 대시보드 페이지
 def page_admin_dashboard(master_df: pd.DataFrame):
     st.subheader("📊 대시보드")
+
     orders_df = get_orders_df()
     charge_req_df = get_charge_requests_df()
     
@@ -1362,8 +1363,20 @@ def page_admin_dashboard(master_df: pd.DataFrame):
         c2.metric("💳 충전/상환 요청", f"{pending_charge_count} 건")
     st.divider()
 
-    st.markdown("##### ⚠️ **재고 부족 경고 품목 (가용 재고 5개 이하)**")
-    LOW_STOCK_THRESHOLD = 5
+    # [수정] 재고 부족 기준을 설정할 수 있도록 UI 변경
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.markdown("##### ⚠️ **재고 부족 경고 품목**")
+    with c2:
+        low_stock_threshold = st.number_input(
+            "알림 기준 재고 (이하)", 
+            min_value=0, 
+            value=5, 
+            step=1, 
+            key="low_stock_threshold",
+            label_visibility="collapsed"
+        )
+    
     current_inv_df = get_inventory_from_log(master_df)
     pending_orders = orders_df[orders_df['상태'] == CONFIG['ORDER_STATUS']['PENDING']]
     pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
@@ -1373,12 +1386,12 @@ def page_admin_dashboard(master_df: pd.DataFrame):
 
     active_master_df = master_df[master_df['활성'].astype(str).str.upper() == 'TRUE']
     low_stock_df = display_inv[
-        (display_inv['실질 가용 재고'] <= LOW_STOCK_THRESHOLD) &
+        (display_inv['실질 가용 재고'] <= low_stock_threshold) & # [수정] 설정된 기준으로 필터링
         (display_inv['품목코드'].isin(active_master_df['품목코드']))
     ].copy()
 
     if low_stock_df.empty:
-        st.info("재고 부족 품목이 없습니다.")
+        st.info(f"가용 재고가 {low_stock_threshold}개 이하인 품목이 없습니다.")
     else:
         st.dataframe(
             low_stock_df[['품목코드', '품목명', '현재고수량', '출고 대기 수량', '실질 가용 재고']],
@@ -1472,39 +1485,47 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                         st.session_state.success_message = "생산 목록을 모두 삭제했습니다."
                         st.rerun()
 
-# [수정] 생산/재고 관리 페이지 (재고 부족 탭 추가, 페이지네이션 적용)
+# [수정] 생산/재고 관리 페이지
 def page_admin_inventory_management(master_df: pd.DataFrame):
     st.subheader("📊 생산/재고 관리")
-    inventory_tabs = st.tabs(["현재고 현황", "⚠️ 재고 부족 품목", "재고 변동 내역", "재고 수동 조정"])
+
+    # [수정] '재고 부족 품목' 탭 삭제
+    inventory_tabs = st.tabs(["현재고 현황", "재고 변동 내역", "재고 수동 조정"])
+
     current_inv_df = get_inventory_from_log(master_df)
 
     with inventory_tabs[0]:
         st.markdown("##### 📦 현재고 현황")
         inv_status_tabs = st.tabs(["전체품목 현황", "보유재고 현황"])
+        
         orders_df = get_orders_df() 
         active_master_df = master_df[master_df['활성'].astype(str).str.lower() == 'true']
+        
         pending_orders = orders_df[orders_df['상태'] == CONFIG['ORDER_STATUS']['PENDING']]
         pending_qty = pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
+
         display_inv = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
+        
         display_inv['현재고수량'] = pd.to_numeric(display_inv['현재고수량'], errors='coerce').fillna(0).astype(int)
         display_inv['출고 대기 수량'] = pd.to_numeric(display_inv['출고 대기 수량'], errors='coerce').fillna(0).astype(int)
         display_inv['실질 가용 재고'] = display_inv['현재고수량'] - display_inv['출고 대기 수량']
+        
         active_codes = active_master_df['품목코드'].tolist()
         display_inv = display_inv[display_inv['품목코드'].isin(active_codes)]
+        
         cols_display_order = ['품목코드', '분류', '품목명', '현재고수량', '출고 대기 수량', '실질 가용 재고']
+        
         with inv_status_tabs[0]:
             st.dataframe(display_inv[cols_display_order], use_container_width=True, hide_index=True)
+            
         with inv_status_tabs[1]:
             st.dataframe(display_inv[display_inv['현재고수량'] > 0][cols_display_order], use_container_width=True, hide_index=True)
-
-    with inventory_tabs[1]:
-        st.markdown("##### ⚠️ 재고 부족 품목 (가용 재고 5개 이하)")
-        # 대시보드 함수를 호출하여 동일한 UI를 재사용
-        page_admin_dashboard(master_df)
             
-    with inventory_tabs[2]:
+    with inventory_tabs[1]: # [수정] 인덱스 변경 (2 -> 1)
         st.markdown("##### 📜 재고 변동 내역")
+        
         log_df = get_inventory_log_df()
+        
         if log_df.empty:
             st.info("재고 변동 기록이 없습니다.")
         else:
@@ -1525,9 +1546,9 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             page_number = render_paginated_ui(len(filtered_log), page_size, "inv_log")
             start_idx = (page_number - 1) * page_size
             end_idx = start_idx + page_size
-            st.dataframe(filtered_log.iloc[start_idx:end_idx].drop(columns=['작업일자_dt']), use_container_width=True, hide_index=True)
+            st.dataframe(filtered_log.iloc[start_idx:end_idx].drop(columns=['작업일자_dt'], errors='ignore'), use_container_width=True, hide_index=True)
 
-    with inventory_tabs[3]:
+    with inventory_tabs[2]: # [수정] 인덱스 변경 (3 -> 2)
         st.markdown("##### ✍️ 재고 수동 조정")
         st.warning("이 기능은 전산 재고와 실물 재고가 맞지 않을 때만 사용하세요. 모든 조정 내역은 영구적으로 기록됩니다.")
         c1, c2 = st.columns(2)
@@ -1556,7 +1577,7 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
                             st.rerun()
                         else:
                             st.session_state.error_message = "재고 조정 중 오류가 발생했습니다."
-
+                            
 def handle_order_action_confirmation(df_all: pd.DataFrame):
     """발주 처리 관련 확인 창 로직을 중앙에서 처리하고, 확인 창이 활성화되었는지 여부를 반환합니다."""
     action = st.session_state.get('confirm_action')
