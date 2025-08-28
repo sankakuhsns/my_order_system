@@ -2204,6 +2204,7 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
 def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
 
+    # --- 1. 보고서 종류 선택 ---
     doc_type = st.radio(
         "원하는 보고서 종류를 선택하세요.",
         ["지점별 서류 (거래명세서 등)", "기간별 종합 리포트 (정산용)"],
@@ -2211,9 +2212,11 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     )
     st.divider()
 
+    # --- A. 지점별 서류 ---
     if doc_type == "지점별 서류 (거래명세서 등)":
-        st.markdown("##### 🏢 지점별 서류")
+        st.markdown("##### 1. 조건 설정")
         with st.container(border=True):
+            # --- 조건 설정 UI ---
             c1, c2 = st.columns(2)
             with c1:
                 admin_stores = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]["지점명"].tolist()
@@ -2240,23 +2243,48 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
             dt_from = c1.date_input("조회 시작일", dt_from_value, key="admin_doc_from_individual", disabled=is_inventory_report)
 
-            if st.button("🔍 데이터 조회 및 생성", key="preview_individual_doc", use_container_width=True, type="primary"):
-                 if selected_entity_display != "(지점/관리를 선택하세요)":
-                    # ... (이하 조회 및 미리보기 로직)
+            if st.button("🔍 데이터 조회하기", key="preview_individual_doc", use_container_width=True, type="primary"):
+                if selected_entity_display != "(지점/관리를 선택하세요)":
+                    report_df = pd.DataFrame()
+                    if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
+                        log_df_raw = get_inventory_log_df()
+                        if not log_df_raw.empty:
+                            if sub_doc_type == "품목 생산 보고서":
+                                production_log = log_df_raw[log_df_raw['구분'] == CONFIG['INV_CHANGE_TYPE']['PRODUCE']].copy()
+                                report_df = production_log[(pd.to_datetime(production_log['작업일자']).dt.date >= dt_from) & (pd.to_datetime(production_log['작업일자']).dt.date <= dt_to)]
+                            elif sub_doc_type == "품목 재고 변동 보고서":
+                                report_df = log_df_raw[(pd.to_datetime(log_df_raw['작업일자']).dt.date >= dt_from) & (pd.to_datetime(log_df_raw['작업일자']).dt.date <= dt_to)]
+                        if sub_doc_type == "현재고 현황 보고서":
+                            report_df = get_inventory_from_log(master_df, target_date=dt_to)
+                    else: # store 역할
+                        if sub_doc_type == "금전 거래내역서":
+                            transactions_df = get_transactions_df()
+                            store_transactions = transactions_df[transactions_df['지점명'] == selected_entity_real_name]
+                            if not store_transactions.empty:
+                                store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시'], errors='coerce').dt.date
+                                report_df = store_transactions[(store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)]
+                        elif sub_doc_type == "품목 거래명세서":
+                            orders_df = get_orders_df()
+                            store_orders = orders_df[(orders_df['지점명'] == selected_entity_real_name) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]))]
+                            if not store_orders.empty:
+                                store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시'], errors='coerce').dt.date
+                                report_df = store_orders[(store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)]
+                    
+                    st.session_state['preview_df'] = report_df
+                    st.session_state['preview_info'] = {'type': sub_doc_type, 'entity': selected_entity_info, 'from': dt_from, 'to': dt_to}
+                    if 'report_buffer' in st.session_state: del st.session_state['report_buffer']
 
+    # --- B. 기간별 종합 리포트 ---
     elif doc_type == "기간별 종합 리포트 (정산용)":
         with st.container(border=True):
             st.markdown("###### 📅 기간별 종합 리포트")
-            st.info("선택된 기간의 전체 데이터를 종합하여 정산용 엑셀 파일을 생성합니다.")
+            st.info("아래에서 설정된 조회 기간의 전체 데이터를 종합하여 정산용 엑셀 파일을 생성합니다.")
             
-            c1, c2, c3 = st.columns(3)
-            today = date.today()
-            first_day_of_month = today.replace(day=1)
+            c1, c2 = st.columns(2)
+            dt_from_report = c1.date_input("조회 시작일", date.today().replace(day=1), key="report_from")
+            dt_to_report = c2.date_input("조회 종료일", date.today(), key="report_to")
             
-            dt_from_report = c1.date_input("조회 시작일", first_day_of_month, key="report_from")
-            dt_to_report = c2.date_input("조회 종료일", today, key="report_to")
-            
-            if c3.button("🚀 리포트 생성", use_container_width=True, type="primary"):
+            if st.button("🚀 리포트 생성", use_container_width=True, type="primary"):
                 with st.spinner("종합 리포트를 생성하는 중입니다..."):
                     all_orders_df = get_orders_df()
                     all_transactions_df = get_transactions_df()
@@ -2265,10 +2293,10 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     st.session_state['report_filename'] = f"종합정산리포트_{dt_from_report}_to_{dt_to_report}.xlsx"
                     if 'preview_df' in st.session_state: del st.session_state['preview_df']
     
+    # --- 3. 미리보기 및 다운로드 섹션 ---
     st.divider()
-    st.markdown("##### 3. 미리보기 및 다운로드")
+    st.markdown("##### 2. 미리보기 및 다운로드")
     
-    # 지점별 서류 미리보기
     if 'preview_df' in st.session_state and st.session_state['preview_df'] is not None:
         preview_df = st.session_state['preview_df']
         info = st.session_state['preview_info']
@@ -2303,10 +2331,9 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             if excel_buffer:
                 st.download_button(
                     label="⬇️ 엑셀 파일 다운로드", data=excel_buffer, file_name=file_name,
-                    mime="application/vnd.ms-excel", use_container_width=True
+                    mime="application/vnd.ms-excel", use_container_width=True, type="primary"
                 )
 
-    # 종합 리포트 다운로드 버튼
     elif 'report_buffer' in st.session_state and st.session_state['report_buffer']:
         st.download_button(
             label="✅ 종합 리포트 다운로드 준비 완료! (클릭)",
