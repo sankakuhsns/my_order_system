@@ -2671,13 +2671,16 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
             st.rerun()
         return
 
-    tabs = st.tabs(["품목 관리", "지점 관리", "시스템 점검 🩺"])
+    tabs = st.tabs(["품목 관리", "지점 관리", "시스템 점검 🩺", "📜 활동 로그"])
     with tabs[0]:
         render_master_settings_tab(master_df_raw)
     with tabs[1]:
         render_store_settings_tab(store_info_df_raw)
     with tabs[2]:
         render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df)
+    with tabs[3]:
+        # [추가] 활동 로그 탭 내용 렌더링
+        page_admin_audit_log()
 # =============================================================================
 # 8) 라우팅
 # =============================================================================
@@ -2694,8 +2697,8 @@ if __name__ == "__main__":
         user = st.session_state.auth
         
         if user["role"] == CONFIG['ROLES']['ADMIN']:
-            # ▼▼▼ [수정] '활동 로그' 탭 추가 ▼▼▼
-            admin_tabs = ["📊 대시보드", "🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "📜 활동 로그", "🛠️ 관리 설정"]
+            # ▼▼▼ [수정] '활동 로그' 탭을 메인 탭 목록에서 제거 ▼▼▼
+            admin_tabs = ["📊 대시보드", "🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"]
             tabs = st.tabs(admin_tabs)
             
             with tabs[0]: page_admin_dashboard(get_master_df())
@@ -2705,8 +2708,8 @@ if __name__ == "__main__":
             with tabs[4]: page_admin_sales_inquiry(get_orders_df())
             with tabs[5]: page_admin_balance_management(get_stores_df())
             with tabs[6]: page_admin_documents(get_stores_df(), get_master_df())
-            with tabs[7]: page_admin_audit_log() # [추가]
-            with tabs[8]:
+            # [수정] 탭 인덱스 변경 (8 -> 7)
+            with tabs[7]:
                 page_admin_settings(
                     get_stores_df(), get_master_df(), get_orders_df(), 
                     get_balance_df(), get_transactions_df(), get_inventory_log_df()
