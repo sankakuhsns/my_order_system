@@ -2342,8 +2342,26 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
     st.markdown("##### 🩺 시스템 점검")
     with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
         st.markdown("""
-        (도움말 내용은 기존과 동일...)
+        각 점검 항목은 우리 시스템의 데이터가 서로 잘 맞물려 정확하게 돌아가고 있는지 확인하는 **'시스템 건강 검진'** 과정입니다.
+
+        ---
+        * **💰 재무 점검**
+            * **무엇을?** 각 지점의 최종 잔액(선충전, 여신)과 모든 입출금 거래내역의 합산 금액이 일치하는지 검사합니다.
+            * **왜?** 시스템의 장부와 실제 돈의 흐름이 정확히 일치하는지 확인하여 재무 데이터의 신뢰성을 보장합니다.
+
+        * **🔗 거래 점검**
+            * **무엇을?** 모든 결제/환불 거래 기록이 실제 '발주' 내역과 1:1로 연결되는지, 금액은 정확한지 검사합니다.
+            * **왜?** 주문 없는 '유령 거래'나 계산 오류를 찾아내어 모든 거래의 투명성을 보장합니다.
+
+        * **📦 재고 점검**
+            * **무엇을?** '승인' 또는 '출고완료'된 주문 건에 대해 재고가 빠짐없이 출고 처리되었는지 검사합니다.
+            * **왜?** 판매는 되었지만 재고가 차감되지 않는 실수를 막아, 시스템 재고 수량의 정확성을 유지합니다.
+
+        * **🏛️ 무결성 점검**
+            * **무엇을?** 모든 기록에 사용된 '지점 ID'나 '품목 코드'가 현재 시스템에 등록된 유효한 정보인지 검사합니다.
+            * **왜?** 삭제된 지점이나 단종된 상품 데이터가 일으킬 수 있는 혼란을 막고, 모든 데이터가 깨끗하고 유효한 상태임을 보장합니다.
         """)
+        
     if st.button("🚀 전체 시스템 점검 시작", use_container_width=True, type="primary"):
         with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
             results = {}
@@ -2352,6 +2370,8 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
             results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
             results['integrity'] = audit_data_integrity(orders_df, transactions_df, store_info_df_raw, master_df_raw)
             st.session_state['audit_results'] = results
+            st.rerun()
+
     if 'audit_results' in st.session_state:
         st.markdown(f"##### ✅ 점검 결과 ({now_kst_str('%Y-%m-%d %H:%M:%S')} 기준)")
         results = st.session_state['audit_results']
@@ -2361,7 +2381,6 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
             "재고": results['inventory'], "무결성": results['integrity']
         }
         
-        # [수정] 반복문의 변수 구조를 (key, (status, issues))로 변경
         for i, (key, (status, issues)) in enumerate(status_map.items()):
             with cols[i]:
                 st.metric(
@@ -2369,8 +2388,6 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
                     delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal"
                 )
 
-        # 상세 내역을 보여주는 두 번째 반복문은 구조가 올바르므로 그대로 둡니다.
-        # (단, 가독성을 위해 zip 대신 status_map을 재활용하도록 수정)
         display_map = {
             "links": ("🔗 거래 점검", results['links']),
             "inventory": ("📦 재고 점검", results['inventory']),
