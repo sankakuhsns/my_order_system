@@ -2236,7 +2236,6 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     
-    # [수정] 데이터 로더 함수 사용
     balance_df = get_balance_df()
     charge_requests_df = get_charge_requests_df()
     pending_requests = charge_requests_df[charge_requests_df['상태'] == '요청']
@@ -2256,11 +2255,10 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         
         if not req_options:
             st.info("처리 대기 중인 요청이 없습니다.")
-            if st.button("새로고침"):
-                st.rerun()
+            if st.button("새로고침"): st.rerun()
             return
 
-        selected_req_str = c1.selectbox("처리할 요청 선택", req_options.keys())
+        selected_req_str = c1.selectbox("처리할 요청 선택", list(req_options.keys()))
         action = c2.selectbox("처리 방식", ["승인", "반려"])
         reason = c3.text_input("반려 사유 (반려 시 필수)")
 
@@ -2270,6 +2268,16 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                 st.stop()
 
             selected_req_data = req_options[selected_req_str]
+            
+            # ▼▼▼ [감사 로그] 코드 추가 ▼▼▼
+            user = st.session_state.auth
+            add_audit_log(
+                user_id=user['user_id'], user_name=user['name'],
+                action_type=f"{selected_req_data['종류']} 요청 처리",
+                target_id=selected_req_data['지점ID'], target_name=selected_req_data['지점명'],
+                changed_item="상태", before_value="요청", after_value=action,
+                reason=reason if action == "반려" else ""
+            )
             
             selected_timestamp_str = selected_req_data['요청일시'].strftime('%Y-%m-%d %H:%M:%S')
 
@@ -2419,7 +2427,35 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
     """품목 관리 탭 UI를 렌더링합니다."""
     st.markdown("##### 🏷️ 품목 정보 설정")
     edited_master_df = st.data_editor(master_df_raw, num_rows="dynamic", use_container_width=True, key="master_editor")
+    
     if st.button("품목 정보 저장", type="primary", key="save_master"):
+        # [감사 로그] 변경된 내용 추적 및 기록
+        try:
+            # 원본과 수정본의 데이터 타입을 일관성 있게 맞춤
+            master_df_raw_c = master_df_raw.astype(str)
+            edited_master_df_c = pd.DataFrame(edited_master_df).astype(str)
+            
+            # DataFrame 비교를 통해 변경점 찾기
+            diff = master_df_raw_c.compare(edited_master_df_c)
+            if not diff.empty:
+                user = st.session_state.auth
+                for idx, row in diff.iterrows():
+                    item_info = master_df_raw.iloc[int(idx)]
+                    for col_name in diff.columns.levels[0]:
+                        old_val = row[(col_name, 'self')]
+                        new_val = row[(col_name, 'other')]
+                        if pd.notna(old_val) or pd.notna(new_val):
+                            add_audit_log(
+                                user_id=user['user_id'], user_name=user['name'],
+                                action_type="품목 정보 수정",
+                                target_id=item_info['품목코드'], target_name=item_info['품목명'],
+                                changed_item=col_name,
+                                before_value=old_val, after_value=new_val
+                            )
+        except Exception as e:
+            print(f"Error during audit logging for master data: {e}")
+
+        # 시트 저장
         if save_df_to_sheet(CONFIG['MASTER']['name'], edited_master_df):
             st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
             clear_data_cache()
@@ -2441,11 +2477,36 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
         key="store_editor", disabled=["지점ID", "지점PW", "역할", "활성"]
     )
     if st.button("기본 정보 저장", type="primary", key="save_stores"):
-        # 여기에 add_audit_log를 추가하여 기본 정보 변경도 기록할 수 있습니다.
-        save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df)
-        clear_data_cache()
-        st.session_state.success_message = "지점 정보가 성공적으로 저장되었습니다."
-        st.rerun()
+        # [감사 로그] 변경된 내용 추적 및 기록
+        try:
+            store_info_df_raw_c = store_info_df_raw.astype(str)
+            edited_store_df_c = pd.DataFrame(edited_store_df).astype(str)
+            
+            diff = store_info_df_raw_c.compare(edited_store_df_c)
+            if not diff.empty:
+                user = st.session_state.auth
+                for idx, row in diff.iterrows():
+                    store_info = store_info_df_raw.iloc[int(idx)]
+                    for col_name in diff.columns.levels[0]:
+                        old_val = row[(col_name, 'self')]
+                        new_val = row[(col_name, 'other')]
+                        if pd.notna(old_val) or pd.notna(new_val):
+                             add_audit_log(
+                                user_id=user['user_id'], user_name=user['name'],
+                                action_type="지점 정보 수정",
+                                target_id=store_info['지점ID'], target_name=store_info['지점명'],
+                                changed_item=col_name,
+                                before_value=old_val, after_value=new_val
+                            )
+        except Exception as e:
+            print(f"Error during audit logging for store data: {e}")
+            
+        # 시트 저장
+        if save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df):
+            clear_data_cache()
+            st.session_state.success_message = "지점 정보가 성공적으로 저장되었습니다."
+            st.rerun()
+    
     st.divider()
     with st.expander("➕ 신규 지점 생성"):
         with st.form("new_store_form"):
