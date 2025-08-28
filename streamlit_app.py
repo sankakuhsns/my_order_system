@@ -2331,7 +2331,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                             if not store_transactions.empty:
                                 store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시'], errors='coerce').dt.date
                                 report_df = store_transactions[(store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)]
-                        elif sub_doc_type == "품목거래내역역서":
+                        elif sub_doc_type == "품목거래내역서":
                             orders_df = get_orders_df()
                             store_orders = orders_df[(orders_df['지점명'] == selected_entity_real_name) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]))]
                             if not store_orders.empty:
