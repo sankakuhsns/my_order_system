@@ -1275,6 +1275,27 @@ def page_store_my_info():
 # 7) 관리자 페이지 (UX 및 코드 품질 개선 적용)
 # =============================================================================
 
+# [신규] 로그인 시 시스템 자동 점검을 위한 헬퍼 함수
+def perform_initial_audit():
+    """관리자 로그인 시 시스템 상태를 점검하고 결과를 세션 상태에 저장합니다."""
+    with st.spinner("시스템 상태를 자동으로 점검하는 중입니다..."):
+        # 점검에 필요한 모든 데이터 로드
+        stores_df = get_stores_df()
+        master_df = get_master_df()
+        orders_df = get_orders_df()
+        balance_df = get_balance_df()
+        transactions_df = get_transactions_df()
+        inventory_log_df = get_inventory_log_df()
+
+        results = {}
+        results['financial'] = audit_financial_data(balance_df, transactions_df)
+        results['links'] = audit_transaction_links(transactions_df, orders_df)
+        results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
+        results['integrity'] = audit_data_integrity(orders_df, transactions_df, stores_df, master_df)
+        
+        st.session_state['audit_results'] = results
+        st.session_state['initial_audit_done'] = True # 점검 완료 플래그 설정
+
 # 헬퍼 함수: 재무 데이터 감사
 def audit_financial_data(balance_df, transactions_df):
     issues = []
@@ -1350,9 +1371,9 @@ def audit_data_integrity(orders_df, transactions_df, store_info_df, master_df):
 def page_admin_dashboard(master_df: pd.DataFrame):
     st.subheader("📊 대시보드")
 
+    # --- 1. 즉시 처리 필요 항목 ---
     orders_df = get_orders_df()
     charge_req_df = get_charge_requests_df()
-    
     pending_orders_count = len(orders_df[orders_df['상태'] == CONFIG['ORDER_STATUS']['PENDING']]['발주번호'].unique())
     pending_charge_count = len(charge_req_df[charge_req_df['상태'] == '요청'])
     
@@ -1361,6 +1382,32 @@ def page_admin_dashboard(master_df: pd.DataFrame):
         c1, c2 = st.columns(2)
         c1.metric("📦 신규 발주 요청", f"{pending_orders_count} 건")
         c2.metric("💳 충전/상환 요청", f"{pending_charge_count} 건")
+
+    st.divider()
+
+    # --- 2. 시스템 상태 요약 ---
+    st.markdown("##### 🩺 **시스템 상태 요약**")
+    if 'audit_results' in st.session_state:
+        results = st.session_state['audit_results']
+        cols = st.columns(4)
+        status_map = {
+            "재무": results['financial'], "거래": results['links'],
+            "재고": results['inventory'], "무결성": results['integrity']
+        }
+        has_issue = False
+        for i, (key, (status, issues)) in enumerate(status_map.items()):
+            with cols[i]:
+                st.metric(
+                    f"{key} 점검", status, f"{len(issues)}건 문제" if issues else "정상", 
+                    delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal"
+                )
+                if issues:
+                    has_issue = True
+        if has_issue:
+            st.info("문제가 발견되었습니다. '관리 설정' 탭에서 상세 내역을 확인하세요.")
+    else:
+        st.info("시스템 점검 데이터가 없습니다. '관리 설정' 탭에서 점검을 실행해주세요.")
+    
     st.divider()
 
     # [수정] 재고 부족 기준을 설정할 수 있도록 UI 변경
@@ -2440,6 +2487,10 @@ if __name__ == "__main__":
     init_session_state()
     
     if require_login():
+        
+        if st.session_state.auth['role'] == CONFIG['ROLES']['ADMIN'] and 'initial_audit_done' not in st.session_state:
+            perform_initial_audit()
+            
         st.title("📦 식자재 발주 시스템")
         display_feedback()
         
