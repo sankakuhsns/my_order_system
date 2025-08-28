@@ -67,6 +67,10 @@ CONFIG = {
         'name': "거래내역",
         'cols': ["일시", "지점ID", "지점명", "구분", "내용", "금액", "처리후선충전잔액", "처리후사용여신액", "관련발주번호", "처리자"]
     },
+    'AUDIT_LOG': {
+        'name': "활동로그",
+        'cols': ["로그일시", "변경자 ID", "변경자 이름", "작업 종류", "대상 ID", "대상 이름", "변경 항목", "이전 값", "새로운 값", "사유"]
+    },
     'INVENTORY_LOG': {
         'name': "재고로그",
         'cols': ["로그일시", "작업일자", "품목코드", "품목명", "구분", "수량변경", "처리후재고", "관련번호", "처리자", "사유"]
@@ -139,6 +143,49 @@ def render_paginated_ui(total_items, page_size, key_prefix):
             st.rerun()
     
     return st.session_state[page_number_key]
+
+# [신규] 감사 로그 기록을 위한 중앙 함수
+def add_audit_log(
+    user_id: str, 
+    user_name: str, 
+    action_type: str, 
+    target_id: str, 
+    target_name: str = "", 
+    changed_item: str = "", 
+    before_value: Any = "", 
+    after_value: Any = "", 
+    reason: str = ""
+):
+    """모든 주요 데이터 변경 사항을 '활동로그' 시트에 기록합니다."""
+    
+    log_sheet_name = CONFIG['AUDIT_LOG']['name']
+    log_columns = CONFIG['AUDIT_LOG']['cols']
+    
+    new_log_entry = {
+        "로그일시": now_kst_str(),
+        "변경자 ID": user_id,
+        "변경자 이름": user_name,
+        "작업 종류": action_type,
+        "대상 ID": target_id,
+        "대상 이름": target_name,
+        "변경 항목": str(changed_item),
+        "이전 값": str(before_value),
+        "새로운 값": str(after_value),
+        "사유": reason
+    }
+    
+    try:
+        ws = open_spreadsheet().worksheet(log_sheet_name)
+        values_to_append = [[new_log_entry.get(col, "") for col in log_columns]]
+        ws.append_rows(values_to_append, value_input_option='USER_ENTERED')
+    except gspread.WorksheetNotFound:
+        # 시트가 없을 경우 새로 만들고 헤더 추가 후 다시 시도
+        sh = open_spreadsheet()
+        ws = sh.add_worksheet(title=log_sheet_name, rows="1", cols=len(log_columns))
+        ws.append_row(log_columns, value_input_option='USER_ENTERED')
+        ws.append_rows(values_to_append, value_input_option='USER_ENTERED')
+    except Exception as e:
+        print(f"CRITICAL: 감사 로그 기록 실패! - {e}")
 
 # =============================================================================
 # 2) Google Sheets 연결 및 I/O (기존과 동일)
@@ -249,6 +296,26 @@ def update_balance_sheet(store_id: str, updates: Dict):
 def update_order_status(selected_ids: List[str], new_status: str, handler: str, reason: str = "") -> bool:
     if not selected_ids: return True
     try:
+        # ▼▼▼ [감사 로그] 코드 추가 ▼▼▼
+        orders_df = get_orders_df()
+        user = st.session_state.auth
+        
+        for order_id in selected_ids:
+            order_info = orders_df[orders_df['발주번호'] == order_id]
+            if not order_info.empty:
+                old_status = order_info['상태'].iloc[0]
+                add_audit_log(
+                    user_id=user['user_id'], user_name=user['name'],
+                    action_type="주문 상태 변경",
+                    target_id=order_id,
+                    target_name=order_info['지점명'].iloc[0],
+                    changed_item="상태",
+                    before_value=old_status,
+                    after_value=new_status,
+                    reason=reason
+                )
+        # ▲▲▲ 코드 추가 끝 ▲▲▲
+
         ws = open_spreadsheet().worksheet(CONFIG['ORDERS']['name'])
         all_data = ws.get_all_values()
         header = all_data[0]
@@ -271,7 +338,9 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
                     reason_text = reason if new_status == CONFIG['ORDER_STATUS']['REJECTED'] else ""
                     cells_to_update.append(gspread.Cell(i, reason_col_idx + 1, reason_text))
 
-        if cells_to_update: ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+        if cells_to_update:
+            ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+        
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -1275,6 +1344,49 @@ def page_store_my_info():
 # 7) 관리자 페이지 (UX 및 코드 품질 개선 적용)
 # =============================================================================
 
+# [신규] 관리자 활동 로그 조회 페이지
+def page_admin_audit_log():
+    st.subheader("📜 활동 로그 조회")
+
+    try:
+        audit_log_df = load_data(CONFIG['AUDIT_LOG']['name'], CONFIG['AUDIT_LOG']['cols'])
+    except gspread.WorksheetNotFound:
+        st.warning("'활동로그' 시트를 찾을 수 없습니다. 로그가 기록되면 자동으로 생성됩니다.")
+        return
+        
+    if audit_log_df.empty:
+        st.info("활동 기록이 없습니다.")
+        return
+
+    # --- 필터링 UI ---
+    c1, c2, c3 = st.columns(3)
+    # 날짜 필터
+    default_start = audit_log_df['로그일시'].min().date() if not audit_log_df.empty else date.today()
+    dt_from = c1.date_input("조회 시작일", default_start, key="audit_log_from")
+    dt_to = c2.date_input("조회 종료일", date.today(), key="audit_log_to")
+
+    # 변경자 필터
+    user_list = ["(전체)"] + sorted(audit_log_df["변경자 이름"].dropna().unique().tolist())
+    user_filter = c3.selectbox("변경자 필터", user_list, key="audit_log_user")
+    
+    # 데이터 필터링
+    filtered_df = audit_log_df[
+        (audit_log_df['로그일시'].dt.date >= dt_from) &
+        (audit_log_df['로그일시'].dt.date <= dt_to)
+    ]
+    if user_filter != "(전체)":
+        filtered_df = filtered_df[filtered_df["변경자 이름"] == user_filter]
+
+    st.markdown(f"총 **{len(filtered_df)}**개의 기록이 조회되었습니다.")
+    
+    # --- 페이지네이션 적용 및 데이터 표시 ---
+    page_size = 20
+    page_number = render_paginated_ui(len(filtered_df), page_size, "audit_log")
+    start_idx = (page_number - 1) * page_size
+    end_idx = start_idx + page_size
+    
+    st.dataframe(filtered_df.iloc[start_idx:end_idx], use_container_width=True, hide_index=True)
+
 # [신규] 로그인 시 시스템 자동 점검을 위한 헬퍼 함수
 def perform_initial_audit():
     """관리자 로그인 시 시스템 상태를 점검하고 결과를 세션 상태에 저장합니다."""
@@ -2236,7 +2348,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
     
     with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
-            store_info_filtered = store_info_df[store_info_df['역할'] != 'admin']
+            store_info_filtered = store_info_df[store_info_df['역할'] != CONFIG['ROLES']['ADMIN']]
             stores = sorted(store_info_filtered["지점명"].dropna().unique().tolist())
             
             if not stores:
@@ -2252,42 +2364,50 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     if not (selected_store and adj_reason and adj_amount != 0):
                         st.warning("모든 필드를 올바르게 입력해주세요.")
                     else:
-                        store_id_series = store_info_df[store_info_df['지점명'] == selected_store]['지점ID']
-                        if store_id_series.empty:
-                            st.error(f"'{selected_store}'의 지점ID를 찾을 수 없습니다.")
-                            return
-                        store_id = store_id_series.iloc[0]
+                        store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
                         current_balance_query = balance_df[balance_df['지점ID'] == store_id]
+                        
                         if current_balance_query.empty:
-                            st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다.")
+                             st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다.")
                         else:
                             current_balance = current_balance_query.iloc[0]
+                            user = st.session_state.auth
+                            old_value = int(current_balance[adj_type])
+                            new_value = old_value + adj_amount
+
+                            # ▼▼▼ [감사 로그] 코드 추가 ▼▼▼
+                            add_audit_log(
+                                user_id=user['user_id'],
+                                user_name=user['name'],
+                                action_type="잔액 수동 조정",
+                                target_id=store_id,
+                                target_name=selected_store,
+                                changed_item=adj_type,
+                                before_value=old_value,
+                                after_value=new_value,
+                                reason=adj_reason
+                            )
+                            # ▲▲▲ 코드 추가 끝 ▲▲▲
+
                             if adj_type == "여신한도":
-                                new_limit = int(current_balance['여신한도']) + adj_amount
-                                update_balance_sheet(store_id, {adj_type: new_limit})
+                                update_balance_sheet(store_id, {adj_type: new_value})
                                 st.session_state.success_message = f"'{selected_store}'의 여신한도가 조정되었습니다. (거래내역에 기록되지 않음)"
                             else:
+                                # (기존 선충전잔액, 사용여신액 처리 로직)
                                 current_prepaid = int(current_balance['선충전잔액'])
                                 current_used_credit = int(current_balance['사용여신액'])
-                                new_prepaid, new_used_credit = current_prepaid, current_used_credit
-                                trans_record = {"금액": adj_amount, "내용": adj_reason}
-
-                                if adj_type == "선충전잔액":
-                                    new_prepaid += adj_amount
-                                    update_balance_sheet(store_id, {adj_type: new_prepaid})
-                                    trans_record.update({"구분": "수동조정(충전)", "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit})
                                 
+                                if adj_type == "선충전잔액":
+                                    update_balance_sheet(store_id, {adj_type: new_value})
+                                    trans_record = {"구분": "수동조정(충전)", "처리후선충전잔액": new_value, "처리후사용여신액": current_used_credit}
                                 elif adj_type == "사용여신액":
-                                    new_used_credit += adj_amount
-                                    update_balance_sheet(store_id, {adj_type: new_used_credit})
-                                    trans_record.update({"구분": "수동조정(여신)", "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_used_credit})
+                                    update_balance_sheet(store_id, {adj_type: new_value})
+                                    trans_record = {"구분": "수동조정(여신)", "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_value}
 
                                 full_trans_record = {
-                                    **trans_record, 
-                                    "일시": now_kst_str(), 
-                                    "지점ID": store_id, 
-                                    "지점명": selected_store, 
-                                    "처리자": st.session_state.auth['name']
+                                    "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_store,
+                                    "금액": adj_amount, "내용": adj_reason, "처리자": user['name'],
+                                    **trans_record
                                 }
                                 append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [full_trans_record], CONFIG['TRANSACTIONS']['cols'])
                                 st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 조정되고 거래내역에 기록되었습니다."
@@ -2321,6 +2441,7 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
         key="store_editor", disabled=["지점ID", "지점PW", "역할", "활성"]
     )
     if st.button("기본 정보 저장", type="primary", key="save_stores"):
+        # 여기에 add_audit_log를 추가하여 기본 정보 변경도 기록할 수 있습니다.
         save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df)
         clear_data_cache()
         st.session_state.success_message = "지점 정보가 성공적으로 저장되었습니다."
@@ -2347,6 +2468,10 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                     new_balance_data = {"지점ID": new_id, "지점명": new_name, "선충전잔액": 0, "여신한도": 0, "사용여신액": 0}
                     if append_rows_to_sheet(CONFIG['STORES']['name'], [new_store_data], CONFIG['STORES']['cols']) and \
                        append_rows_to_sheet(CONFIG['BALANCE']['name'], [new_balance_data], CONFIG['BALANCE']['cols']):
+                        
+                        user = st.session_state.auth
+                        add_audit_log(user['user_id'], user['name'], "신규 지점 생성", new_id, new_name)
+
                         clear_data_cache()
                         st.session_state.success_message = f"'{new_name}' 지점이 성공적으로 생성되었습니다."
                         st.rerun()
@@ -2371,6 +2496,10 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                 if cell:
                     pw_col_idx = ws.row_values(1).index('지점PW') + 1
                     ws.update_cell(cell.row, pw_col_idx, hashed_pw)
+                    
+                    user = st.session_state.auth
+                    add_audit_log(user['user_id'], user['name'], "비밀번호 초기화", store_id, selected_store_name)
+
                     clear_data_cache()
                     st.info(f"'{selected_store_name}'의 비밀번호가 임시 비밀번호 '{temp_pw}' (으)로 초기화되었습니다.")
                 else:
@@ -2381,7 +2510,7 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                 button_text = "🔒 계정 비활성화" if is_active else "✅ 계정 활성화"
                 if st.button(button_text, key=action_key, use_container_width=True):
                     st.session_state.confirm_action = "toggle_activation"
-                    st.session_state.confirm_data = {'store_id': store_id, 'is_active': is_active}
+                    st.session_state.confirm_data = {'store_id': store_id, 'is_active': is_active, 'name': selected_store_name}
                     st.rerun()
 
 def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df):
@@ -2451,9 +2580,10 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
     if st.session_state.get('confirm_action') == "toggle_activation":
         data = st.session_state.confirm_data
         store_id = data['store_id']
+        store_name = data['name']
         is_active = data['is_active']
         action_text = "비활성화" if is_active else "활성화"
-        st.warning(f"**확인 필요**: 정말로 '{store_id}' 계정을 **{action_text}**하시겠습니까?")
+        st.warning(f"**확인 필요**: 정말로 '{store_name}({store_id})' 계정을 **{action_text}**하시겠습니까?")
         c1, c2 = st.columns(2)
         if c1.button(f"예, {action_text}합니다.", key="confirm_yes", type="primary", use_container_width=True):
             ws_stores = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
@@ -2462,7 +2592,14 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
                 active_col_idx = ws_stores.row_values(1).index('활성') + 1
                 new_status = 'FALSE' if is_active else 'TRUE'
                 ws_stores.update_cell(cell_stores.row, active_col_idx, new_status)
-                st.session_state.success_message = f"'{store_id}' 계정이 {action_text} 처리되었습니다."
+                
+                user = st.session_state.auth
+                add_audit_log(
+                    user['user_id'], user['name'], "계정 상태 변경", store_id, store_name,
+                    "활성", str(is_active).upper(), new_status
+                )
+
+                st.session_state.success_message = f"'{store_name}' 계정이 {action_text} 처리되었습니다."
                 st.session_state.confirm_action = None
                 st.session_state.confirm_data = None
                 clear_data_cache()
@@ -2487,7 +2624,6 @@ if __name__ == "__main__":
     init_session_state()
     
     if require_login():
-        
         if st.session_state.auth['role'] == CONFIG['ROLES']['ADMIN'] and 'initial_audit_done' not in st.session_state:
             perform_initial_audit()
             
@@ -2497,7 +2633,8 @@ if __name__ == "__main__":
         user = st.session_state.auth
         
         if user["role"] == CONFIG['ROLES']['ADMIN']:
-            admin_tabs = ["📊 대시보드", "🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "🛠️ 관리 설정"]
+            # ▼▼▼ [수정] '활동 로그' 탭 추가 ▼▼▼
+            admin_tabs = ["📊 대시보드", "🏭 일일 생산 보고", "📊 생산/재고 관리", "📋 발주요청 조회", "📈 매출 조회", "💰 결제 관리", "📑 증빙서류 다운로드", "📜 활동 로그", "🛠️ 관리 설정"]
             tabs = st.tabs(admin_tabs)
             
             with tabs[0]: page_admin_dashboard(get_master_df())
@@ -2507,7 +2644,8 @@ if __name__ == "__main__":
             with tabs[4]: page_admin_sales_inquiry(get_orders_df())
             with tabs[5]: page_admin_balance_management(get_stores_df())
             with tabs[6]: page_admin_documents(get_stores_df(), get_master_df())
-            with tabs[7]:
+            with tabs[7]: page_admin_audit_log() # [추가]
+            with tabs[8]:
                 page_admin_settings(
                     get_stores_df(), get_master_df(), get_orders_df(), 
                     get_balance_df(), get_transactions_df(), get_inventory_log_df()
