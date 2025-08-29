@@ -575,22 +575,22 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         all_tx['일시_dt'] = pd.to_datetime(all_tx['일시']).dt.date
         tx_before = all_tx[all_tx['일시_dt'] < dt_from].sort_values(by='일시', ascending=True)
         opening_balance = tx_before.iloc[-1]['처리후선충전잔액'] if not tx_before.empty else 0
-        
+
         period_income = df_transactions_period[df_transactions_period['금액'] > 0]['금액'].sum()
         period_outcome = df_transactions_period[df_transactions_period['금액'] < 0]['금액'].sum()
-        
+
         df_sorted_period = df_transactions_period.sort_values(by='일시', ascending=True)
         closing_balance = df_sorted_period.iloc[-1]['처리후선충전잔액'] if not df_sorted_period.empty else opening_balance
-        
+
         worksheet.merge_range('A3:F3', f"거래기간: {dt_from} ~ {dt_to}", fmt_h2)
         worksheet.merge_range('A4:B4', '기초 잔액', fmt_h2); worksheet.merge_range('C4:D4', opening_balance, fmt_money)
         worksheet.merge_range('A5:B5', '기간 내 입금 (+)', fmt_h2); worksheet.merge_range('C5:D5', period_income, fmt_money_blue)
         worksheet.merge_range('A6:B6', '기간 내 출금 (-)', fmt_h2); worksheet.merge_range('C6:D6', period_outcome, fmt_money_red)
         worksheet.merge_range('A7:B7', '기말 잔액', fmt_h2); worksheet.merge_range('C7:D7', closing_balance, fmt_money)
-        
+
         headers = ['일시', '구분', '내용', '금액', '처리 후 잔액', '처리 후 여신']
         worksheet.write_row('A9', headers, fmt_header)
-        
+
         row_num = 10
         for _, row in df_sorted_period.iterrows():
             worksheet.write(row_num - 1, 0, str(row.get('일시', '')), fmt_text_c)
@@ -603,8 +603,9 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
             worksheet.write(row_num - 1, 5, row.get('처리후사용여신액', 0), fmt_money)
             row_num += 1
 
-        df_display = df_sorted_period[['일시', '구분', '내용', '금액', '처리후선충전잔액', '처리후사용여신액']]
-        widths = get_col_widths(df_display)
+        df_display_for_width = df_sorted_period[['일시', '구분', '내용', '금액', '처리후선충전잔액', '처리후사용여신액']]
+        df_display_for_width.columns = headers
+        widths = get_col_widths(df_display_for_width)
         for i, width in enumerate(widths):
             worksheet.set_column(i, i, width)
 
@@ -2168,6 +2169,9 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
 def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
 
+    if 'report_df' not in st.session_state:
+        st.session_state.report_df = pd.DataFrame()
+
     doc_type_selected = st.radio(
         "원하는 보고서 종류를 선택하세요.",
         ["지점별 서류 (거래내역서 등)", "기간별 종합 리포트 (정산용)"],
@@ -2186,7 +2190,6 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
             sub_doc_type = ""
             if selected_entity_display != "(지점을 선택하세요)":
-                selected_entity_info = store_info_df[store_info_df['지점명'] == selected_entity_display].iloc[0]
                 with c2:
                     sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
             
@@ -2194,43 +2197,26 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="admin_doc_from_individual")
             dt_to = c2.date_input("조회 종료일", date.today(), key="admin_doc_to_individual")
 
-            if st.button("🔍 데이터 조회 및 다운로드", key="preview_individual_doc", use_container_width=True, type="primary"):
+            if st.button("🔍 데이터 조회하기", key="preview_individual_doc", use_container_width=True, type="primary"):
+                st.session_state.report_df = pd.DataFrame() # 조회 시마다 초기화
                 if selected_entity_display != "(지점을 선택하세요)":
                     report_df = pd.DataFrame()
-                    excel_buffer = None
-                    file_name = "report.xlsx"
-
                     if sub_doc_type == "금전거래내역서":
                         transactions_all_df = get_transactions_df()
                         store_transactions = transactions_all_df[transactions_all_df['지점명'] == selected_entity_display]
                         if not store_transactions.empty:
                             store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시'], errors='coerce').dt.date
                             report_df = store_transactions[(store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)]
-                            if not report_df.empty:
-                                excel_buffer = create_unified_financial_statement(report_df, transactions_all_df, selected_entity_info)
-                                file_name = f"금전거래내역서_{selected_entity_display}_{dt_from}_to_{dt_to}.xlsx"
-
                     elif sub_doc_type == "품목거래내역서":
                         orders_df = get_orders_df()
                         store_orders = orders_df[(orders_df['지점명'] == selected_entity_display) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]))]
                         if not store_orders.empty:
                             store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시'], errors='coerce').dt.date
                             report_df = store_orders[(store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)]
-                            if not report_df.empty:
-                                supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                                if not supplier_info_df.empty:
-                                    supplier_info = supplier_info_df.iloc[0]
-                                    excel_buffer = create_unified_item_statement(report_df, supplier_info, selected_entity_info)
-                                    file_name = f"품목거래내역서_{selected_entity_display}_{dt_from}_to_{dt_to}.xlsx"
-
-                    if excel_buffer:
-                        st.session_state['report_buffer'] = excel_buffer
-                        st.session_state['report_filename'] = file_name
-                        st.session_state.success_message = "엑셀 파일 생성이 완료되었습니다. 아래 다운로드 버튼을 클릭하세요."
-                        st.rerun()
-                    else:
-                        st.warning("선택하신 조건에 해당하는 데이터가 없거나, 보고서 생성에 필요한 정보(예: admin 역할의 공급자 정보)가 없습니다.")
-
+                    
+                    st.session_state.report_df = report_df
+                    st.session_state.report_info = {'type': sub_doc_type, 'name': selected_entity_display, 'from': dt_from, 'to': dt_to}
+                
     elif doc_type_selected == "기간별 종합 리포트 (정산용)":
         with st.container(border=True):
             st.markdown("###### 📅 기간별 종합 리포트")
@@ -2249,19 +2235,37 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     st.rerun()
 
     st.divider()
-    st.markdown("##### 2. 다운로드")
-    if 'report_buffer' in st.session_state and st.session_state['report_buffer']:
-        st.download_button(
-            label=f"✅ '{st.session_state['report_filename']}' 다운로드 준비 완료!",
-            data=st.session_state['report_buffer'],
-            file_name=st.session_state['report_filename'],
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            on_click=lambda: st.session_state.update({'report_buffer': None, 'report_filename': None})
-        )
-    else:
-        st.info("보고서 종류를 선택하고 버튼을 눌러주세요.")
+    st.markdown("##### 2. 미리보기 및 다운로드")
+    
+    report_df = st.session_state.report_df
+    if not report_df.empty:
+        st.markdown(f"**'{st.session_state.report_info['name']}'**의 **'{st.session_state.report_info['type']}'** 조회 결과입니다. (총 {len(report_df)}건)")
+        st.dataframe(report_df.head(10), use_container_width=True, hide_index=True)
 
+        info = st.session_state.report_info
+        selected_entity_info = store_info_df[store_info_df['지점명'] == info['name']].iloc[0]
+        excel_buffer = None
+        file_name = "report.xlsx"
+
+        if info['type'] == "금전거래내역서":
+            excel_buffer = create_unified_financial_statement(report_df, get_transactions_df(), selected_entity_info)
+            file_name = f"금전거래내역서_{info['name']}_{info['from']}_to_{info['to']}.xlsx"
+        elif info['type'] == "품목거래내역서":
+            supplier_info = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']].iloc[0]
+            excel_buffer = create_unified_item_statement(report_df, supplier_info, selected_entity_info)
+            file_name = f"품목거래내역서_{info['name']}_{info['from']}_to_{info['to']}.xlsx"
+
+        if excel_buffer:
+            st.download_button(
+                label=f"⬇️ '{file_name}' 엑셀 파일 다운로드",
+                data=excel_buffer,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+    else:
+        st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
+        
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
     
