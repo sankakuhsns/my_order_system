@@ -2501,14 +2501,15 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                                 excel_buffer = None
                                 file_name = "report.xlsx"
 
-                    if excel_buffer:
-                        st.session_state.excel_buffer = excel_buffer
-                        st.session_state.report_filename = file_name
-                        st.session_state.report_df = report_df
-                        st.rerun()
-                    else:
-                        st.session_state.report_df = report_df
-                        st.rerun()
+                    st.session_state.excel_buffer = excel_buffer
+                    st.session_state.report_filename = file_name
+                    st.session_state.report_df = report_df
+                    st.rerun()
+                else:
+                    st.session_state.report_df = pd.DataFrame()
+                    st.session_state.excel_buffer = None
+                    st.session_state.report_filename = ""
+                    st.rerun()
 
     # 기간별 종합 리포트 생성 UI
     elif doc_type_selected == "기간별 종합 리포트 (정산용)":
@@ -2528,7 +2529,8 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     st.session_state.excel_buffer = excel_buffer
                     st.session_state.report_filename = f"종합정산리포트_{dt_from_report}_to_{dt_to_report}.xlsx"
                     st.rerun()
-
+    
+    # 미리보기 및 다운로드 섹션 (항상 하단에 위치)
     st.markdown("---")
     st.markdown("##### 2. 미리보기 및 다운로드")
     
@@ -2537,27 +2539,17 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         info = st.session_state.get('report_info', {'name': '', 'type': ''})
         st.markdown(f"**'{info['name']}'**의 **'{info['type']}'** 조회 결과입니다. (총 {len(report_df)}건)")
         st.dataframe(report_df.head(10), use_container_width=True, hide_index=True)
-        # 리포트 미리보기가 있는 경우 다운로드 버튼 표시
-        if st.session_state.excel_buffer:
-            st.download_button(
-                label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
-                data=st.session_state.excel_buffer,
-                file_name=st.session_state.report_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="download_button_final"
-            )
-    elif st.session_state.excel_buffer:
-        # 기간별 종합 리포트의 경우 미리보기 없이 바로 다운로드 버튼 표시
+    
+    if st.session_state.excel_buffer:
         st.download_button(
             label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
             data=st.session_state.excel_buffer,
             file_name=st.session_state.report_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-            key="download_button_comprehensive"
+            key="download_button_final"
         )
-    else:
+    elif report_df.empty and not st.session_state.excel_buffer:
         st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
         
 def page_admin_balance_management(store_info_df: pd.DataFrame):
