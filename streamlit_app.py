@@ -427,7 +427,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_print_date = workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'})
 
-        # 3. 레이아웃 설정 (9열 기반)
+        # 3. 레이아웃 설정 (요청하신 9열 구조 및 너비 직접 적용)
         col_widths = [7, 7, 40, 7, 7, 10, 10, 10, 10]
         for i, width in enumerate(col_widths):
             worksheet.set_column(i, i, width)
@@ -436,32 +436,35 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.set_row(0, 40)
         worksheet.merge_range('A1:I1', '품 목 거 래 명 세 서', fmt_title)
         worksheet.merge_range('A2:I2', f"출력일: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}", fmt_print_date)
-        
+
+        # ### 공급자/공급받는자 정보 (오류 수정된 최종 레이아웃) ###
         worksheet.merge_range('A4:C4', '공급하는자', fmt_subtitle)
         worksheet.merge_range('D4:I4', '공급받는자', fmt_subtitle)
 
         info_data = [('사업자번호', '사업자등록번호'), ('상호', '상호명'), ('대표자', '대표자명'), ('사업장주소', '사업장주소'), ('업태/종목', '업태/종목')]
-        
+
         for i in range(5, 10): worksheet.set_row(i-1, 28)
 
         for i, (label, key) in enumerate(info_data, 5):
             val_sup = f"{supplier_info.get('업태', '')}/{supplier_info.get('종목', '')}" if key == '업태/종목' else supplier_info.get(key, '')
             val_cus = f"{customer_info.get('업태', '')}/{customer_info.get('종목', '')}" if key == '업태/종목' else customer_info.get(key, '')
-            
-            # ### 요청하신 AB병합, DE병합 규칙 적용 ###
-            worksheet.merge_range(f'A{i}:B{i}', label, fmt_info_label)
-            worksheet.merge_range(f'D{i}:E{i}', val_sup, fmt_info_data)
-            worksheet.merge_range(f'F{i}:G{i}', label, fmt_info_label)
-            worksheet.merge_range(f'I{i}:I{i}', val_cus, fmt_info_data)
-        
-        # 5. 거래 요약 정보 (동일한 AB병합, DE병합 규칙 적용)
+
+            # 공급자 정보 (A-C열): 라벨(A), 내용(B-C)
+            worksheet.write(f'A{i}', label, fmt_info_label)
+            worksheet.merge_range(f'B{i}:C{i}', val_sup, fmt_info_data)
+
+            # 공급받는자 정보 (D-I열): 라벨(D), 내용(E-I)
+            worksheet.write(f'D{i}', label, fmt_info_label)
+            worksheet.merge_range(f'E{i}:I{i}', val_cus, fmt_info_data)
+
+        # 5. 거래 요약 정보
         min_date, max_date = df_agg['거래일자'].min(), df_agg['거래일자'].max()
         date_range = max_date.strftime('%Y-%m-%d') if min_date == max_date else f"{min_date.strftime('%Y-%m-%d')} ~ {max_date.strftime('%Y-%m-%d')}"
         grand_total = df_agg['합계금액'].sum()
         worksheet.merge_range('A11:B11', '거래 기간', fmt_summary_header)
-        worksheet.merge_range('D11:E11', date_range, fmt_summary_data)
-        worksheet.merge_range('F11:G11', '총 합계 금액', fmt_summary_header)
-        worksheet.merge_range('I11:I11', grand_total, fmt_summary_money)
+        worksheet.merge_range('C11:D11', date_range, fmt_summary_data)
+        worksheet.merge_range('E11:F11', '총 합계 금액', fmt_summary_header)
+        worksheet.merge_range('G11:I11', grand_total, fmt_summary_money)
 
         current_row = 13
 
@@ -475,7 +478,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
             current_row += 1
 
-            # ### 헤더 작성 (No, 품목코드 붙여서 표시) ###
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             current_row += 1
@@ -488,7 +490,8 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                     record['수량'], record['단가'], record['공급가액'],
                     record['세액'], record['합계금액']
                 ]
-                # 각 셀에 맞는 서식과 함께 데이터 작성
+                worksheet.write_row(f'A{current_row}', row_data)
+                # 서식만 별도로 적용
                 worksheet.write(current_row, 0, row_data[0], fmt_text_c)
                 worksheet.write(current_row, 1, row_data[1], fmt_text_c)
                 worksheet.write(current_row, 2, row_data[2], fmt_text_l)
