@@ -815,8 +815,8 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         # 모든 데이터 셀에 적용할 가운데 정렬 포맷
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         
-        # 수량 셀에 적용할 배경색 포맷을 테마 색상으로 변경
-        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
+        # 수량 셀에 적용할 배경색 포맷을 테마 색상으로 변경 (오른쪽 정렬을 가운데 정렬로 변경)
+        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
 
         # 2. 데이터 전처리 및 열 선택
         df_display = df_merged[['품목코드', '분류', '품목명', '품목규격', '단위', '현재고수량']].copy()
