@@ -1216,7 +1216,6 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
     
-    # ### 2번 수정: 서류 종류 용어 통일 ###
     doc_type = c3.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"])
     
     if doc_type == "금전거래내역서":
@@ -1230,7 +1229,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시'], errors='coerce').dt.date
         my_transactions.dropna(subset=['일시_dt'], inplace=True)
         mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
-        dfv = my_transactions[mask].copy()
+        dfv = my_transactions.loc[mask].copy() # .loc를 사용하여 복사본 명시
         if dfv.empty: 
             st.warning("해당 기간의 거래 내역이 없습니다.")
             return
@@ -1253,16 +1252,18 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
         my_orders['주문일시_dt'] = pd.to_datetime(my_orders['주문일시'], errors='coerce').dt.date
         my_orders.dropna(subset=['주문일시_dt'], inplace=True)
-        filtered_orders = my_orders[my_orders['주문일시_dt'].between(dt_from, dt_to)]
+        filtered_orders = my_orders.loc[my_orders['주문일시_dt'].between(dt_from, dt_to)].copy() # .loc 사용 및 복사본 명시
         
         if filtered_orders.empty:
             st.warning("선택한 기간 내에 승인/출고된 발주 내역이 없습니다.")
             return
 
-        order_options = ["(기간 전체)"] + filtered_orders['발주번호'].unique().tolist()
+        order_options = ["(기간 전체)"] + sorted(filtered_orders['발주번호'].unique().tolist())
         selected_order_id = c4.selectbox("발주번호 선택", order_options, key="store_doc_order_select")
 
         supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
+        
+        # ### 최종 수정: customer_info를 현재 로그인한 사용자의 정보로 명확하게 지정 ###
         customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
         
         if supplier_info_df.empty or customer_info_df.empty:
@@ -1280,7 +1281,6 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
         if not preview_df.empty:
             buf = create_unified_item_statement(preview_df, supplier_info, customer_info)
-            # ### 2번 수정: 버튼명과 파일명을 '품목거래내역서'로 변경 ###
             download_label = "기간 전체 내역서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 내역서"
             st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
