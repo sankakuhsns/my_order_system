@@ -407,7 +407,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        worksheet = workbook.add_worksheet("품목거래명세서")
+        worksheet = workbook.add_worksheet("품목거래내역역서")
 
         # 2. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
@@ -428,13 +428,13 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         fmt_print_date = workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'})
 
         # 3. 레이아웃 설정 (요청하신 9열 구조 및 너비 직접 적용)
-        col_widths = [7, 10, 40, 7, 7, 10, 10, 10, 10]
+        col_widths = [7, 7, 40, 7, 7, 10, 10, 10, 10]
         for i, width in enumerate(col_widths):
             worksheet.set_column(i, i, width)
 
         # 4. 헤더 영역 작성
         worksheet.set_row(0, 40)
-        worksheet.merge_range('A1:I1', '품 목 거 래 명 세 서', fmt_title)
+        worksheet.merge_range('A1:I1', '품 목 거 래 내 역 서', fmt_title)
         worksheet.merge_range('A2:I2', f"출력일: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}", fmt_print_date)
         
         worksheet.merge_range('A4:D4', '공급하는자', fmt_subtitle)
@@ -478,23 +478,29 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
             current_row += 1
 
+            # ### 헤더 작성 (중요: 이 부분이 제목 행을 만듭니다) ###
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
-            for i, header in enumerate(headers):
-                worksheet.write(current_row, i, header, fmt_header)
+            worksheet.write_row(f'A{current_row}', headers, fmt_header)
             current_row += 1
 
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
-                worksheet.write(f'A{current_row}', item_counter, fmt_text_c)
-                worksheet.write(f'B{current_row}', record['품목코드'], fmt_text_c)
-                worksheet.write(f'C{current_row}', record['품목명'], fmt_text_l)
-                worksheet.write(f'D{current_row}', record['단위'], fmt_text_c)
-                worksheet.write(f'E{current_row}', record['수량'], fmt_money)
-                worksheet.write(f'F{current_row}', record['단가'], fmt_money)
-                worksheet.write(f'G{current_row}', record['공급가액'], fmt_money)
-                worksheet.write(f'H{current_row}', record['세액'], fmt_money)
-                worksheet.write(f'I{current_row}', record['합계금액'], fmt_money)
+                row_data = [
+                    item_counter, record['품목코드'], record['품목명'], record['단위'],
+                    record['수량'], record['단가'], record['공급가액'],
+                    record['세액'], record['합계금액']
+                ]
+                # 각 셀에 맞는 서식과 함께 데이터 작성
+                worksheet.write(current_row, 0, row_data[0], fmt_text_c)  # No
+                worksheet.write(current_row, 1, row_data[1], fmt_text_c)  # 품목코드
+                worksheet.write(current_row, 2, row_data[2], fmt_text_l)  # 품목명
+                worksheet.write(current_row, 3, row_data[3], fmt_text_c)  # 단위
+                worksheet.write(current_row, 4, row_data[4], fmt_money)   # 수량
+                worksheet.write(current_row, 5, row_data[5], fmt_money)   # 단가
+                worksheet.write(current_row, 6, row_data[6], fmt_money)   # 공급가액
+                worksheet.write(current_row, 7, row_data[7], fmt_money)   # 세액
+                worksheet.write(current_row, 8, row_data[8], fmt_money)   # 합계금액
                 current_row += 1
                 item_counter += 1
 
