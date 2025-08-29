@@ -1118,7 +1118,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             update_order_status(selected_to_cancel, "취소", user["name"])
             st.session_state.success_message = f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다."
             st.session_state.store_orders_selection = {}
-            st.experimental_rerun()
+            st.rerun()
     
     with tab2:
         shipped_display = shipped.copy()
@@ -1824,7 +1824,7 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
                 else:
                     st.session_state.error_message = "처리 중 오류가 발생했습니다. 재고 또는 주문 상태를 확인해주세요."
 
-            st.experimental_rerun()
+            st.rerun()
 
     with btn_cols[1]:
         if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
