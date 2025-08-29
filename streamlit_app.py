@@ -436,7 +436,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             worksheet.set_column(i, i, width)
 
         # 4. 헤더 영역 작성
-        worksheet.set_row(0, 40)
+        worksheet.set_row(0, 50)
         worksheet.merge_range('A1:I1', '품 목 거 래 내 역 서', fmt_title)
         worksheet.merge_range('A2:I2', f"출력일: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}", fmt_print_date)
         
@@ -465,6 +465,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.merge_range('D11:E11', '총 합계 금액', fmt_summary_header)
         worksheet.merge_range('F11:I11', grand_total, fmt_summary_money)
 
+        # ### 1번 수정: 요약 정보와 목록 사이에 한 줄 띄우기 위해 시작 행을 13으로 설정 ###
         current_row = 13 
 
         # 6. 본문 데이터 작성
@@ -480,10 +481,12 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             
+            # ### 2번 수정: 헤더 작성 후 바로 다음 줄부터 데이터 작성을 위해 아래 줄을 삭제 ###
+            # current_row += 1  <- 이 줄을 삭제하여 헤더와 목록을 붙입니다.
+
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
-                # 데이터 행을 쓰기 직전에 current_row를 1 증가시켜 헤더 바로 다음 줄부터 시작
                 current_row += 1
                 worksheet.write(current_row, 0, item_counter, fmt_text_c)
                 worksheet.write(current_row, 1, record['품목코드'], fmt_text_c)
@@ -494,8 +497,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 worksheet.write(current_row, 6, record['공급가액'], fmt_money)
                 worksheet.write(current_row, 7, record['세액'], fmt_money)
                 worksheet.write(current_row, 8, record['합계금액'], fmt_money)
+                item_counter += 1
             
-            current_row += 1 
+            current_row += 1
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'H{current_row}', date_df['세액'].sum(), fmt_subtotal_money)
