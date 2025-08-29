@@ -2382,6 +2382,8 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.session_state.excel_buffer = None
     if 'report_filename' not in st.session_state:
         st.session_state.report_filename = ""
+    if 'report_info' not in st.session_state:
+        st.session_state.report_info = {}
     # 세션 상태에 마지막으로 선택된 보고서 타입을 저장하는 변수 추가
     if 'last_selected_report_type' not in st.session_state:
         st.session_state.last_selected_report_type = "지점별 서류 (거래내역서 등)"
@@ -2393,8 +2395,8 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             st.session_state.report_df = pd.DataFrame()
             st.session_state.excel_buffer = None
             st.session_state.report_filename = ""
+            st.session_state.report_info = {} # report_info 초기화 추가
             st.session_state.last_selected_report_type = st.session_state.doc_type_selected
-            # st.rerun() 호출을 제거합니다.
 
     doc_type_selected = st.radio(
         "원하는 보고서 종류를 선택하세요.",
@@ -2441,6 +2443,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                 st.session_state.report_df = pd.DataFrame()
                 st.session_state.excel_buffer = None
                 st.session_state.report_filename = ""
+                st.session_state.report_info = {}
                 
                 if selected_entity_display != "(선택하세요)":
                     report_df = pd.DataFrame()
@@ -2504,11 +2507,13 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     st.session_state.excel_buffer = excel_buffer
                     st.session_state.report_filename = file_name
                     st.session_state.report_df = report_df
+                    st.session_state.report_info = {'name': selected_entity_real_name, 'type': sub_doc_type}
                     st.rerun()
                 else:
                     st.session_state.report_df = pd.DataFrame()
                     st.session_state.excel_buffer = None
                     st.session_state.report_filename = ""
+                    st.session_state.report_info = {}
                     st.rerun()
 
     # 기간별 종합 리포트 생성 UI
@@ -2524,6 +2529,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                 st.session_state.report_df = pd.DataFrame()
                 st.session_state.excel_buffer = None
                 st.session_state.report_filename = ""
+                st.session_state.report_info = {} # 종합 리포트 생성 시 info 초기화
                 with st.spinner("종합 리포트를 생성하는 중입니다..."):
                     excel_buffer = make_settlement_report_excel(dt_from_report, dt_to_report, get_orders_df(), get_transactions_df())
                     st.session_state.excel_buffer = excel_buffer
@@ -2536,9 +2542,13 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     
     report_df = st.session_state.get('report_df', pd.DataFrame())
     if not report_df.empty:
-        info = st.session_state.get('report_info', {'name': '', 'type': ''})
-        st.markdown(f"**'{info['name']}'**의 **'{info['type']}'** 조회 결과입니다. (총 {len(report_df)}건)")
-        st.dataframe(report_df.head(10), use_container_width=True, hide_index=True)
+        info = st.session_state.get('report_info', {})
+        if info:
+            st.markdown(f"**'{info['name']}'**의 **'{info['type']}'** 조회 결과입니다. (총 {len(report_df)}건)")
+            st.dataframe(report_df.head(10), use_container_width=True, hide_index=True)
+        else:
+            # 기간별 종합 리포트의 경우 report_df가 있더라도 info가 없으므로 이 블록을 건너뜁니다.
+            pass
     
     if st.session_state.excel_buffer:
         st.download_button(
@@ -2549,7 +2559,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             use_container_width=True,
             key="download_button_final"
         )
-    elif report_df.empty and not st.session_state.excel_buffer:
+    else:
         st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
         
 def page_admin_balance_management(store_info_df: pd.DataFrame):
