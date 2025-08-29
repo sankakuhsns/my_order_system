@@ -480,9 +480,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             
-            # ### 최종 수정: 헤더 작성 후 바로 다음 줄부터 데이터 작성을 위해 current_row를 여기서 증가시키지 않음 ###
-            # current_row += 1  <- 이 부분을 삭제해야 헤더와 목록이 붙습니다.
-
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
@@ -497,7 +494,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 worksheet.write(current_row, 6, record['공급가액'], fmt_money)
                 worksheet.write(current_row, 7, record['세액'], fmt_money)
                 worksheet.write(current_row, 8, record['합계금액'], fmt_money)
-                item_counter += 1
             
             current_row += 1 
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
