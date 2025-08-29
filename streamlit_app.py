@@ -452,8 +452,12 @@ def require_login():
     return False
     
 # =============================================================================
-# 4) Excel 생성 (전문성 및 통일성 강화)
+# 4) Excel 생성 (통합 양식 v2.0)
+# - create_unified_item_statement: 모든 품목 거래명세서를 하나의 함수로 통합
+# - create_unified_financial_statement: 모든 금전 거래내역서를 하나의 함수로 통합
+# - 공통 개선사항: 가독성 높은 레이아웃, 핵심 요약 정보 추가, 컬럼 너비 자동 조절
 # =============================================================================
+
 def make_order_id(store_id: str) -> str: return f"{datetime.now(KST):%Y%m%d%H%M%S}{store_id}"
 
 def get_vat_inclusive_price(row: pd.Series) -> int:
@@ -461,119 +465,135 @@ def get_vat_inclusive_price(row: pd.Series) -> int:
     tax_type = row.get('과세구분', '과세')
     return int(price * 1.1) if tax_type == '과세' else price
 
-# [신규 통합] 품목거래내역서 생성 함수
-def make_item_transaction_report_excel(orders_df: pd.DataFrame, supplier_info: pd.Series, customer_info: pd.Series) -> BytesIO:
+def get_col_widths(dataframe: pd.DataFrame):
+    """컬럼 너비를 데이터 길이에 맞게 자동 계산하는 헬퍼 함수"""
+    widths = [max(len(str(s)) for s in dataframe[col].astype(str).values) for col in dataframe.columns]
+    # 헤더 길이와 비교하여 더 넓은 값 선택 (여유 공간 +2)
+    return [max(len(str(col)), width) + 2 for col, width in zip(dataframe.columns, widths)]
+
+
+# [신규] 통합 품목 거래명세서 생성 함수
+def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Series, customer_info: pd.Series) -> BytesIO:
+    """단일/기간/하루 등 모든 품목 거래 조회를 위한 통일된 양식의 Excel을 생성합니다."""
     output = BytesIO()
     if orders_df.empty: return output
 
     df = orders_df.copy()
     df['거래일자'] = pd.to_datetime(df['주문일시']).dt.date
-    df = df.sort_values(by=['거래일자', '품목명'])
+    df = df.sort_values(by=['거래일자', '발주번호', '품목명'])
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        worksheet = workbook.add_worksheet("품목거래내역서")
-        
+        worksheet = workbook.add_worksheet("품목거래명세서")
+
         # --- 서식 정의 ---
-        fmt_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter'})
         fmt_h2 = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_info = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'valign': 'vcenter', 'wrap': True})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_info_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
+        fmt_info_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'wrap': True})
+        fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
+        fmt_summary_money = workbook.add_format({'bold': True, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1})
+        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
         fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
-        fmt_date = workbook.add_format({'num_format': 'yyyy-mm-dd', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_border_c = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_border_l = workbook.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter'})
-        fmt_daily_total_label = workbook.add_format({'bold': True, 'bg_color': '#FFF2CC', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_daily_total_value = workbook.add_format({'bold': True, 'bg_color': '#FFF2CC', 'border': 1, 'num_format': '#,##0'})
-        fmt_grand_total_label = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_grand_total_value = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#DDEBF7', 'border': 1, 'num_format': '#,##0'})
+        fmt_date = workbook.add_format({'num_format': 'yyyy-mm-dd', 'border': 1, 'align': 'center'})
+        fmt_text_c = workbook.add_format({'border': 1, 'align': 'center'})
+        fmt_text_l = workbook.add_format({'border': 1, 'align': 'left'})
+        fmt_total_strong_label = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#4F81BD', 'color': 'white', 'border': 1, 'align': 'center'})
+        fmt_total_strong_value = workbook.add_format({'bold': True, 'font_size': 12, 'num_format': '#,##0', 'bg_color': '#DDEBF7', 'border': 1})
 
-        worksheet.set_column('A:A', 12); worksheet.set_column('B:B', 15); worksheet.set_column('C:C', 25)
-        worksheet.set_column('D:E', 8); worksheet.set_column('F:I', 14)
-        worksheet.merge_range('A1:I2', '품목거래내역서', fmt_title)
+        # --- 1. 문서 제목 ---
+        worksheet.merge_range('A1:I1', '거 래 명 세 서', fmt_title)
+
+        # --- 2. 공급자 / 공급받는자 정보 ---
+        worksheet.merge_range('A3:D3', '공급하는자', fmt_h2)
+        worksheet.merge_range('F3:I3', '공급받는자', fmt_h2)
+        info_data = [
+            ('사업자등록번호', supplier_info.get('사업자등록번호', ''), customer_info.get('사업자등록번호', '')),
+            ('상호 (법인명)', supplier_info.get('상호명', ''), customer_info.get('상호명', '')),
+            ('대표자', supplier_info.get('대표자명', ''), customer_info.get('대표자명', '')),
+            ('사업장 주소', supplier_info.get('사업장주소', ''), customer_info.get('사업장주소', '')),
+            ('업태 / 종목', f"{supplier_info.get('업태', '')} / {supplier_info.get('종목', '')}", f"{customer_info.get('업태', '')} / {customer_info.get('종목', '')}")
+        ]
+        for i, (label, sup_val, cus_val) in enumerate(info_data, 4):
+            worksheet.write(f'A{i}', label, fmt_info_header)
+            worksheet.merge_range(f'B{i}:D{i}', sup_val, fmt_info_data)
+            worksheet.write(f'F{i}', label, fmt_info_header)
+            worksheet.merge_range(f'G{i}:I{i}', cus_val, fmt_info_data)
+
+        # --- 3. 핵심 요약 정보 ---
+        min_date = df['거래일자'].min().strftime('%Y-%m-%d')
+        max_date = df['거래일자'].max().strftime('%Y-%m-%d')
+        date_range = min_date if min_date == max_date else f"{min_date} ~ {max_date}"
         
-        for i in range(4, 10): worksheet.set_row(i, 18)
-        worksheet.merge_range('A5:A9', '공\n급\n하\n는\n자', fmt_h2)
-        worksheet.write('B5', '사업자등록번호', fmt_h2); worksheet.merge_range('C5:E5', supplier_info.get('사업자등록번호', ''), fmt_info)
-        worksheet.write('B6', '상호', fmt_h2); worksheet.write('C6', supplier_info.get('상호명', ''), fmt_info)
-        worksheet.write('D6', '대표', fmt_h2); worksheet.write('E6', supplier_info.get('대표자명', ''), fmt_info)
-        worksheet.write('B7', '사업장 주소', fmt_h2); worksheet.merge_range('C7:E7', supplier_info.get('사업장주소', ''), fmt_info)
-        worksheet.write('B8', '업태', fmt_h2); worksheet.write('C8', supplier_info.get('업태', ''), fmt_info)
-        worksheet.write('D8', '종목', fmt_h2); worksheet.write('E8', supplier_info.get('종목', ''), fmt_info)
-        
-        worksheet.merge_range('F5:F9', '공\n급\n받\n는\n자', fmt_h2)
-        worksheet.write('G5', '사업자등록번호', fmt_h2); worksheet.merge_range('H5:I5', customer_info.get('사업자등록번호', ''), fmt_info)
-        worksheet.write('G6', '상호', fmt_h2); worksheet.merge_range('H6:I6', customer_info.get('상호명', ''), fmt_info)
-        worksheet.write('G7', '대표', fmt_h2); worksheet.merge_range('H7:I7', customer_info.get('대표자명', ''), fmt_info)
-        worksheet.write('G8', '사업장 주소', fmt_h2); worksheet.merge_range('H8:I8', customer_info.get('사업장주소', ''), fmt_info)
-        worksheet.write('G9', '업태/종목', fmt_h2); worksheet.merge_range('H9:I9', f"{customer_info.get('업태', '')}/{customer_info.get('종목', '')}", fmt_info)
-
-        headers = ["거래일자", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "세액", "합계금액"]
-        worksheet.write_row('A11', headers, fmt_header)
-        
-        row_num = 11
-        for trade_date, daily_group in df.groupby('거래일자'):
-            for _, record in daily_group.iterrows():
-                row_num += 1
-                worksheet.write_datetime(row_num, 0, trade_date, fmt_date)
-                worksheet.write(row_num, 1, record['품목코드'], fmt_border_c)
-                worksheet.write(row_num, 2, record['품목명'], fmt_border_l)
-                worksheet.write(row_num, 3, record['단위'], fmt_border_c)
-                worksheet.write(row_num, 4, record['수량'], fmt_money)
-                worksheet.write(row_num, 5, record['단가'], fmt_money)
-                worksheet.write(row_num, 6, record['공급가액'], fmt_money)
-                worksheet.write(row_num, 7, record['세액'], fmt_money)
-                worksheet.write(row_num, 8, record['합계금액'], fmt_money)
-
-            row_num += 1
-            daily_supply = daily_group['공급가액'].sum()
-            daily_tax = daily_group['세액'].sum()
-            daily_total = daily_group['합계금액'].sum()
-            related_orders = ", ".join(daily_group['발주번호'].unique())
-            worksheet.merge_range(row_num, 0, row_num, 2, '일계', fmt_daily_total_label)
-            worksheet.merge_range(row_num, 3, row_num, 5, f"(관련 발주번호: {related_orders})", fmt_daily_total_label)
-            worksheet.write(row_num, 6, daily_supply, fmt_daily_total_value)
-            worksheet.write(row_num, 7, daily_tax, fmt_daily_total_value)
-            worksheet.write(row_num, 8, daily_total, fmt_daily_total_value)
-
-        row_num += 1
         grand_supply = df['공급가액'].sum()
         grand_tax = df['세액'].sum()
         grand_total = df['합계금액'].sum()
+
+        worksheet.merge_range('A10:B10', '거래 기간', fmt_summary_header)
+        worksheet.merge_range('C10:I10', date_range, fmt_info_data)
+        worksheet.merge_range('A11:B11', '총 합계 금액 (VAT 포함)', fmt_summary_header)
+        worksheet.merge_range('C11:I11', grand_total, fmt_summary_money)
+
+        # --- 4. 상세 거래 내역 ---
+        headers = ["거래일자", "발주번호", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "합계금액"]
+        worksheet.write_row('A13', headers, fmt_header)
         
-        worksheet.merge_range(row_num, 0, row_num, 5, '총계', fmt_grand_total_label)
-        worksheet.write(row_num, 6, grand_supply, fmt_grand_total_value)
-        worksheet.write(row_num, 7, grand_tax, fmt_grand_total_value)
-        worksheet.write(row_num, 8, grand_total, fmt_grand_total_value)
+        row_num = 13
+        for _, record in df.iterrows():
+            worksheet.write_datetime(row_num, 0, record['거래일자'], fmt_date)
+            worksheet.write(row_num, 1, record['발주번호'], fmt_text_c)
+            worksheet.write(row_num, 2, record['품목코드'], fmt_text_c)
+            worksheet.write(row_num, 3, record['품목명'], fmt_text_l)
+            worksheet.write(row_num, 4, record['단위'], fmt_text_c)
+            worksheet.write(row_num, 5, record['수량'], fmt_money)
+            worksheet.write(row_num, 6, record['단가'], fmt_money)
+            worksheet.write(row_num, 7, record['공급가액'], fmt_money)
+            worksheet.write(row_num, 8, record['합계금액'], fmt_money)
+            row_num += 1
+
+        # --- 5. 최종 합계 ---
+        worksheet.merge_range(row_num, 0, row_num, 6, '총 계', fmt_total_strong_label)
+        worksheet.write(row_num, 7, grand_supply, fmt_total_strong_value)
+        worksheet.write(row_num, 8, grand_total, fmt_total_strong_value)
+
+        # --- 6. 컬럼 너비 자동 조절 ---
+        df_display = df[["거래일자", "발주번호", "품목코드", "품목명", "단위", "수량", "단가", "공급가액", "합계금액"]]
+        widths = get_col_widths(df_display)
+        for i, width in enumerate(widths):
+            worksheet.set_column(i, i, width)
 
     output.seek(0)
     return output
 
-# [기능 개선] 요약 정보가 추가된 금전거래내역서 생성 함수
-def make_financial_transaction_report_excel(df_transactions_period: pd.DataFrame, df_transactions_all: pd.DataFrame, supplier_info: pd.Series, customer_info: pd.Series, dt_from: date, dt_to: date) -> BytesIO:
+# [신규] 통합 금전 거래내역서 생성 함수
+def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_transactions_all: pd.DataFrame, customer_info: pd.Series) -> BytesIO:
+    """모든 금전 거래 조회를 위한 통일된 양식의 Excel을 생성합니다."""
     output = BytesIO()
     if df_transactions_all.empty: return output
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        worksheet = workbook.add_worksheet(f"{customer_info['지점명']} 금전거래내역서")
+        worksheet = workbook.add_worksheet(f"{customer_info.get('지점명', '금전 거래')} 내역서")
 
-        fmt_title = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
+        # --- 서식 정의 ---
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter'})
         fmt_h2 = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
         fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
-        fmt_border_c = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_border_l = workbook.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter'})
-        fmt_info = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'valign': 'vcenter', 'wrap': True})
+        fmt_money_blue = workbook.add_format({'num_format': '#,##0', 'border': 1, 'font_color': 'blue'})
+        fmt_money_red = workbook.add_format({'num_format': '#,##0', 'border': 1, 'font_color': 'red'})
+        fmt_text_c = workbook.add_format({'border': 1, 'align': 'center'})
+        fmt_text_l = workbook.add_format({'border': 1, 'align': 'left'})
 
-        worksheet.set_column('A:A', 20); worksheet.set_column('B:B', 12); worksheet.set_column('C:C', 35); 
-        worksheet.set_column('D:F', 15)
+        # --- 1. 문서 제목 ---
+        worksheet.merge_range('A1:F1', f"{customer_info.get('지점명', '')} 금전 거래 내역서", fmt_title)
 
-        worksheet.merge_range('A1:F1', f"{customer_info['지점명']} 금전거래내역서", fmt_title)
-        
+        # --- 2. 거래 요약 정보 ---
+        dt_from = pd.to_datetime(df_transactions_period['일시']).min().date()
+        dt_to = pd.to_datetime(df_transactions_period['일시']).max().date()
+
         all_tx = df_transactions_all[df_transactions_all['지점ID'] == customer_info['지점ID']].copy()
         all_tx['일시_dt'] = pd.to_datetime(all_tx['일시']).dt.date
-        
         tx_before = all_tx[all_tx['일시_dt'] < dt_from].sort_values(by='일시', ascending=True)
         opening_balance = tx_before.iloc[-1]['처리후선충전잔액'] if not tx_before.empty else 0
         
@@ -584,138 +604,36 @@ def make_financial_transaction_report_excel(df_transactions_period: pd.DataFrame
         closing_balance = df_sorted_period.iloc[-1]['처리후선충전잔액'] if not df_sorted_period.empty else opening_balance
         
         worksheet.merge_range('A3:F3', f"거래기간: {dt_from} ~ {dt_to}", fmt_h2)
-        worksheet.merge_range('A4:B4', '거래 요약', fmt_h2)
-        worksheet.write('A5', '기초 잔액'); worksheet.write('B5', opening_balance, fmt_money)
-        worksheet.write('A6', '기간 내 입금(+)'); worksheet.write('B6', period_income, fmt_money)
-        worksheet.write('A7', '기간 내 출금(-)'); worksheet.write('B7', period_outcome, fmt_money)
-        worksheet.write('A8', '기말 잔액'); worksheet.write('B8', closing_balance, fmt_money)
-
+        worksheet.merge_range('A4:B4', '기초 잔액', fmt_h2); worksheet.merge_range('C4:D4', opening_balance, fmt_money)
+        worksheet.merge_range('A5:B5', '기간 내 입금 (+)', fmt_h2); worksheet.merge_range('C5:D5', period_income, fmt_money_blue)
+        worksheet.merge_range('A6:B6', '기간 내 출금 (-)', fmt_h2); worksheet.merge_range('C6:D6', period_outcome, fmt_money_red)
+        worksheet.merge_range('A7:B7', '기말 잔액', fmt_h2); worksheet.merge_range('C7:D7', closing_balance, fmt_money)
+        
+        # --- 3. 상세 거래 내역 ---
         headers = ['일시', '구분', '내용', '금액', '선충전 잔액', '사용 여신액']
-        worksheet.write_row('A10', headers, fmt_header)
+        worksheet.write_row('A9', headers, fmt_header)
         
-        for idx, row in df_sorted_period.reset_index(drop=True).iterrows():
-            row_num = idx + 11
-            worksheet.write(f'A{row_num}', str(row.get('일시', '')), fmt_border_c)
-            worksheet.write(f'B{row_num}', row.get('구분', ''), fmt_border_c)
-            worksheet.write(f'C{row_num}', row.get('내용', ''), fmt_border_l)
-            worksheet.write(f'D{row_num}', row.get('금액', 0), fmt_money)
-            worksheet.write(f'E{row_num}', row.get('처리후선충전잔액', 0), fmt_money)
-            worksheet.write(f'F{row_num}', row.get('처리후사용여신액', 0), fmt_money)
-    
-    output.seek(0)
-    return output
-
-def make_multi_date_item_statement_excel(orders_df: pd.DataFrame, supplier_info: pd.Series, customer_info: pd.Series, dt_from: date, dt_to: date) -> BytesIO:
-    output = BytesIO()
-    if orders_df.empty: return output
-
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        worksheet = workbook.add_worksheet("기간별_품목거래명세서")
-        
-        # --- 서식 정의 (위 함수와 유사하므로 생략)
-        fmt_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_h2 = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_info = workbook.add_format({'font_size': 10, 'border': 1, 'align': 'left', 'valign': 'vcenter'})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
-        fmt_border = workbook.add_format({'border': 1})
-        fmt_border_c = workbook.add_format({'border': 1, 'align': 'center'})
-        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#FFF2CC', 'border': 1})
-        fmt_daily_total = workbook.add_format({'bold': True, 'bg_color': '#FFF2CC', 'border': 1, 'num_format': '#,##0'})
-        fmt_grand_total = workbook.add_format({'bold': True, 'font_size': 13, 'bg_color': '#DDEBF7', 'border': 1, 'num_format': '#,##0'})
-
-        worksheet.set_column('A:A', 5); worksheet.set_column('B:B', 20); worksheet.set_column('C:C', 18)
-        worksheet.set_column('D:E', 8); worksheet.set_column('F:I', 14)
-
-        worksheet.merge_range('A1:I2', '기간별 품목 거래명세서', fmt_title)
-        worksheet.write('F5', '거래기간', fmt_h2)
-        worksheet.merge_range('G5:I5', f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}", fmt_info)
-        
-        # --- (공급자/받는자 정보는 생략) ---
-
-        headers = ["No", "품목명", "발주번호", "단위", "수량", "단가", "공급가액", "세액", "합계금액"]
-        
-        orders_df['주문일'] = pd.to_datetime(orders_df['주문일시']).dt.date
-        
-        row_num = 13
-        grand_total_supply = 0
-        grand_total_tax = 0
-        grand_total_amount = 0
-
-        for order_date, group in orders_df.sort_values(by=['주문일', '발주번호']).groupby('주문일'):
-            worksheet.merge_range(row_num, 0, row_num, len(headers)-1, f"▶ 거래일자: {order_date.strftime('%Y-%m-%d')}", fmt_date_header)
+        row_num = 9
+        for _, row in df_sorted_period.iterrows():
+            worksheet.write(row_num, 0, str(row.get('일시', '')), fmt_text_c)
+            worksheet.write(row_num, 1, row.get('구분', ''), fmt_text_c)
+            worksheet.write(row_num, 2, row.get('내용', ''), fmt_text_l)
+            # 금액에 조건부 서식 적용
+            amount = row.get('금액', 0)
+            fmt = fmt_money
+            if amount > 0: fmt = fmt_money_blue
+            elif amount < 0: fmt = fmt_money_red
+            worksheet.write(row_num, 3, amount, fmt)
+            worksheet.write(row_num, 4, row.get('처리후선충전잔액', 0), fmt_money)
+            worksheet.write(row_num, 5, row.get('처리후사용여신액', 0), fmt_money)
             row_num += 1
-            worksheet.write_row(row_num, 0, headers, fmt_header)
-            
-            start_row_daily = row_num + 1
-            group = group.reset_index(drop=True)
-            for i, record in group.iterrows():
-                row_num += 1
-                worksheet.write(row_num, 0, i + 1, fmt_border_c)
-                # ... (데이터 쓰는 로직은 위 함수와 유사)
-                worksheet.write(row_num, 1, record['품목명'], fmt_border)
-                worksheet.write(row_num, 2, record['발주번호'], fmt_border_c)
-                worksheet.write(row_num, 3, record['단위'], fmt_border_c)
-                worksheet.write(row_num, 4, record['수량'], fmt_money)
-                worksheet.write(row_num, 5, record['단가'], fmt_money)
-                worksheet.write(row_num, 6, record['공급가액'], fmt_money)
-                worksheet.write(row_num, 7, record['세액'], fmt_money)
-                worksheet.write(row_num, 8, record['합계금액'], fmt_money)
 
-            row_num += 1
-            worksheet.merge_range(row_num, 0, row_num, 5, '일계', fmt_daily_total)
-            worksheet.write_formula(row_num, 6, f"=SUM(G{start_row_daily}:G{row_num})", fmt_daily_total)
-            worksheet.write_formula(row_num, 7, f"=SUM(H{start_row_daily}:H{row_num})", fmt_daily_total)
-            worksheet.write_formula(row_num, 8, f"=SUM(I{start_row_daily}:I{row_num})", fmt_daily_total)
-            row_num += 2
+        # --- 4. 컬럼 너비 자동 조절 ---
+        df_display = df_sorted_period[['일시', '구분', '내용', '금액', '선충전 잔액', '사용 여신액']]
+        widths = get_col_widths(df_display)
+        for i, width in enumerate(widths):
+            worksheet.set_column(i, i, width)
 
-            grand_total_supply += group['공급가액'].sum()
-            grand_total_tax += group['세액'].sum()
-            grand_total_amount += group['합계금액'].sum()
-
-        worksheet.merge_range(row_num, 0, row_num, 5, '총계', fmt_grand_total)
-        worksheet.write(row_num, 6, grand_total_supply, fmt_grand_total)
-        worksheet.write(row_num, 7, grand_total_tax, fmt_grand_total)
-        worksheet.write(row_num, 8, grand_total_amount, fmt_grand_total)
-
-    output.seek(0)
-    return output
-
-def make_full_transaction_statement_excel(df_transactions: pd.DataFrame, store_info: pd.Series) -> BytesIO:
-    output = BytesIO()
-    if df_transactions.empty: return output
-
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        worksheet = workbook.add_worksheet(f"{store_info['지점명']} 금전거래")
-
-        fmt_title = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
-        fmt_border_c = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_border_l = workbook.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter'})
-
-        worksheet.set_paper(9); worksheet.set_landscape(); worksheet.fit_to_pages(1, 1)
-        worksheet.set_margins(left=0.5, right=0.5, top=0.5, bottom=0.5)
-        col_widths = {'A': 20, 'B': 12, 'C': 35, 'D': 15, 'E': 15, 'F': 15}
-        for col, width in col_widths.items(): worksheet.set_column(f'{col}:{col}', width)
-
-        worksheet.merge_range('A1:F1', f"{store_info['지점명']} 금전 거래 상세 명세서", fmt_title)
-        headers = ['일시', '구분', '내용', '금액', '선충전 잔액', '사용 여신액']
-        worksheet.write_row('A3', headers, fmt_header)
-        
-        df_sorted = df_transactions.sort_values(by='일시', ascending=True).reset_index(drop=True)
-        
-        for idx, row in df_sorted.iterrows():
-            row_num = idx + 4
-            worksheet.write(f'A{row_num}', row.get('일시', ''), fmt_border_c)
-            worksheet.write(f'B{row_num}', row.get('구분', ''), fmt_border_c)
-            worksheet.write(f'C{row_num}', row.get('내용', ''), fmt_border_l)
-            worksheet.write(f'D{row_num}', row.get('금액', 0), fmt_money)
-            worksheet.write(f'E{row_num}', row.get('처리후선충전잔액', 0), fmt_money)
-            worksheet.write(f'F{row_num}', row.get('처리후사용여신액', 0), fmt_money)
-    
     output.seek(0)
     return output
 
