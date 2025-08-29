@@ -724,6 +724,9 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         workbook = writer.book
         worksheet = workbook.add_worksheet(report_type)
         
+        # 인쇄 시 모든 열을 한 페이지에 맞추는 설정을 추가합니다.
+        worksheet.fit_to_pages(1, 0)
+        
         # 1. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
