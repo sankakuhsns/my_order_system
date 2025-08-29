@@ -1112,7 +1112,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     supplier_info = supplier_info_df.iloc[0]
                     customer_info = customer_info_df.iloc[0]
                     buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                    st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+                    st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
@@ -1151,7 +1151,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         if not customer_info_df.empty:
             customer_info = customer_info_df.iloc[0]
             buf = create_unified_financial_statement(dfv, transactions_df_all, customer_info)
-            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
     
     elif doc_type == "품목 거래명세서":
         orders_df = get_orders_df()
@@ -1191,7 +1191,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         if not preview_df.empty:
             buf = create_unified_item_statement(preview_df, supplier_info, customer_info)
             download_label = "기간 전체 명세서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 명세서"
-            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
@@ -1838,7 +1838,7 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                         supplier_info = supplier_info_df.iloc[0]
                         customer_info = customer_info_df.iloc[0]
                         buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                        st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{store_name}_{target_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
+                        st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
         else:
