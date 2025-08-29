@@ -2408,17 +2408,17 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         file_name = "report.xlsx"
 
         if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
-            # 새로운 함수를 호출하도록 변경
+            # 파일명 생성 로직 수정
             if info['type'] == "품목생산보고서":
                 excel_buffer = make_inventory_production_report_excel(report_df, info['type'], info['from'], info['to'])
+                file_name = f"{info['type']}_{info['from']}_to_{info['to']}.xlsx"
             elif info['type'] == "재고변동보고서":
                 excel_buffer = make_inventory_change_report_excel(report_df, info['type'], info['from'], info['to'])
+                file_name = f"{info['type']}_{info['from']}_to_{info['to']}.xlsx"
             elif info['type'] == "현재고현황보고서":
                 excel_buffer = make_inventory_current_report_excel(report_df, info['type'], info['from'], info['to'])
-            
-            if excel_buffer:
                 file_name = f"{info['type']}_{info['to']}.xlsx"
-
+            
         else:
             if info['type'] == "금전거래내역서":
                 supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
