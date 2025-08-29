@@ -2387,14 +2387,14 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.session_state.last_selected_report_type = "지점별 서류 (거래내역서 등)"
 
 
-    # 라디오 버튼 선택 시, 세션 상태 초기화 및 페이지 리로드
+    # 라디오 버튼 선택 시, 세션 상태 초기화
     def on_radio_change():
         if st.session_state.doc_type_selected != st.session_state.last_selected_report_type:
             st.session_state.report_df = pd.DataFrame()
             st.session_state.excel_buffer = None
             st.session_state.report_filename = ""
             st.session_state.last_selected_report_type = st.session_state.doc_type_selected
-            st.rerun()
+            # st.rerun() 호출을 제거합니다.
 
     doc_type_selected = st.radio(
         "원하는 보고서 종류를 선택하세요.",
