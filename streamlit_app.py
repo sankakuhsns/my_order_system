@@ -738,14 +738,15 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
 
         # 2. 데이터 전처리 및 열 선택
-        df_display = df_report.drop(columns=['작업일자', '관련번호', '사유', '구분'], errors='ignore').copy()
+        # '작업일자', '관련번호', '사유' 열 삭제
+        df_display = df_report.drop(columns=['작업일자', '관련번호', '사유'], errors='ignore').copy()
         
         # '로그일시'를 '변동일시'로 변경하고 날짜 및 시간 포맷팅
         df_display.rename(columns={'로그일시': '변동일시'}, inplace=True)
         df_display['변동일시'] = pd.to_datetime(df_display['변동일시']).dt.strftime('%Y-%m-%d %H:%M:%S')
         
         # 열 순서 재정의
-        columns_order = ['변동일시', '품목코드', '품목명', '수량변경', '처리후재고', '단위', '처리자']
+        columns_order = ['변동일시', '구분', '품목코드', '품목명', '수량변경', '처리후재고', '단위', '처리자']
         # '단위'는 재고로그에 없으므로, master_df에서 가져오기
         master_df = get_master_df()
         df_merged = pd.merge(df_display, master_df[['품목코드', '단위']], on='품목코드', how='left')
@@ -759,33 +760,34 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         # 4. 보고서 정보 (조회 기간)
         current_row = 2
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
-        worksheet.merge_range(f'A{current_row}:G{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
+        worksheet.merge_range(f'A{current_row}:H{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
         current_row += 2
 
         # 5. 본문 데이터
-        headers = ['변동일시', '품목코드', '품목명', '수량변경', '처리후재고', '단위', '처리자']
+        headers = ['변동일시', '구분', '품목코드', '품목명', '수량변경', '처리후재고', '단위', '처리자']
         worksheet.write_row(f'A{current_row}', headers, fmt_header)
         current_row += 1
         
         for _, row in df_display.iterrows():
-            # 품목코드, 단위, 처리자는 가운데 정렬, 나머지는 왼쪽 정렬
-            worksheet.write(f'A{current_row}', row['변동일시'], fmt_text_l)
-            worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
-            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
-            worksheet.write(f'D{current_row}', row['수량변경'], fmt_money_bg)
-            worksheet.write(f'E{current_row}', row['처리후재고'], fmt_money_bg)
-            worksheet.write(f'F{current_row}', row['단위'], fmt_text_c)
-            worksheet.write(f'G{current_row}', row['처리자'], fmt_text_c)
+            # 변동일시, 품목코드, 단위, 처리자는 가운데 정렬, 나머지는 왼쪽 정렬
+            worksheet.write(f'A{current_row}', row['변동일시'], fmt_text_c)
+            worksheet.write(f'B{current_row}', row['구분'], fmt_text_c)
+            worksheet.write(f'C{current_row}', row['품목코드'], fmt_text_c)
+            worksheet.write(f'D{current_row}', row['품목명'], fmt_text_l)
+            worksheet.write(f'E{current_row}', row['수량변경'], fmt_money_bg)
+            worksheet.write(f'F{current_row}', row['처리후재고'], fmt_money_bg)
+            worksheet.write(f'G{current_row}', row['단위'], fmt_text_c)
+            worksheet.write(f'H{current_row}', row['처리자'], fmt_text_c)
             current_row += 1
 
         # 최종 너비 설정 (수동 조정)
-        col_widths_final = [20, 10, 30, 10, 10, 8, 12]
+        col_widths_final = [20, 10, 10, 30, 10, 10, 8, 12]
         for i, width in enumerate(col_widths_final):
             worksheet.set_column(i, i, width)
 
     output.seek(0)
     return output
-
+    
 def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
