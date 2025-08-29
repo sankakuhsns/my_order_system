@@ -793,35 +793,64 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
     
 def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
+    if df_report.empty:
+        return output
+
+    # 상품마스터 데이터를 불러와 품목규격 및 단위 정보를 결합
+    master_df = get_master_df()
+    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위', '분류']], on='품목코드', how='left')
+    
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet(report_type)
         
-        # 1. Excel 서식 정의 (통일된 테마 적용)
+        # 인쇄 시 모든 열을 한 페이지에 맞추는 설정을 추가합니다.
+        worksheet.fit_to_pages(1, 0)
+        
+        # 1. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        
+        # 텍스트 데이터용 왼쪽 정렬 포맷
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        
+        # 텍스트 데이터용 가운데 정렬 포맷
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        
+        # 수량 셀에 적용할 배경색 포맷을 테마 색상으로 변경
+        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
 
-        # 2. 레이아웃 설정
-        worksheet.fit_to_pages(1, 0)
-        col_widths = get_col_widths(df_report)
-        for i, width in enumerate(col_widths):
-            worksheet.set_column(i, i, width)
+        # 2. 데이터 전처리 및 열 선택
+        df_display = df_merged[['품목코드', '분류', '품목명', '품목규격', '단위', '현재고수량']].copy()
 
         # 3. 헤더 영역 작성
         worksheet.set_row(0, 50)
-        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type}", fmt_title)
+        worksheet.merge_range(0, 0, 0, len(df_display.columns) - 1, '현 재 고 현 황 보 고 서', fmt_title)
         
-        # 4. 보고서 정보
-        worksheet.merge_range(f'A2:D2', f"조회 기준일: {dt_to}", workbook.add_format({'font_size': 9, 'align': 'left'}))
+        # 4. 보고서 정보 (조회 기준일)
+        current_row = 2
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
+        worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기준일: {dt_to}", fmt_date_header)
+        current_row += 2
+
+        # 5. 본문 데이터
+        headers = ['품목코드', '분류', '품목명', '품목규격', '단위', '현재고수량']
+        worksheet.write_row(f'A{current_row}', headers, fmt_header)
+        current_row += 1
         
-        # 5. 본문 데이터 작성
-        worksheet.write_row(2, 0, df_report.columns, fmt_header)
-        for row_num, row_data in enumerate(df_report.values):
-            for col_num, cell_data in enumerate(row_data):
-                fmt = fmt_text_l if isinstance(cell_data, str) and len(str(cell_data)) > 10 else fmt_text_c
-                worksheet.write(row_num + 3, col_num, cell_data, fmt)
+        for _, row in df_display.iterrows():
+            worksheet.write(f'A{current_row}', row['품목코드'], fmt_text_c)
+            worksheet.write(f'B{current_row}', row['분류'], fmt_text_c)
+            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
+            worksheet.write(f'D{current_row}', row['품목규격'], fmt_text_l)
+            worksheet.write(f'E{current_row}', row['단위'], fmt_text_c)
+            worksheet.write(f'F{current_row}', row['현재고수량'], fmt_money_bg)
+            current_row += 1
+
+        # 열 너비 자동 설정
+        col_widths = get_col_widths(df_display)
+        for i, width in enumerate(col_widths):
+            worksheet.set_column(i, i, width)
         
     output.seek(0)
     return output
