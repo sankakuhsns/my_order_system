@@ -897,58 +897,173 @@ def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFr
 def make_settlement_report_excel(dt_from: date, dt_to: date, orders_df: pd.DataFrame, transactions_df: pd.DataFrame) -> BytesIO:
     output = BytesIO()
     
-    sales_df = orders_df[orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])].copy()
+    # 필요한 데이터프레임들을 불러옵니다.
+    stores_df = get_stores_df()
+    master_df = get_master_df()
+    balance_df = get_balance_df()
+
+    # 발주 데이터를 필터링합니다.
+    sales_df = orders_df[
+        orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])
+    ].copy()
     sales_df['주문일'] = pd.to_datetime(sales_df['주문일시']).dt.date
     sales_df = sales_df[(sales_df['주문일'] >= dt_from) & (sales_df['주문일'] <= dt_to)]
 
-    trans_df = transactions_df.copy()
-    trans_df['일시'] = pd.to_datetime(trans_df['일시']).dt.date
-    trans_df = trans_df[(trans_df['일시'] >= dt_from) & (trans_df['일시'] <= dt_to)]
+    # 거래 내역을 필터링합니다.
+    trans_df_all = transactions_df.copy()
+    trans_df_all['일시'] = pd.to_datetime(trans_df_all['일시'], errors='coerce')
+    trans_df = trans_df_all[
+        (trans_df_all['일시'].dt.date >= dt_from) & (trans_df_all['일시'].dt.date <= dt_to)
+    ].copy()
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        fmt_h1 = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
-        fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
         
-        ws1 = workbook.add_worksheet('종합 현황')
-        ws1.merge_range('A1:C1', f"종합 정산 리포트 ({dt_from} ~ {dt_to})", fmt_h1)
-        
-        total_sales = sales_df['합계금액'].sum()
-        total_supply = sales_df['공급가액'].sum()
-        total_tax = sales_df['세액'].sum()
-        total_orders = sales_df['발주번호'].nunique()
-        
-        ws1.write('A3', '항목', fmt_header); ws1.write('B3', '금액', fmt_header)
-        ws1.set_column('A:B', 20)
-        ws1.write('A4', '총 매출 (VAT 포함)'); ws1.write('B4', total_sales, fmt_money)
-        ws1.write('A5', '총 공급가액'); ws1.write('B5', total_supply, fmt_money)
-        ws1.write('A6', '총 부가세액'); ws1.write('B6', total_tax, fmt_money)
-        ws1.write('A7', '총 발주 건수'); ws1.write('B7', total_orders, fmt_money)
+        # 엑셀 보고서의 테마 서식들을 정의합니다.
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
+        fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
+        fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_summary_money = workbook.add_format({'bold': True, 'font_size': 9, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        fmt_money = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
 
-        if not sales_df.empty:
-            store_summary = sales_df.groupby('지점명').agg(
-                총매출=('합계금액', 'sum'), 공급가액=('공급가액', 'sum'),
-                세액=('세액', 'sum'), 발주건수=('발주번호', 'nunique')
-            ).reset_index()
-            store_summary.to_excel(writer, sheet_name='지점별 매출 현황', index=False, startrow=1)
-            ws2 = writer.sheets['지점별 매출 현황']
-            ws2.merge_range(0, 0, 0, len(store_summary.columns) - 1, "지점별 매출 현황", fmt_h1)
-            for col_num, value in enumerate(store_summary.columns.values):
-                ws2.write(1, col_num, value, fmt_header)
+        # --- 1. 01_종합_현황 시트 ---
+        ws_summary = workbook.add_worksheet('01_종합_현황')
+        ws_summary.fit_to_pages(1, 0)
+        
+        ws_summary.set_column('A:A', 20)
+        ws_summary.set_column('B:B', 25)
+        
+        ws_summary.merge_range('A1:B1', '종 합 현 황', fmt_title)
+        ws_summary.merge_range('A2:B2', f"출력일: {now_kst_str()}", workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'}))
 
+        total_sales = sales_df['합계금액'].sum() if not sales_df.empty else 0
+        total_supply = sales_df['공급가액'].sum() if not sales_df.empty else 0
+        total_tax = sales_df['세액'].sum() if not sales_df.empty else 0
+        total_orders_count = sales_df['발주번호'].nunique() if not sales_df.empty else 0
+        
+        total_income = trans_df[trans_df['금액'] > 0]['금액'].sum() if not trans_df.empty else 0
+        total_outcome = trans_df[trans_df['금액'] < 0]['금액'].sum() if not trans_df.empty else 0
+        net_cash_flow = total_income + total_outcome
+        
+        avg_order_amount = total_sales / total_orders_count if total_orders_count > 0 else 0
+        
+        summary_headers = ['기간 요약', '매출 지표', '재무 흐름']
+        summary_items = [
+            ('조회 기간', f"{dt_from} ~ {dt_to}"),
+            ('총 매출 (VAT 포함)', total_sales),
+            ('총 공급가액', total_supply),
+            ('총 부가세액', total_tax),
+            ('총 발주 건수', total_orders_count),
+            ('총 입금액', total_income),
+            ('총 지출액', abs(total_outcome)),
+            ('기간 순 현금 흐름', net_cash_flow),
+            ('건당 평균 발주 금액', int(avg_order_amount))
+        ]
+
+        row = 4
+        for header in summary_headers:
+            ws_summary.write(row, 0, header, fmt_subtitle)
+            row += 1
+            if header == '기간 요약':
+                ws_summary.write(row, 0, '조회 기간', fmt_info_label)
+                ws_summary.merge_range(row, 1, row, 1, summary_items[0][1], fmt_info_data)
+                row += 1
+            else:
+                for label, value in summary_items:
+                    if label in ['총 매출 (VAT 포함)', '총 공급가액', '총 부가세액'] and header == '매출 지표':
+                        ws_summary.write(row, 0, label, fmt_info_label)
+                        ws_summary.write(row, 1, value, fmt_money)
+                        row += 1
+                    elif label in ['총 입금액', '총 지출액', '기간 순 현금 흐름'] and header == '재무 흐름':
+                        ws_summary.write(row, 0, label, fmt_info_label)
+                        ws_summary.write(row, 1, value, fmt_money)
+                        row += 1
+
+        # --- 2. 02_지점별_정산_요약 시트 ---
+        ws_store_summary = workbook.add_worksheet('02_지점별_정산_요약')
+        ws_store_summary.fit_to_pages(1, 0)
+        
+        ws_store_summary.merge_range('A1:H1', '지 점 별 정 산 요 약', fmt_title)
+        
+        # 지점별 기초/기말 잔액 계산
+        store_summary_df = stores_df[stores_df['역할'] == CONFIG['ROLES']['STORE']].copy()
+        for _, store in store_summary_df.iterrows():
+            store_id = store['지점ID']
+            tx_before_period = trans_df_all[trans_df_all['지점ID'] == store_id]
+            tx_before_period = tx_before_period[tx_before_period['일시'].dt.date < dt_from]
+            
+            initial_prepaid = tx_before_period['처리후선충전잔액'].iloc[-1] if not tx_before_period.empty else 0
+            initial_credit = tx_before_period['처리후사용여신액'].iloc[-1] if not tx_before_period.empty else 0
+            
+            store_summary_df.loc[store_summary_df['지점ID'] == store_id, '기초 선충전잔액'] = initial_prepaid
+            store_summary_df.loc[store_summary_df['지점ID'] == store_id, '기초 사용여신액'] = initial_credit
+        
+        store_summary_df = pd.merge(store_summary_df, balance_df[['지점ID', '선충전잔액', '사용여신액']], on='지점ID', how='left', suffixes=('_기초', '_기말'))
+        store_summary_df.rename(columns={'선충전잔액': '기말 선충전잔액', '사용여신액': '기말 사용여신액'}, inplace=True)
+        
+        # 지점별 거래 집계
+        store_transactions_sum = trans_df.groupby('지점ID').agg(
+            총발주결제액=('금액', lambda x: x[x < 0].sum()),
+            총충전액=('금액', lambda x: x[x > 0].sum())
+        ).reset_index()
+        store_summary_df = pd.merge(store_summary_df, store_transactions_sum, on='지점ID', how='left').fillna(0)
+        
+        store_summary_df = store_summary_df[[
+            '지점명', '사업자등록번호', '상호명', '기초 선충전잔액', '기말 선충전잔액',
+            '기초 사용여신액', '기말 사용여신액', '총발주결제액', '총충전액'
+        ]]
+        
+        headers = ['지점명', '사업자등록번호', '상호명', '기초 선충전잔액', '기말 선충전잔액', '기초 사용여신액', '기말 사용여신액', '총 발주결제액', '총 입금액']
+        ws_store_summary.write_row('A3', headers, fmt_header)
+        for row_num, row_data in enumerate(store_summary_df.values):
+            ws_store_summary.write_row(row_num + 3, 0, row_data, fmt_text_c)
+
+        # --- 3. 03_품목별_판매_현황 시트 ---
+        ws_item_summary = workbook.add_worksheet('03_품목별_판매_현황')
+        ws_item_summary.fit_to_pages(1, 0)
+        
+        ws_item_summary.merge_range('A1:E1', '품 목 별 판 매 현 황', fmt_title)
+        
         if not sales_df.empty:
-            item_summary = sales_df.groupby(['품목코드', '품목명']).agg(
+            item_summary_df = sales_df.groupby(['품목코드', '품목명']).agg(
                 총판매수량=('수량', 'sum'), 총매출=('합계금액', 'sum')
             ).reset_index().sort_values(by='총매출', ascending=False)
-            item_summary.to_excel(writer, sheet_name='품목별 판매 현황', index=False, startrow=1)
-            ws3 = writer.sheets['품목별 판매 현황']
-            ws3.merge_range(0, 0, 0, len(item_summary.columns) - 1, "품목별 판매 현황", fmt_h1)
-            for col_num, value in enumerate(item_summary.columns.values):
-                ws3.write(1, col_num, value, fmt_header)
+            
+            total_sales_sum = item_summary_df['총매출'].sum()
+            item_summary_df['매출 비중 (%)'] = (item_summary_df['총매출'] / total_sales_sum) * 100
+        else:
+            item_summary_df = pd.DataFrame(columns=['품목코드', '품목명', '총판매수량', '총매출', '매출 비중 (%)'])
         
-        sales_df.to_excel(writer, sheet_name='상세 발주 내역', index=False)
-        trans_df.to_excel(writer, sheet_name='상세 거래 내역', index=False)
+        headers = ['품목코드', '품목명', '총 판매 수량', '총 매출', '매출 비중 (%)']
+        ws_item_summary.write_row('A3', headers, fmt_header)
+        for row_num, row_data in enumerate(item_summary_df.values):
+            ws_item_summary.write(row_num + 3, 0, row_data[0], fmt_text_c)
+            ws_item_summary.write(row_num + 3, 1, row_data[1], fmt_text_l)
+            ws_item_summary.write(row_num + 3, 2, row_data[2], fmt_money)
+            ws_item_summary.write(row_num + 3, 3, row_data[3], fmt_money)
+            ws_item_summary.write(row_num + 3, 4, row_data[4], workbook.add_format({'num_format': '0.00%', 'align': 'center', 'valign': 'vcenter', 'border': 1}))
+        
+        # --- 4. 04_상세_발주_내역 시트 ---
+        ws_orders = workbook.add_worksheet('04_상세_발주_내역')
+        ws_orders.fit_to_pages(1, 0)
+        
+        ws_orders.merge_range(0, 0, 0, len(orders_df.columns) - 1, '상 세 발 주 내 역', fmt_title)
+        orders_df_to_excel = orders_df.copy()
+        orders_df_to_excel.to_excel(writer, sheet_name='04_상세_발주_내역', index=False, startrow=2)
+        
+        # --- 5. 05_상세_거래_내역 시트 ---
+        ws_transactions = workbook.add_worksheet('05_상세_거래_내역')
+        ws_transactions.fit_to_pages(1, 0)
+        
+        ws_transactions.merge_range(0, 0, 0, len(trans_df_all.columns) - 1, '상 세 거 래 내 역', fmt_title)
+        trans_df_all.to_excel(writer, sheet_name='05_상세_거래_내역', index=False, startrow=2)
 
     output.seek(0)
     return output
