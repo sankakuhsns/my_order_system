@@ -717,36 +717,65 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
 
 def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
+    if df_report.empty:
+        return output
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet(report_type)
         
-        # 1. Excel 서식 정의 (통일된 테마 적용)
+        # 1. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        fmt_money = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
 
-        # 2. 레이아웃 설정
-        worksheet.fit_to_pages(1, 0)
-        col_widths = get_col_widths(df_report)
-        for i, width in enumerate(col_widths):
-            worksheet.set_column(i, i, width)
+        # 2. 데이터 전처리 및 열 선택
+        df_display = df_report.drop(columns=['작업일자', '관련번호', '사유', '구분'], errors='ignore').copy()
+        
+        # '로그일시'를 '변동일시'로 변경하고 날짜 및 시간 포맷팅
+        df_display.rename(columns={'로그일시': '변동일시'}, inplace=True)
+        df_display['변동일시'] = pd.to_datetime(df_display['변동일시']).dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 열 순서 재정의
+        columns_order = ['변동일시', '품목코드', '품목명', '수량변경', '처리후재고', '단위', '처리자']
+        # '단위'는 재고로그에 없으므로, master_df에서 가져오기
+        master_df = get_master_df()
+        df_merged = pd.merge(df_display, master_df[['품목코드', '단위']], on='품목코드', how='left')
+        df_merged['단위'] = df_merged['단위'].fillna('')
+        df_display = df_merged.reindex(columns=columns_order, fill_value='')
 
         # 3. 헤더 영역 작성
         worksheet.set_row(0, 50)
-        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type}", fmt_title)
+        worksheet.merge_range(0, 0, 0, len(df_display.columns) - 1, '재 고 변 동 보 고 서', fmt_title)
         
-        # 4. 보고서 정보
-        worksheet.merge_range(f'A2:D2', f"조회 기간: {dt_from} ~ {dt_to}", workbook.add_format({'font_size': 9, 'align': 'left'}))
+        # 4. 보고서 정보 (조회 기간)
+        current_row = 2
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
+        worksheet.merge_range(f'A{current_row}:G{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
+        current_row += 2
+
+        # 5. 본문 데이터
+        headers = ['변동일시', '품목코드', '품목명', '수량변경', '처리후재고', '단위', '처리자']
+        worksheet.write_row(f'A{current_row}', headers, fmt_header)
+        current_row += 1
         
-        # 5. 본문 데이터 작성
-        worksheet.write_row(2, 0, df_report.columns, fmt_header)
-        for row_num, row_data in enumerate(df_report.values):
-            for col_num, cell_data in enumerate(row_data):
-                fmt = fmt_text_l if isinstance(cell_data, str) and len(str(cell_data)) > 10 else fmt_text_c
-                worksheet.write(row_num + 3, col_num, cell_data, fmt)
-        
+        for _, row in df_display.iterrows():
+            worksheet.write(f'A{current_row}', row['변동일시'], fmt_text_c)
+            worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
+            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
+            worksheet.write(f'D{current_row}', row['수량변경'], fmt_money)
+            worksheet.write(f'E{current_row}', row['처리후재고'], fmt_money)
+            worksheet.write(f'F{current_row}', row['단위'], fmt_text_c)
+            worksheet.write(f'G{current_row}', row['처리자'], fmt_text_c)
+            current_row += 1
+
+        # 최종 너비 설정
+        col_widths_final = [20, 10, 30, 10, 10, 8, 12]
+        for i, width in enumerate(col_widths_final):
+            worksheet.set_column(i, i, width)
+
     output.seek(0)
     return output
 
