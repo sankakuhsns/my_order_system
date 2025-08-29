@@ -839,17 +839,20 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         for _, row in df_display.iterrows():
             worksheet.write(f'A{current_row}', row['품목코드'], fmt_text_c)
             worksheet.write(f'B{current_row}', row['분류'], fmt_text_c)
-            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_c) # 품목명도 가운데 정렬로 변경
-            worksheet.write(f'D{current_row}', row['품목규격'], fmt_text_c) # 품목규격도 가운데 정렬로 변경
+            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_c)
+            worksheet.write(f'D{current_row}', row['품목규격'], fmt_text_c)
             worksheet.write(f'E{current_row}', row['단위'], fmt_text_c)
             worksheet.write(f'F{current_row}', row['현재고수량'], fmt_money_bg)
             current_row += 1
 
-        # 열 너비 자동 설정
-        col_widths = get_col_widths(df_display)
-        for i, width in enumerate(col_widths):
+        # 열 너비를 고정 값으로 변경하고, 4행부터 높이를 20으로 설정
+        col_widths_final = [10, 10, 30, 10, 10, 10]
+        for i, width in enumerate(col_widths_final):
             worksheet.set_column(i, i, width)
         
+        for i in range(4, len(df_display) + 4):
+            worksheet.set_row(i, 20)
+
     output.seek(0)
     return output
 
