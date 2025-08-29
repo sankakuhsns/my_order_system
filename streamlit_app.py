@@ -628,22 +628,107 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
     output.seek(0)
     return output
     
-def make_inventory_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
+def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet(report_type)
         
-        fmt_h1 = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
+        # 1. Excel 서식 정의 (통일된 테마 적용)
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
+        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+
+        # 2. 레이아웃 설정
+        worksheet.fit_to_pages(1, 0)
+        col_widths = get_col_widths(df_report)
+        for i, width in enumerate(col_widths):
+            worksheet.set_column(i, i, width)
+
+        # 3. 헤더 영역 작성
+        worksheet.set_row(0, 50)
+        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type}", fmt_title)
         
-        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type} ({dt_from} ~ {dt_to})", fmt_h1)
+        # 4. 보고서 정보
+        worksheet.merge_range(f'A2:D2', f"조회 기간: {dt_from} ~ {dt_to}", workbook.add_format({'font_size': 9, 'align': 'left'}))
         
-        for col_num, value in enumerate(df_report.columns.values):
-            worksheet.write(2, col_num, value, fmt_header)
+        # 5. 본문 데이터 작성
+        worksheet.write_row(2, 0, df_report.columns, fmt_header)
+        for row_num, row_data in enumerate(df_report.values):
+            for col_num, cell_data in enumerate(row_data):
+                fmt = fmt_text_l if isinstance(cell_data, str) and len(str(cell_data)) > 10 else fmt_text_c
+                worksheet.write(row_num + 3, col_num, cell_data, fmt)
         
-        df_report.to_excel(writer, sheet_name=report_type, index=False, startrow=3, header=False)
-        worksheet.set_column(0, len(df_report.columns), 15)
+    output.seek(0)
+    return output
+
+def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet(report_type)
+        
+        # 1. Excel 서식 정의 (통일된 테마 적용)
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
+        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+
+        # 2. 레이아웃 설정
+        worksheet.fit_to_pages(1, 0)
+        col_widths = get_col_widths(df_report)
+        for i, width in enumerate(col_widths):
+            worksheet.set_column(i, i, width)
+
+        # 3. 헤더 영역 작성
+        worksheet.set_row(0, 50)
+        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type}", fmt_title)
+        
+        # 4. 보고서 정보
+        worksheet.merge_range(f'A2:D2', f"조회 기간: {dt_from} ~ {dt_to}", workbook.add_format({'font_size': 9, 'align': 'left'}))
+        
+        # 5. 본문 데이터 작성
+        worksheet.write_row(2, 0, df_report.columns, fmt_header)
+        for row_num, row_data in enumerate(df_report.values):
+            for col_num, cell_data in enumerate(row_data):
+                fmt = fmt_text_l if isinstance(cell_data, str) and len(str(cell_data)) > 10 else fmt_text_c
+                worksheet.write(row_num + 3, col_num, cell_data, fmt)
+        
+    output.seek(0)
+    return output
+
+def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet(report_type)
+        
+        # 1. Excel 서식 정의 (통일된 테마 적용)
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
+        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+
+        # 2. 레이아웃 설정
+        worksheet.fit_to_pages(1, 0)
+        col_widths = get_col_widths(df_report)
+        for i, width in enumerate(col_widths):
+            worksheet.set_column(i, i, width)
+
+        # 3. 헤더 영역 작성
+        worksheet.set_row(0, 50)
+        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type}", fmt_title)
+        
+        # 4. 보고서 정보
+        worksheet.merge_range(f'A2:D2', f"조회 기준일: {dt_to}", workbook.add_format({'font_size': 9, 'align': 'left'}))
+        
+        # 5. 본문 데이터 작성
+        worksheet.write_row(2, 0, df_report.columns, fmt_header)
+        for row_num, row_data in enumerate(df_report.values):
+            for col_num, cell_data in enumerate(row_data):
+                fmt = fmt_text_l if isinstance(cell_data, str) and len(str(cell_data)) > 10 else fmt_text_c
+                worksheet.write(row_num + 3, col_num, cell_data, fmt)
         
     output.seek(0)
     return output
@@ -2195,12 +2280,13 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                 selected_entity_info = store_info_df[store_info_df['지점명'] == selected_entity_real_name].iloc[0]
                 with c2:
                     if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
-                        sub_doc_type = st.selectbox("서류 종류", ["품목 생산 보고서", "재고 변동 보고서", "현재고 현황 보고서"], key="admin_doc_type_admin")
+                        # 서류 종류 명칭 수정
+                        sub_doc_type = st.selectbox("서류 종류", ["품목생산보고서", "재고변동보고서", "현재고현황보고서"], key="admin_doc_type_admin")
                     else:
                         sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
             
             c1, c2 = st.columns(2)
-            is_inventory_report = sub_doc_type == "현재고 현황 보고서"
+            is_inventory_report = sub_doc_type == "현재고현황보고서"
             dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
             dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
             dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
@@ -2215,12 +2301,12 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     if selected_info['역할'] == CONFIG['ROLES']['ADMIN']:
                         log_df_raw = get_inventory_log_df()
                         if not log_df_raw.empty:
-                            if sub_doc_type == "품목 생산 보고서":
+                            if sub_doc_type == "품목생산보고서":
                                 production_log = log_df_raw[log_df_raw['구분'] == CONFIG['INV_CHANGE_TYPE']['PRODUCE']].copy()
                                 report_df = production_log[(pd.to_datetime(production_log['작업일자']).dt.date >= dt_from) & (pd.to_datetime(production_log['작업일자']).dt.date <= dt_to)]
-                            elif sub_doc_type == "재고 변동 보고서":
+                            elif sub_doc_type == "재고변동보고서":
                                 report_df = log_df_raw[(pd.to_datetime(log_df_raw['작업일자']).dt.date >= dt_from) & (pd.to_datetime(log_df_raw['작업일자']).dt.date <= dt_to)]
-                        if sub_doc_type == "현재고 현황 보고서":
+                        if sub_doc_type == "현재고현황보고서":
                             report_df = get_inventory_from_log(master_df, target_date=dt_to)
                     else:
                         if sub_doc_type == "금전거래내역서":
@@ -2238,7 +2324,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     
                     st.session_state.report_df = report_df
                     st.session_state.report_info = {'type': sub_doc_type, 'name': selected_entity_real_name, 'from': dt_from, 'to': dt_to}
-            
+    
     elif doc_type_selected == "기간별 종합 리포트 (정산용)":
         with st.container(border=True):
             st.markdown("###### 📅 기간별 종합 리포트")
@@ -2268,8 +2354,17 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         file_name = "report.xlsx"
 
         if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
-              excel_buffer = make_inventory_report_excel(report_df, info['type'], info['from'], info['to'])
-              file_name = f"{info['type'].replace(' ', '_')}_{info['to']}.xlsx"
+            # 새로운 함수를 호출하도록 변경
+            if info['type'] == "품목생산보고서":
+                excel_buffer = make_inventory_production_report_excel(report_df, info['type'], info['from'], info['to'])
+            elif info['type'] == "재고변동보고서":
+                excel_buffer = make_inventory_change_report_excel(report_df, info['type'], info['from'], info['to'])
+            elif info['type'] == "현재고현황보고서":
+                excel_buffer = make_inventory_current_report_excel(report_df, info['type'], info['from'], info['to'])
+            
+            if excel_buffer:
+                file_name = f"{info['type']}_{info['to']}.xlsx"
+
         else:
             if info['type'] == "금전거래내역서":
                 supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
