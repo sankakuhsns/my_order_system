@@ -1092,7 +1092,6 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         
         selected_to_cancel = [oid for oid, selected in st.session_state.store_orders_selection.items() if selected and oid in pending['발주번호'].values]
         if st.button("선택한 발주 요청 취소하기", disabled=not selected_to_cancel, type="primary"):
-            # ### 로직 수정: st.spinner를 제거하여 rerun과의 충돌 방지 ###
             for order_id in selected_to_cancel:
                 original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
                 if not original_transaction.empty:
@@ -1119,7 +1118,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             update_order_status(selected_to_cancel, "취소", user["name"])
             st.session_state.success_message = f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다."
             st.session_state.store_orders_selection = {}
-            st.rerun()
+            st.experimental_rerun()
     
     with tab2:
         shipped_display = shipped.copy()
@@ -1816,7 +1815,6 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
                 items_to_deduct['수량변경'] = -items_to_deduct['수량']
                 ref_id = ", ".join(selected_pending_ids)
                 
-                # 작업 성공 여부 확인
                 inventory_success = update_inventory(items_to_deduct, CONFIG['INV_CHANGE_TYPE']['SHIPMENT'], "system_auto", date.today(), ref_id=ref_id)
                 status_success = update_order_status(selected_pending_ids, CONFIG['ORDER_STATUS']['APPROVED'], st.session_state.auth["name"])
 
@@ -1826,8 +1824,7 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
                 else:
                     st.session_state.error_message = "처리 중 오류가 발생했습니다. 재고 또는 주문 상태를 확인해주세요."
 
-            # 3. 모든 로직이 끝난 후, 성공/실패와 상관없이 무조건 새로고침 실행
-            st.rerun()
+            st.experimental_rerun()
 
     with btn_cols[1]:
         if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
