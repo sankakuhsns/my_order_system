@@ -894,180 +894,6 @@ def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFr
     output.seek(0)
     return output
 
-def make_settlement_report_excel(dt_from: date, dt_to: date, orders_df: pd.DataFrame, transactions_df: pd.DataFrame) -> BytesIO:
-    output = BytesIO()
-    
-    # 필요한 데이터프레임들을 불러옵니다.
-    stores_df = get_stores_df()
-    master_df = get_master_df()
-    balance_df = get_balance_df()
-
-    # 발주 데이터를 필터링합니다.
-    sales_df = orders_df[
-        orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])
-    ].copy()
-    sales_df['주문일'] = pd.to_datetime(sales_df['주문일시']).dt.date
-    sales_df = sales_df[(sales_df['주문일'] >= dt_from) & (sales_df['주문일'] <= dt_to)]
-
-    # 거래 내역을 필터링합니다.
-    trans_df_all = transactions_df.copy()
-    trans_df_all['일시'] = pd.to_datetime(trans_df_all['일시'], errors='coerce')
-    trans_df = trans_df_all[
-        (trans_df_all['일시'].dt.date >= dt_from) & (trans_df_all['일시'].dt.date <= dt_to)
-    ].copy()
-
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        
-        # 엑셀 보고서의 테마 서식들을 정의합니다.
-        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
-        fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
-        fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_summary_money = workbook.add_format({'bold': True, 'font_size': 9, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
-        fmt_money = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
-        fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
-
-        # --- 1. 01_종합_현황 시트 ---
-        ws_summary = workbook.add_worksheet('01_종합_현황')
-        ws_summary.fit_to_pages(1, 0)
-        
-        ws_summary.set_column('A:A', 20)
-        ws_summary.set_column('B:B', 25)
-        
-        ws_summary.merge_range('A1:B1', '종 합 현 황', fmt_title)
-        ws_summary.merge_range('A2:B2', f"출력일: {now_kst_str()}", workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'}))
-
-        total_sales = sales_df['합계금액'].sum() if not sales_df.empty else 0
-        total_supply = sales_df['공급가액'].sum() if not sales_df.empty else 0
-        total_tax = sales_df['세액'].sum() if not sales_df.empty else 0
-        total_orders_count = sales_df['발주번호'].nunique() if not sales_df.empty else 0
-        
-        total_income = trans_df[trans_df['금액'] > 0]['금액'].sum() if not trans_df.empty else 0
-        total_outcome = trans_df[trans_df['금액'] < 0]['금액'].sum() if not trans_df.empty else 0
-        net_cash_flow = total_income + total_outcome
-        
-        avg_order_amount = total_sales / total_orders_count if total_orders_count > 0 else 0
-        
-        summary_headers = ['기간 요약', '매출 지표', '재무 흐름']
-        summary_items = [
-            ('조회 기간', f"{dt_from} ~ {dt_to}"),
-            ('총 매출 (VAT 포함)', total_sales),
-            ('총 공급가액', total_supply),
-            ('총 부가세액', total_tax),
-            ('총 발주 건수', total_orders_count),
-            ('총 입금액', total_income),
-            ('총 지출액', abs(total_outcome)),
-            ('기간 순 현금 흐름', net_cash_flow),
-            ('건당 평균 발주 금액', int(avg_order_amount))
-        ]
-
-        row = 4
-        for header in summary_headers:
-            ws_summary.write(row, 0, header, fmt_subtitle)
-            row += 1
-            if header == '기간 요약':
-                ws_summary.write(row, 0, '조회 기간', fmt_info_label)
-                ws_summary.merge_range(row, 1, row, 1, summary_items[0][1], fmt_info_data)
-                row += 1
-            else:
-                for label, value in summary_items:
-                    if label in ['총 매출 (VAT 포함)', '총 공급가액', '총 부가세액'] and header == '매출 지표':
-                        ws_summary.write(row, 0, label, fmt_info_label)
-                        ws_summary.write(row, 1, value, fmt_money)
-                        row += 1
-                    elif label in ['총 입금액', '총 지출액', '기간 순 현금 흐름'] and header == '재무 흐름':
-                        ws_summary.write(row, 0, label, fmt_info_label)
-                        ws_summary.write(row, 1, value, fmt_money)
-                        row += 1
-
-        # --- 2. 02_지점별_정산_요약 시트 ---
-        ws_store_summary = workbook.add_worksheet('02_지점별_정산_요약')
-        ws_store_summary.fit_to_pages(1, 0)
-        
-        ws_store_summary.merge_range('A1:H1', '지 점 별 정 산 요 약', fmt_title)
-        
-        # 지점별 기초/기말 잔액 계산
-        store_summary_df = stores_df[stores_df['역할'] == CONFIG['ROLES']['STORE']].copy()
-        for _, store in store_summary_df.iterrows():
-            store_id = store['지점ID']
-            tx_before_period = trans_df_all[trans_df_all['지점ID'] == store_id]
-            tx_before_period = tx_before_period[tx_before_period['일시'].dt.date < dt_from]
-            
-            initial_prepaid = tx_before_period['처리후선충전잔액'].iloc[-1] if not tx_before_period.empty else 0
-            initial_credit = tx_before_period['처리후사용여신액'].iloc[-1] if not tx_before_period.empty else 0
-            
-            store_summary_df.loc[store_summary_df['지점ID'] == store_id, '기초 선충전잔액'] = initial_prepaid
-            store_summary_df.loc[store_summary_df['지점ID'] == store_id, '기초 사용여신액'] = initial_credit
-        
-        store_summary_df = pd.merge(store_summary_df, balance_df[['지점ID', '선충전잔액', '사용여신액']], on='지점ID', how='left', suffixes=('_기초', '_기말'))
-        store_summary_df.rename(columns={'선충전잔액': '기말 선충전잔액', '사용여신액': '기말 사용여신액'}, inplace=True)
-        
-        # 지점별 거래 집계
-        store_transactions_sum = trans_df.groupby('지점ID').agg(
-            총발주결제액=('금액', lambda x: x[x < 0].sum()),
-            총충전액=('금액', lambda x: x[x > 0].sum())
-        ).reset_index()
-        store_summary_df = pd.merge(store_summary_df, store_transactions_sum, on='지점ID', how='left').fillna(0)
-        
-        store_summary_df = store_summary_df[[
-            '지점명', '사업자등록번호', '상호명', '기초 선충전잔액', '기말 선충전잔액',
-            '기초 사용여신액', '기말 사용여신액', '총발주결제액', '총충전액'
-        ]]
-        
-        headers = ['지점명', '사업자등록번호', '상호명', '기초 선충전잔액', '기말 선충전잔액', '기초 사용여신액', '기말 사용여신액', '총 발주결제액', '총 입금액']
-        ws_store_summary.write_row('A3', headers, fmt_header)
-        for row_num, row_data in enumerate(store_summary_df.values):
-            ws_store_summary.write_row(row_num + 3, 0, row_data, fmt_text_c)
-
-        # --- 3. 03_품목별_판매_현황 시트 ---
-        ws_item_summary = workbook.add_worksheet('03_품목별_판매_현황')
-        ws_item_summary.fit_to_pages(1, 0)
-        
-        ws_item_summary.merge_range('A1:E1', '품 목 별 판 매 현 황', fmt_title)
-        
-        if not sales_df.empty:
-            item_summary_df = sales_df.groupby(['품목코드', '품목명']).agg(
-                총판매수량=('수량', 'sum'), 총매출=('합계금액', 'sum')
-            ).reset_index().sort_values(by='총매출', ascending=False)
-            
-            total_sales_sum = item_summary_df['총매출'].sum()
-            item_summary_df['매출 비중 (%)'] = (item_summary_df['총매출'] / total_sales_sum) * 100
-        else:
-            item_summary_df = pd.DataFrame(columns=['품목코드', '품목명', '총판매수량', '총매출', '매출 비중 (%)'])
-        
-        headers = ['품목코드', '품목명', '총 판매 수량', '총 매출', '매출 비중 (%)']
-        ws_item_summary.write_row('A3', headers, fmt_header)
-        for row_num, row_data in enumerate(item_summary_df.values):
-            ws_item_summary.write(row_num + 3, 0, row_data[0], fmt_text_c)
-            ws_item_summary.write(row_num + 3, 1, row_data[1], fmt_text_l)
-            ws_item_summary.write(row_num + 3, 2, row_data[2], fmt_money)
-            ws_item_summary.write(row_num + 3, 3, row_data[3], fmt_money)
-            ws_item_summary.write(row_num + 3, 4, row_data[4], workbook.add_format({'num_format': '0.00%', 'align': 'center', 'valign': 'vcenter', 'border': 1}))
-        
-        # --- 4. 04_상세_발주_내역 시트 ---
-        ws_orders = workbook.add_worksheet('04_상세_발주_내역')
-        ws_orders.fit_to_pages(1, 0)
-        
-        ws_orders.merge_range(0, 0, 0, len(orders_df.columns) - 1, '상 세 발 주 내 역', fmt_title)
-        orders_df_to_excel = orders_df.copy()
-        orders_df_to_excel.to_excel(writer, sheet_name='04_상세_발주_내역', index=False, startrow=2)
-        
-        # --- 5. 05_상세_거래_내역 시트 ---
-        ws_transactions = workbook.add_worksheet('05_상세_거래_내역')
-        ws_transactions.fit_to_pages(1, 0)
-        
-        ws_transactions.merge_range(0, 0, 0, len(trans_df_all.columns) - 1, '상 세 거 래 내 역', fmt_title)
-        trans_df_all.to_excel(writer, sheet_name='05_상세_거래_내역', index=False, startrow=2)
-
-    output.seek(0)
-    return output
-
 # =============================================================================
 # 5) 유틸리티 함수
 # =============================================================================
@@ -2499,159 +2325,112 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.session_state.report_filename = ""
     if 'report_info' not in st.session_state:
         st.session_state.report_info = {}
-    # 세션 상태에 마지막으로 선택된 보고서 타입을 저장하는 변수 추가
-    if 'last_selected_report_type' not in st.session_state:
-        st.session_state.last_selected_report_type = "지점별 서류 (거래내역서 등)"
 
+    st.markdown("##### 1. 조건 설정")
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            admin_stores = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]["지점명"].tolist()
+            regular_stores = sorted(store_info_df[store_info_df['역할'] != CONFIG['ROLES']['ADMIN']]["지점명"].dropna().unique().tolist())
+            admin_selection_list = [f"{name} (관리자)" for name in admin_stores]
+            selection_list = ["(선택하세요)"] + admin_selection_list + regular_stores
+            selected_entity_display = st.selectbox("대상 선택", selection_list, key="admin_doc_entity_select")
 
-    # 라디오 버튼 선택 시, 세션 상태 초기화
-    def on_radio_change():
-        if st.session_state.doc_type_selected != st.session_state.last_selected_report_type:
+        sub_doc_type = ""
+        selected_entity_real_name = selected_entity_display.replace(" (관리자)", "")
+
+        if selected_entity_display != "(선택하세요)":
+            selected_entity_info = store_info_df[store_info_df['지점명'] == selected_entity_real_name].iloc[0]
+            with c2:
+                if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
+                    sub_doc_type = st.selectbox("서류 종류", ["품목생산보고서", "재고변동보고서", "현재고현황보고서"], key="admin_doc_type_admin")
+                else:
+                    sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
+        
+        c1, c2 = st.columns(2)
+        is_inventory_report = sub_doc_type == "현재고현황보고서"
+        dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
+        dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
+        dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
+        dt_from = c1.date_input("조회 시작일", dt_from_value, key="admin_doc_from_individual", disabled=is_inventory_report)
+        
+        if st.button("🔍 데이터 조회하기", key="preview_individual_doc", use_container_width=True, type="primary"):
             st.session_state.report_df = pd.DataFrame()
             st.session_state.excel_buffer = None
             st.session_state.report_filename = ""
-            st.session_state.report_info = {} # report_info 초기화 추가
-            st.session_state.last_selected_report_type = st.session_state.doc_type_selected
-
-    doc_type_selected = st.radio(
-        "원하는 보고서 종류를 선택하세요.",
-        ["지점별 서류 (거래내역서 등)", "기간별 종합 리포트 (정산용)"],
-        horizontal=True, 
-        key="doc_type_selected", 
-        label_visibility="collapsed",
-        on_change=on_radio_change
-    )
-    st.divider()
-
-    # 지점별 서류 생성 UI
-    if doc_type_selected == "지점별 서류 (거래내역서 등)":
-        st.markdown("##### 1. 조건 설정")
-        with st.container(border=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                admin_stores = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]["지점명"].tolist()
-                regular_stores = sorted(store_info_df[store_info_df['역할'] != CONFIG['ROLES']['ADMIN']]["지점명"].dropna().unique().tolist())
-                admin_selection_list = [f"{name} (관리자)" for name in admin_stores]
-                selection_list = ["(선택하세요)"] + admin_selection_list + regular_stores
-                selected_entity_display = st.selectbox("대상 선택", selection_list, key="admin_doc_entity_select")
-
-            sub_doc_type = ""
-            selected_entity_real_name = selected_entity_display.replace(" (관리자)", "")
-
+            st.session_state.report_info = {}
+            
             if selected_entity_display != "(선택하세요)":
-                selected_entity_info = store_info_df[store_info_df['지점명'] == selected_entity_real_name].iloc[0]
-                with c2:
-                    if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
-                        sub_doc_type = st.selectbox("서류 종류", ["품목생산보고서", "재고변동보고서", "현재고현황보고서"], key="admin_doc_type_admin")
+                report_df = pd.DataFrame()
+                selected_info = store_info_df[store_info_df['지점명'] == selected_entity_real_name].iloc[0]
+                
+                if selected_info['역할'] == CONFIG['ROLES']['ADMIN']:
+                    log_df_raw = get_inventory_log_df()
+                    if not log_df_raw.empty:
+                        if sub_doc_type == "품목생산보고서":
+                            production_log = log_df_raw[log_df_raw['구분'] == CONFIG['INV_CHANGE_TYPE']['PRODUCE']].copy()
+                            report_df = production_log[(pd.to_datetime(production_log['작업일자']).dt.date >= dt_from) & (pd.to_datetime(production_log['작업일자']).dt.date <= dt_to)]
+                            excel_buffer = make_inventory_production_report_excel(report_df, sub_doc_type, dt_from, dt_to)
+                            file_name = f"{sub_doc_type}_{dt_from}_to_{dt_to}.xlsx"
+                        elif sub_doc_type == "재고변동보고서":
+                            report_df = log_df_raw[(pd.to_datetime(log_df_raw['작업일자']).dt.date >= dt_from) & (pd.to_datetime(log_df_raw['작업일자']).dt.date <= dt_to)]
+                            excel_buffer = make_inventory_change_report_excel(report_df, sub_doc_type, dt_from, dt_to)
+                            file_name = f"{sub_doc_type}_{dt_from}_to_{dt_to}.xlsx"
+                        elif sub_doc_type == "현재고현황보고서":
+                            report_df = get_inventory_from_log(master_df, target_date=dt_to)
+                            excel_buffer = make_inventory_current_report_excel(report_df, sub_doc_type, dt_from, dt_to)
+                            file_name = f"{sub_doc_type}_{dt_to}.xlsx"
                     else:
-                        sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
-            
-            c1, c2 = st.columns(2)
-            is_inventory_report = sub_doc_type == "현재고현황보고서"
-            dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
-            dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
-            dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
-            dt_from = c1.date_input("조회 시작일", dt_from_value, key="admin_doc_from_individual", disabled=is_inventory_report)
-            
-            # 리포트 생성 버튼
-            if st.button("🔍 데이터 조회하기", key="preview_individual_doc", use_container_width=True, type="primary"):
+                        excel_buffer = None
+                        file_name = "report.xlsx"
+                else:
+                    if sub_doc_type == "금전거래내역서":
+                        transactions_all_df = get_transactions_df()
+                        store_transactions = transactions_all_df[transactions_all_df['지점명'] == selected_entity_real_name]
+                        if not store_transactions.empty:
+                            store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시'], errors='coerce').dt.date
+                            report_df = store_transactions[(store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)]
+                            supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                            if not supplier_info_df.empty:
+                                supplier_info = supplier_info_df.iloc[0]
+                                excel_buffer = create_unified_financial_statement(report_df, get_transactions_df(), supplier_info, selected_entity_info)
+                                file_name = f"금전거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
+                            else:
+                                st.error("엑셀 생성에 필요한 'admin' 역할의 공급자 정보가 '지점마스터'에 없습니다.")
+                                excel_buffer = None
+                        else:
+                            excel_buffer = None
+                            file_name = "report.xlsx"
+                    elif sub_doc_type == "품목거래내역서":
+                        orders_df = get_orders_df()
+                        store_orders = orders_df[(orders_df['지점명'] == selected_entity_real_name) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]))]
+                        if not store_orders.empty:
+                            store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시'], errors='coerce').dt.date
+                            report_df = store_orders[(store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)]
+                            supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                            if not supplier_info_df.empty:
+                                supplier_info = supplier_info_df.iloc[0]
+                                excel_buffer = create_unified_item_statement(report_df, supplier_info, selected_entity_info)
+                                file_name = f"품목거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
+                            else:
+                                st.error("엑셀 생성에 필요한 'admin' 역할의 공급자 정보가 '지점마스터'에 없습니다.")
+                                excel_buffer = None
+                        else:
+                            excel_buffer = None
+                            file_name = "report.xlsx"
+
+                st.session_state.excel_buffer = excel_buffer
+                st.session_state.report_filename = file_name
+                st.session_state.report_df = report_df
+                st.session_state.report_info = {'name': selected_entity_real_name, 'type': sub_doc_type}
+                st.rerun()
+            else:
                 st.session_state.report_df = pd.DataFrame()
                 st.session_state.excel_buffer = None
                 st.session_state.report_filename = ""
                 st.session_state.report_info = {}
-                
-                if selected_entity_display != "(선택하세요)":
-                    report_df = pd.DataFrame()
-                    selected_info = store_info_df[store_info_df['지점명'] == selected_entity_real_name].iloc[0]
-                    
-                    if selected_info['역할'] == CONFIG['ROLES']['ADMIN']:
-                        log_df_raw = get_inventory_log_df()
-                        if not log_df_raw.empty:
-                            if sub_doc_type == "품목생산보고서":
-                                production_log = log_df_raw[log_df_raw['구분'] == CONFIG['INV_CHANGE_TYPE']['PRODUCE']].copy()
-                                report_df = production_log[(pd.to_datetime(production_log['작업일자']).dt.date >= dt_from) & (pd.to_datetime(production_log['작업일자']).dt.date <= dt_to)]
-                                excel_buffer = make_inventory_production_report_excel(report_df, sub_doc_type, dt_from, dt_to)
-                                file_name = f"{sub_doc_type}_{dt_from}_to_{dt_to}.xlsx"
-                            elif sub_doc_type == "재고변동보고서":
-                                report_df = log_df_raw[(pd.to_datetime(log_df_raw['작업일자']).dt.date >= dt_from) & (pd.to_datetime(log_df_raw['작업일자']).dt.date <= dt_to)]
-                                excel_buffer = make_inventory_change_report_excel(report_df, sub_doc_type, dt_from, dt_to)
-                                file_name = f"{sub_doc_type}_{dt_from}_to_{dt_to}.xlsx"
-                            elif sub_doc_type == "현재고현황보고서":
-                                report_df = get_inventory_from_log(master_df, target_date=dt_to)
-                                excel_buffer = make_inventory_current_report_excel(report_df, sub_doc_type, dt_from, dt_to)
-                                file_name = f"{sub_doc_type}_{dt_to}.xlsx"
-                        else:
-                            excel_buffer = None
-                            file_name = "report.xlsx"
-                    else:
-                        if sub_doc_type == "금전거래내역서":
-                            transactions_all_df = get_transactions_df()
-                            store_transactions = transactions_all_df[transactions_all_df['지점명'] == selected_entity_real_name]
-                            if not store_transactions.empty:
-                                store_transactions['일시_dt'] = pd.to_datetime(store_transactions['일시'], errors='coerce').dt.date
-                                report_df = store_transactions[(store_transactions['일시_dt'] >= dt_from) & (store_transactions['일시_dt'] <= dt_to)]
-                                supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                                if not supplier_info_df.empty:
-                                    supplier_info = supplier_info_df.iloc[0]
-                                    excel_buffer = create_unified_financial_statement(report_df, get_transactions_df(), supplier_info, selected_entity_info)
-                                    file_name = f"금전거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
-                                else:
-                                    st.error("엑셀 생성에 필요한 'admin' 역할의 공급자 정보가 '지점마스터'에 없습니다.")
-                                    excel_buffer = None
-                            else:
-                                excel_buffer = None
-                                file_name = "report.xlsx"
-                        elif sub_doc_type == "품목거래내역서":
-                            orders_df = get_orders_df()
-                            store_orders = orders_df[(orders_df['지점명'] == selected_entity_real_name) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]))]
-                            if not store_orders.empty:
-                                store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시'], errors='coerce').dt.date
-                                report_df = store_orders[(store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)]
-                                supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                                if not supplier_info_df.empty:
-                                    supplier_info = supplier_info_df.iloc[0]
-                                    excel_buffer = create_unified_item_statement(report_df, supplier_info, selected_entity_info)
-                                    file_name = f"품목거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
-                                else:
-                                    st.error("엑셀 생성에 필요한 'admin' 역할의 공급자 정보가 '지점마스터'에 없습니다.")
-                                    excel_buffer = None
-                            else:
-                                excel_buffer = None
-                                file_name = "report.xlsx"
+                st.rerun()
 
-                    st.session_state.excel_buffer = excel_buffer
-                    st.session_state.report_filename = file_name
-                    st.session_state.report_df = report_df
-                    st.session_state.report_info = {'name': selected_entity_real_name, 'type': sub_doc_type}
-                    st.rerun()
-                else:
-                    st.session_state.report_df = pd.DataFrame()
-                    st.session_state.excel_buffer = None
-                    st.session_state.report_filename = ""
-                    st.session_state.report_info = {}
-                    st.rerun()
-
-    # 기간별 종합 리포트 생성 UI
-    elif doc_type_selected == "기간별 종합 리포트 (정산용)":
-        with st.container(border=True):
-            st.markdown("###### 📅 기간별 종합 리포트")
-            st.info("아래에서 설정된 조회 기간의 전체 데이터를 종합하여 정산용 엑셀 파일을 생성합니다.")
-            c1, c2 = st.columns(2)
-            dt_from_report = c1.date_input("조회 시작일", date.today().replace(day=1), key="report_from")
-            dt_to_report = c2.date_input("조회 종료일", date.today(), key="report_to")
-            
-            if st.button("🚀 리포트 생성", key="create_comprehensive_report", use_container_width=True, type="primary"):
-                st.session_state.report_df = pd.DataFrame()
-                st.session_state.excel_buffer = None
-                st.session_state.report_filename = ""
-                st.session_state.report_info = {} # 종합 리포트 생성 시 info 초기화
-                with st.spinner("종합 리포트를 생성하는 중입니다..."):
-                    excel_buffer = make_settlement_report_excel(dt_from_report, dt_to_report, get_orders_df(), get_transactions_df())
-                    st.session_state.excel_buffer = excel_buffer
-                    st.session_state.report_filename = f"종합정산리포트_{dt_from_report}_to_{dt_to_report}.xlsx"
-                    st.rerun()
-    
-    # 미리보기 및 다운로드 섹션 (항상 하단에 위치)
     st.markdown("---")
     st.markdown("##### 2. 미리보기 및 다운로드")
     
@@ -2661,18 +2440,26 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         if info:
             st.markdown(f"**'{info['name']}'**의 **'{info['type']}'** 조회 결과입니다. (총 {len(report_df)}건)")
             st.dataframe(report_df.head(10), use_container_width=True, hide_index=True)
+            if st.session_state.excel_buffer:
+                st.download_button(
+                    label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
+                    data=st.session_state.excel_buffer,
+                    file_name=st.session_state.report_filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="download_button_final"
+                )
         else:
-            # 기간별 종합 리포트의 경우 report_df가 있더라도 info가 없으므로 이 블록을 건너뜁니다.
-            pass
-    
-    if st.session_state.excel_buffer:
+            st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
+
+    elif st.session_state.excel_buffer:
         st.download_button(
             label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
             data=st.session_state.excel_buffer,
             file_name=st.session_state.report_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-            key="download_button_final"
+            key="download_button_comprehensive"
         )
     else:
         st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
