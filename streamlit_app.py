@@ -633,6 +633,10 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
     if df_report.empty:
         return output
 
+    # 상품마스터 데이터를 불러와 단위 정보를 결합
+    master_df = get_master_df()
+    df_merged = pd.merge(df_report, master_df[['품목코드', '단위']], on='품목코드', how='left')
+    
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet("품목생산보고서")
@@ -648,10 +652,10 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
         fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_subtotal_qty = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
-        fmt_info_text = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'top', 'text_wrap': True})
         
         # 2. 데이터 전처리 및 열 선택
-        df_display = df_report.drop(columns=['로그일시', '관련번호', '사유', '구분'], errors='ignore').copy()
+        # '로그일시', '관련번호', '사유', '구분' 열 삭제
+        df_display = df_merged.drop(columns=['로그일시', '관련번호', '사유', '구분'], errors='ignore').copy()
         
         # '작업일자'를 'YYYY-MM-DD' 형식으로 포맷팅
         df_display['작업일자'] = pd.to_datetime(df_display['작업일자']).dt.strftime('%Y-%m-%d')
@@ -668,13 +672,17 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
         current_row = 2
         worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
         current_row += 1
-        worksheet.merge_range(f'A{current_row}:F{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등 다른 항목들은 반영되지 않습니다.", fmt_info_text)
+        
+        # 안내 문구 오른쪽 정렬 및 볼드 처리
+        fmt_info_text_right_bold = workbook.add_format({'font_size': 9, 'align': 'right', 'valign': 'top', 'text_wrap': True, 'bold': True})
+        worksheet.merge_range(f'A{current_row}:F{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등 다른 항목들은 반영되지 않습니다.", fmt_info_text_right_bold)
         current_row += 2
 
         # 5. 본문 데이터 (일자별 구분)
         grouped_by_date = df_display.groupby('작업일자')
         for date_str, date_group in grouped_by_date:
-            worksheet.merge_range(f'A{current_row}:F{current_row}', f"■ 생산일자: {date_str}", fmt_subtotal_label)
+            # 일자별 헤더 (좌측 정렬)
+            worksheet.merge_range(f'A{current_row}:F{current_row}', f"■ 생산일자: {date_str}", fmt_date_header)
             current_row += 1
             
             # 일자별 테이블 헤더 (단위 열 추가)
@@ -684,8 +692,8 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
 
             # 일자별 데이터
             for _, row in date_group.iterrows():
-                # 생산일자 좌측 정렬
-                worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_l)
+                # 작업일자 가운데 정렬
+                worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_c)
                 worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
                 worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
                 worksheet.write(f'D{current_row}', row['단위'], fmt_text_c)
@@ -696,7 +704,7 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
             # 일자별 소계 (셀 병합 조정)
             worksheet.merge_range(f'A{current_row}:D{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'E{current_row}', date_group['수량변경'].sum(), fmt_subtotal_qty)
-            worksheet.merge_range(f'F{current_row}:F{current_row}', '', fmt_subtotal_label)
+            worksheet.write(f'F{current_row}', '', fmt_subtotal_label) # 처리후재고는 집계하지 않지만 색상만 적용
             current_row += 2
 
         # 최종 너비 설정 (단위 열 너비 조정)
