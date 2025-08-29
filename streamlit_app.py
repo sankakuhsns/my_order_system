@@ -2349,7 +2349,8 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
         
         c1, c2 = st.columns(2)
-        is_inventory_report = sub_doc_type == "현재고현황보고서" or sub_doc_type == "매출정산표"
+        # '현재고현황보고서'만 조회 시작일 입력창을 비활성화
+        is_inventory_report = sub_doc_type == "현재고현황보고서"
         dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
         dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
         dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
