@@ -403,7 +403,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter'})
         fmt_h2 = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'border': 1, 'align': 'center'})
-        fmt_info_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'wrap': True})
+        fmt_info_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'text_wrap': True})
         fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
         fmt_summary_money = workbook.add_format({'bold': True, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1})
         fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
