@@ -403,8 +403,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
     aggregation_rules = {
         '수량': 'sum', '공급가액': 'sum', '세액': 'sum', '합계금액': 'sum'
     }
-    # 발주번호는 날짜별로 묶어서 관리하기 위해 'unique'와 'tolist'를 사용
-    aggregation_rules['발주번호'] = ('발주번호', lambda x: ', '.join(x.unique().tolist()))
     
     grouping_keys = ['거래일자', '품목코드', '품목명', '단위', '단가']
     df_agg = df.groupby(grouping_keys).agg(aggregation_rules).reset_index()
