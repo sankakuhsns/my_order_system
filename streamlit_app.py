@@ -2573,7 +2573,15 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                     st.session_state.confirm_data = {'store_id': store_id, 'is_active': is_active, 'name': selected_store_name}
                     st.rerun()
 
-def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df):
+def render_system_audit_tab(
+    store_info_df_raw,
+    master_df_raw,
+    orders_df,
+    balance_df,
+    transactions_df,
+    inventory_log_df,
+    charge_req_df  # ✅ 추가
+):
     """시스템 점검 탭 UI를 렌더링합니다."""
     st.markdown("##### 🩺 시스템 점검")
     with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
@@ -2598,11 +2606,10 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
             * **왜?** 삭제된 지점이나 단종된 상품 데이터가 일으킬 수 있는 혼란을 막고, 모든 데이터가 깨끗하고 유효한 상태임을 보장합니다.
         """)
 
-    
     if st.button("🚀 전체 시스템 점검 시작", use_container_width=True, type="primary"):
         with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
             results = {}
-            # ✅ charge_req_df를 함께 전달
+            # ✅ charge_req_df를 함께 전달 (변경 없음)
             results['financial'] = audit_financial_data(balance_df, transactions_df, charge_req_df)
             results['links'] = audit_transaction_links(transactions_df, orders_df)
             results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
@@ -2622,7 +2629,9 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
         for i, (key, (status, issues)) in enumerate(status_map.items()):
             with cols[i]:
                 st.metric(
-                    f"{key} 점검", status, f"{len(issues)}건 문제" if issues else "문제 없음", 
+                    f"{key} 점검",
+                    status,
+                    f"{len(issues)}건 문제" if issues else "문제 없음",
                     delta_color=("inverse" if "오류" in status else "off") if "정상" not in status else "normal"
                 )
 
