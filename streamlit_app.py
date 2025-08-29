@@ -465,6 +465,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.merge_range('D11:E11', '총 합계 금액', fmt_summary_header)
         worksheet.merge_range('F11:I11', grand_total, fmt_summary_money)
 
+        # ### 1번 수정: 요약 정보와 목록 사이에 한 줄 띄우기 위해 시작 행을 13으로 설정 ###
         current_row = 13 
 
         # 6. 본문 데이터 작성
@@ -480,13 +481,13 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             
-            # ### 최종 수정: 아래 current_row 증가 코드를 제거하여 헤더와 목록 사이의 빈 줄 삭제 ###
-            # current_row += 1 
+            # ### 2번 수정: 헤더 작성 후 바로 다음 줄부터 데이터 작성을 위해 current_row를 여기서 증가시키지 않음 ###
+            # current_row += 1  <- 이 부분을 삭제해야 헤더와 목록이 붙습니다.
 
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
-                # 데이터 행을 쓰기 직전에 current_row를 1 증가시킴
+                # 데이터 행을 쓰기 직전에 current_row를 1 증가시켜 헤더 바로 다음 줄부터 시작
                 current_row += 1
                 worksheet.write(current_row, 0, item_counter, fmt_text_c)
                 worksheet.write(current_row, 1, record['품목코드'], fmt_text_c)
