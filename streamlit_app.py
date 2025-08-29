@@ -1962,7 +1962,7 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                         supplier_info = supplier_info_df.iloc[0]
                         customer_info = customer_info_df.iloc[0]
                         buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                        st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
         else:
