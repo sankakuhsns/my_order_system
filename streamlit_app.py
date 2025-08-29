@@ -546,18 +546,21 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         fmt_print_date = workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'})
         
         # 2. 레이아웃 설정
-        col_widths = [20, 10, 30, 12, 12, 12]
+        # 요청에 따라 F열까지만 사용하고 너비 설정
+        col_widths = [15, 10, 30, 15, 20, 20]
         for i, width in enumerate(col_widths):
             worksheet.set_column(i, i, width)
 
         # 3. 헤더 영역 작성
         worksheet.set_row(0, 50)
+        # 요청에 따라 F열까지 병합
         worksheet.merge_range('A1:F1', '금 전 거 래 내 역 서', fmt_title)
         worksheet.merge_range('A2:F2', f"출력일: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}", fmt_print_date)
         
         # 4. 정보 영역
-        worksheet.merge_range('A4:C4', '공급하는자', fmt_subtitle)
-        worksheet.merge_range('D4:F4', '공급받는자', fmt_subtitle)
+        # 요청에 따라 A열과 D열에 라벨을 쓰고 셀 병합도 수정
+        worksheet.merge_range('A4:B4', '공급하는자', fmt_subtitle)
+        worksheet.merge_range('C4:F4', '공급받는자', fmt_subtitle)
 
         info_data = [('사업자번호', '사업자등록번호'), ('상호', '상호명'), ('대표자', '대표자명'), ('사업장주소', '사업장주소'), ('업태/종목', '업태/종목')]
         for i in range(5, 10): worksheet.set_row(i-1, 28)
@@ -608,6 +611,7 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         current_row += 2
         
         # 6. 본문 데이터 작성
+        # 요청에 따라 6개 열로 구성
         headers = ['일시', '구분', '내용', '금액', '처리 후 선충전잔액', '처리 후 사용여신액']
         worksheet.write_row(f'A{current_row}', headers, fmt_header)
         current_row += 1
@@ -626,7 +630,7 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
 
     output.seek(0)
     return output
-
+    
 def make_inventory_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
