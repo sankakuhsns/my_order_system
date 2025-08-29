@@ -418,20 +418,14 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
         fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        
-        # ### 2번 수정: 요약 정보 내용 가운데 정렬 ###
         fmt_summary_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'center', 'valign': 'vcenter'})
         fmt_summary_money = workbook.add_format({'bold': True, 'font_size': 9, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'font_color': '#404040'})
         fmt_order_id_sub = workbook.add_format({'font_size': 8, 'align': 'left', 'valign': 'vcenter', 'indent': 2, 'font_color': '#808080'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        
-        # ### 3번 수정: 데이터 목록 서식 (정렬, 숫자 형식) ###
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
         fmt_money = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
-        
         fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_print_date = workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'})
@@ -471,7 +465,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.merge_range('D11:E11', '총 합계 금액', fmt_summary_header)
         worksheet.merge_range('F11:I11', grand_total, fmt_summary_money)
 
-        # ### 1번 수정: 빈 줄 추가를 위해 시작 행을 13으로 변경 ###
         current_row = 13 
 
         # 6. 본문 데이터 작성
@@ -482,7 +475,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             current_row += 1
             related_orders = order_ids_by_date.get(trade_date, "")
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
-            current_row += 1
+            
+            # ### 최종 수정: 아래 current_row 증가 코드를 제거하여 헤더와 목록 사이의 빈 줄 삭제 ###
+            # current_row += 1 
 
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
@@ -491,7 +486,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
-                # ### 3번 수정: 불필요한 write_row 제거하여 서식 오류 방지 ###
                 worksheet.write(current_row, 0, item_counter, fmt_text_c)
                 worksheet.write(current_row, 1, record['품목코드'], fmt_text_c)
                 worksheet.write(current_row, 2, record['품목명'], fmt_text_l)
@@ -503,15 +497,14 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 worksheet.write(current_row, 8, record['합계금액'], fmt_money)
                 current_row += 1
                 item_counter += 1
-
-            # 일 계
+            
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'H{current_row}', date_df['세액'].sum(), fmt_subtotal_money)
             worksheet.write(f'I{current_row}', date_df['합계금액'].sum(), fmt_subtotal_money)
             current_row += 2
 
-        # 최종 합계
+        # 7. 최종 합계
         worksheet.merge_range(f'A{current_row}:F{current_row}', '총 계', fmt_subtotal_label)
         worksheet.write(f'G{current_row}', df_agg['공급가액'].sum(), fmt_subtotal_money)
         worksheet.write(f'H{current_row}', df_agg['세액'].sum(), fmt_subtotal_money)
