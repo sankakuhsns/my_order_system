@@ -630,36 +630,81 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
     
 def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
+    if df_report.empty:
+        return output
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        worksheet = workbook.add_worksheet(report_type)
+        worksheet = workbook.add_worksheet("품목생산보고서")
+
+        # 인쇄 시 모든 열을 한 페이지에 맞춤
+        worksheet.fit_to_pages(1, 0)
         
-        # 1. Excel 서식 정의 (통일된 테마 적용)
+        # 1. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
-
-        # 2. 레이아웃 설정
-        worksheet.fit_to_pages(1, 0)
-        col_widths = get_col_widths(df_report)
-        for i, width in enumerate(col_widths):
-            worksheet.set_column(i, i, width)
+        fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_qty = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
+        fmt_info_text = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'top', 'text_wrap': True})
+        
+        # 2. 데이터 전처리 및 열 선택
+        # '로그일시', '관련번호', '사유', '구분' 열 삭제
+        df_display = df_report.drop(columns=['로그일시', '관련번호', '사유', '구분'], errors='ignore').copy()
+        
+        # '작업일자'를 'YYYY-MM-DD' 형식으로 포맷팅
+        df_display['작업일자'] = pd.to_datetime(df_display['작업일자']).dt.strftime('%Y-%m-%d')
+        
+        # 열 순서 재정의
+        columns_order = ['작업일자', '품목코드', '품목명', '수량변경', '처리후재고', '단위']
+        df_display = df_display.reindex(columns=columns_order, fill_value='')
 
         # 3. 헤더 영역 작성
         worksheet.set_row(0, 50)
-        worksheet.merge_range(0, 0, 0, len(df_report.columns) - 1, f"{report_type}", fmt_title)
-        
-        # 4. 보고서 정보
-        worksheet.merge_range(f'A2:D2', f"조회 기간: {dt_from} ~ {dt_to}", workbook.add_format({'font_size': 9, 'align': 'left'}))
-        
-        # 5. 본문 데이터 작성
-        worksheet.write_row(2, 0, df_report.columns, fmt_header)
-        for row_num, row_data in enumerate(df_report.values):
-            for col_num, cell_data in enumerate(row_data):
-                fmt = fmt_text_l if isinstance(cell_data, str) and len(str(cell_data)) > 10 else fmt_text_c
-                worksheet.write(row_num + 3, col_num, cell_data, fmt)
-        
+        worksheet.merge_range('A1:F1', '품 목 생 산 보 고 서', fmt_title)
+
+        # 4. 보고서 정보 (조회 기간 및 설명)
+        current_row = 2
+        worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
+        current_row += 1
+        worksheet.merge_range(f'A{current_row}:F{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등의 다른 항목들은 반영되지 않습니다.", fmt_info_text)
+        current_row += 2 # 한 줄 띄우기
+
+        # 5. 본문 데이터 (일자별 구분)
+        grouped_by_date = df_display.groupby('작업일자')
+        for date_str, date_group in grouped_by_date:
+            # 일자별 헤더
+            worksheet.merge_range(f'A{current_row}:F{current_row}', f"■ 생산일자: {date_str}", fmt_subtotal_label)
+            current_row += 1
+            
+            # 일자별 테이블 헤더
+            headers = ['작업일자', '품목코드', '품목명', '생산수량', '처리후재고', '단위']
+            worksheet.write_row(f'A{current_row}', headers, fmt_header)
+            current_row += 1
+
+            # 일자별 데이터
+            for _, row in date_group.iterrows():
+                worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_c)
+                worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
+                worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
+                worksheet.write(f'D{current_row}', row['수량변경'], fmt_subtotal_qty)
+                worksheet.write(f'E{current_row}', row['처리후재고'], fmt_subtotal_qty)
+                worksheet.write(f'F{current_row}', row['단위'], fmt_text_c)
+                current_row += 1
+            
+            # 일자별 소계
+            worksheet.merge_range(f'A{current_row}:C{current_row}', '일 계', fmt_subtotal_label)
+            worksheet.write(f'D{current_row}', date_group['수량변경'].sum(), fmt_subtotal_qty)
+            worksheet.merge_range(f'E{current_row}:F{current_row}', '', fmt_subtotal_label)
+            current_row += 2 # 다음 그룹을 위해 두 줄 띄우기
+
+        # 최종 너비 설정
+        col_widths_final = [12, 10, 30, 10, 10, 8]
+        for i, width in enumerate(col_widths_final):
+            worksheet.set_column(i, i, width)
+
     output.seek(0)
     return output
 
@@ -2302,12 +2347,14 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                         log_df_raw = get_inventory_log_df()
                         if not log_df_raw.empty:
                             if sub_doc_type == "품목생산보고서":
+                                # '생산입고' 항목만 필터링하도록 수정
                                 production_log = log_df_raw[log_df_raw['구분'] == CONFIG['INV_CHANGE_TYPE']['PRODUCE']].copy()
                                 report_df = production_log[(pd.to_datetime(production_log['작업일자']).dt.date >= dt_from) & (pd.to_datetime(production_log['작업일자']).dt.date <= dt_to)]
                             elif sub_doc_type == "재고변동보고서":
                                 report_df = log_df_raw[(pd.to_datetime(log_df_raw['작업일자']).dt.date >= dt_from) & (pd.to_datetime(log_df_raw['작업일자']).dt.date <= dt_to)]
                         if sub_doc_type == "현재고현황보고서":
                             report_df = get_inventory_from_log(master_df, target_date=dt_to)
+                            
                     else:
                         if sub_doc_type == "금전거래내역서":
                             transactions_all_df = get_transactions_df()
