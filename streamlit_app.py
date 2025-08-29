@@ -2237,7 +2237,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     
                     st.session_state.report_df = report_df
                     st.session_state.report_info = {'type': sub_doc_type, 'name': selected_entity_real_name, 'from': dt_from, 'to': dt_to}
-                
+            
     elif doc_type_selected == "기간별 종합 리포트 (정산용)":
         with st.container(border=True):
             st.markdown("###### 📅 기간별 종합 리포트")
@@ -2267,12 +2267,18 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         file_name = "report.xlsx"
 
         if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
-             excel_buffer = make_inventory_report_excel(report_df, info['type'], info['from'], info['to'])
-             file_name = f"{info['type'].replace(' ', '_')}_{info['to']}.xlsx"
+              excel_buffer = make_inventory_report_excel(report_df, info['type'], info['from'], info['to'])
+              file_name = f"{info['type'].replace(' ', '_')}_{info['to']}.xlsx"
         else:
             if info['type'] == "금전거래내역서":
-                excel_buffer = create_unified_financial_statement(report_df, get_transactions_df(), selected_entity_info)
-                file_name = f"금전거래내역서_{info['name']}_{info['from']}_to_{info['to']}.xlsx"
+                supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                if not supplier_info_df.empty:
+                    supplier_info = supplier_info_df.iloc[0]
+                    excel_buffer = create_unified_financial_statement(report_df, get_transactions_df(), supplier_info, selected_entity_info)
+                    file_name = f"금전거래내역서_{info['name']}_{info['from']}_to_{info['to']}.xlsx"
+                else:
+                    st.error("엑셀 생성에 필요한 'admin' 역할의 공급자 정보가 '지점마스터'에 없습니다.")
+                    excel_buffer = None
             elif info['type'] == "품목거래내역서":
                 supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
                 if not supplier_info_df.empty:
