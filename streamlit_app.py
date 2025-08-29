@@ -1414,25 +1414,15 @@ def audit_financial_data(balance_df, transactions_df, charge_req_df):
         store_balance = balance_df[balance_df['지점ID'] == store_id].iloc[0]
         store_tx = transactions_df[transactions_df['지점ID'] == store_id]
         
-        # --- 선충전 잔액 감사 로직 수정 ---
-        prepaid_tx = store_tx[store_tx['구분'].str.contains('선충전|발주취소|발주반려|수동조정\(충전\)', na=False)]
-        calculated_prepaid = prepaid_tx['금액'].sum()
-
-        # ✅ '요청' 상태인 '선충전' 금액을 추가로 계산
-        pending_charges = charge_req_df[
-            (charge_req_df['지점ID'] == store_id) &
-            (charge_req_df['상태'] == '요청') &
-            (charge_req_df['종류'] == '선충전')
-        ]
-        pending_charge_sum = pending_charges['입금액'].sum()
-        
-        # ✅ 마스터 잔액과 비교할 최종 계산 금액 = 거래내역 합산액 + 처리 대기중인 충전 요청액
-        final_calculated_prepaid = calculated_prepaid + pending_charge_sum
+        # --- 선충전 잔액 감사: '거래내역' 시트의 '선충전승인' 내역만 합산 ---
+        # 수정: '요청' 상태는 포함하지 않고, 'transactions' 시트에 기록된 최종 내역만 계산
+        processed_prepaid_tx = store_tx[store_tx['구분'].str.contains('선충전|발주취소|발주반려|수동조정\(충전\)', na=False)]
+        calculated_prepaid = processed_prepaid_tx['금액'].sum()
         
         master_prepaid = int(store_balance['선충전잔액'])
 
-        if master_prepaid != final_calculated_prepaid:
-            issues.append(f"- **{store_balance['지점명']}**: 선충전 잔액 불일치 (장부: {master_prepaid: ,}원 / 계산: {final_calculated_prepaid: ,}원)")
+        if master_prepaid != calculated_prepaid:
+            issues.append(f"- **{store_balance['지점명']}**: 선충전 잔액 불일치 (장부: {master_prepaid: ,}원 / 계산: {calculated_prepaid: ,}원)")
         
         # --- 사용 여신액 감사 로직 (변경 없음) ---
         credit_tx = store_tx[store_tx['구분'].str.contains('여신결제|여신상환|수동조정\(여신\)', na=False)]
