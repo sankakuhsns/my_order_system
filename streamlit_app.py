@@ -473,6 +473,7 @@ def get_col_widths(dataframe: pd.DataFrame):
 
 
 # [신규] 통합 품목 거래명세서 생성 함수
+# [신규] 통합 품목 거래명세서 생성 함수
 def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Series, customer_info: pd.Series) -> BytesIO:
     """단일/기간/하루 등 모든 품목 거래 조회를 위한 통일된 양식의 Excel을 생성합니다."""
     output = BytesIO()
@@ -493,12 +494,12 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         fmt_info_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'wrap': True})
         fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
         fmt_summary_money = workbook.add_format({'bold': True, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
         fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
         fmt_date = workbook.add_format({'num_format': 'yyyy-mm-dd', 'border': 1, 'align': 'center'})
         fmt_text_c = workbook.add_format({'border': 1, 'align': 'center'})
         fmt_text_l = workbook.add_format({'border': 1, 'align': 'left'})
-        fmt_total_strong_label = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#4F81BD', 'color': 'white', 'border': 1, 'align': 'center'})
+        fmt_total_strong_label = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#4F81BD', 'font_color': 'white', 'border': 1, 'align': 'center'})
         fmt_total_strong_value = workbook.add_format({'bold': True, 'font_size': 12, 'num_format': '#,##0', 'bg_color': '#DDEBF7', 'border': 1})
 
         # --- 1. 문서 제목 ---
@@ -578,7 +579,7 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         # --- 서식 정의 ---
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter'})
         fmt_h2 = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#4F81BD', 'font_color': 'white', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
         fmt_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
         fmt_money_blue = workbook.add_format({'num_format': '#,##0', 'border': 1, 'font_color': 'blue'})
         fmt_money_red = workbook.add_format({'num_format': '#,##0', 'border': 1, 'font_color': 'red'})
@@ -613,19 +614,18 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         headers = ['일시', '구분', '내용', '금액', '선충전 잔액', '사용 여신액']
         worksheet.write_row('A9', headers, fmt_header)
         
-        row_num = 9
+        row_num = 10 # 시작 행 번호 수정
         for _, row in df_sorted_period.iterrows():
             worksheet.write(row_num, 0, str(row.get('일시', '')), fmt_text_c)
             worksheet.write(row_num, 1, row.get('구분', ''), fmt_text_c)
             worksheet.write(row_num, 2, row.get('내용', ''), fmt_text_l)
-            # 금액에 조건부 서식 적용
             amount = row.get('금액', 0)
             fmt = fmt_money
             if amount > 0: fmt = fmt_money_blue
             elif amount < 0: fmt = fmt_money_red
             worksheet.write(row_num, 3, amount, fmt)
             worksheet.write(row_num, 4, row.get('처리후선충전잔액', 0), fmt_money)
-            worksheet.write(row_num, 5, row.get('처리후사용여신액', 0), fmt_money)
+            worksheet.write(row_num, 5, row.get('사용여신액', 0), fmt_money)
             row_num += 1
 
         # --- 4. 컬럼 너비 자동 조절 ---
@@ -636,7 +636,7 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
 
     output.seek(0)
     return output
-
+    
 def make_inventory_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
