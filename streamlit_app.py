@@ -651,14 +651,13 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
         fmt_info_text = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'top', 'text_wrap': True})
         
         # 2. 데이터 전처리 및 열 선택
-        # '로그일시', '관련번호', '사유', '구분' 열 삭제
         df_display = df_report.drop(columns=['로그일시', '관련번호', '사유', '구분'], errors='ignore').copy()
         
         # '작업일자'를 'YYYY-MM-DD' 형식으로 포맷팅
         df_display['작업일자'] = pd.to_datetime(df_display['작업일자']).dt.strftime('%Y-%m-%d')
         
-        # 열 순서 재정의
-        columns_order = ['작업일자', '품목코드', '품목명', '수량변경', '처리후재고', '단위']
+        # 열 순서 재정의 (품목명 옆에 단위 추가)
+        columns_order = ['작업일자', '품목코드', '품목명', '단위', '수량변경', '처리후재고']
         df_display = df_display.reindex(columns=columns_order, fill_value='')
 
         # 3. 헤더 영역 작성
@@ -669,39 +668,39 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
         current_row = 2
         worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
         current_row += 1
-        worksheet.merge_range(f'A{current_row}:F{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등의 다른 항목들은 반영되지 않습니다.", fmt_info_text)
-        current_row += 2 # 한 줄 띄우기
+        worksheet.merge_range(f'A{current_row}:F{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등 다른 항목들은 반영되지 않습니다.", fmt_info_text)
+        current_row += 2
 
         # 5. 본문 데이터 (일자별 구분)
         grouped_by_date = df_display.groupby('작업일자')
         for date_str, date_group in grouped_by_date:
-            # 일자별 헤더
             worksheet.merge_range(f'A{current_row}:F{current_row}', f"■ 생산일자: {date_str}", fmt_subtotal_label)
             current_row += 1
             
-            # 일자별 테이블 헤더
-            headers = ['작업일자', '품목코드', '품목명', '생산수량', '처리후재고', '단위']
+            # 일자별 테이블 헤더 (단위 열 추가)
+            headers = ['작업일자', '품목코드', '품목명', '단위', '생산수량', '처리후재고']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             current_row += 1
 
             # 일자별 데이터
             for _, row in date_group.iterrows():
-                worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_c)
+                # 생산일자 좌측 정렬
+                worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_l)
                 worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
                 worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
-                worksheet.write(f'D{current_row}', row['수량변경'], fmt_subtotal_qty)
-                worksheet.write(f'E{current_row}', row['처리후재고'], fmt_subtotal_qty)
-                worksheet.write(f'F{current_row}', row['단위'], fmt_text_c)
+                worksheet.write(f'D{current_row}', row['단위'], fmt_text_c)
+                worksheet.write(f'E{current_row}', row['수량변경'], fmt_subtotal_qty)
+                worksheet.write(f'F{current_row}', row['처리후재고'], fmt_subtotal_qty)
                 current_row += 1
             
-            # 일자별 소계
-            worksheet.merge_range(f'A{current_row}:C{current_row}', '일 계', fmt_subtotal_label)
-            worksheet.write(f'D{current_row}', date_group['수량변경'].sum(), fmt_subtotal_qty)
-            worksheet.merge_range(f'E{current_row}:F{current_row}', '', fmt_subtotal_label)
-            current_row += 2 # 다음 그룹을 위해 두 줄 띄우기
+            # 일자별 소계 (셀 병합 조정)
+            worksheet.merge_range(f'A{current_row}:D{current_row}', '일 계', fmt_subtotal_label)
+            worksheet.write(f'E{current_row}', date_group['수량변경'].sum(), fmt_subtotal_qty)
+            worksheet.merge_range(f'F{current_row}:F{current_row}', '', fmt_subtotal_label)
+            current_row += 2
 
-        # 최종 너비 설정
-        col_widths_final = [12, 10, 30, 10, 10, 8]
+        # 최종 너비 설정 (단위 열 너비 조정)
+        col_widths_final = [12, 10, 30, 8, 10, 10]
         for i, width in enumerate(col_widths_final):
             worksheet.set_column(i, i, width)
 
