@@ -1752,20 +1752,41 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
                 details_str = "\n".join(lacking_items_details)
                 st.error(f"🚨 재고 부족으로 승인할 수 없습니다:\n{details_str}")
             else:
-                with st.spinner("발주 승인 및 재고 차감 처리 중..."):
-                    items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
-                    items_to_deduct['수량변경'] = -items_to_deduct['수량']
-                    ref_id = ", ".join(selected_pending_ids)
-                    if update_inventory(items_to_deduct, CONFIG['INV_CHANGE_TYPE']['SHIPMENT'], "system_auto", date.today(), ref_id=ref_id):
-                        if update_order_status(selected_pending_ids, CONFIG['ORDER_STATUS']['APPROVED'], st.session_state.auth["name"]):
-                            st.session_state.success_message = f"{len(selected_pending_ids)}건이 승인 처리되고 재고가 차감되었습니다."
-                            st.session_state.admin_orders_selection.clear()
-                            st.rerun()
-                        else:
-                            st.session_state.error_message = "치명적 오류: 재고는 차감되었으나 발주 상태 변경에 실패했습니다."
+                with st.spinner("최종 상태 확인 및 발주 승인 처리 중..."):
+                    # 1. 캐시를 비우고 최신 주문 데이터를 다시 불러옵니다.
+                    clear_data_cache()
+                    fresh_orders_df = get_orders_df()
+
+                    # 2. 내가 승인하려던 주문들 중, 여전히 '요청' 상태인 것만 골라냅니다.
+                    target_orders = fresh_orders_df[fresh_orders_df['발주번호'].isin(selected_pending_ids)]
+                    actual_ids_to_approve = target_orders[target_orders['상태'] == CONFIG['ORDER_STATUS']['PENDING']]['발주번호'].tolist()
+
+                    # 3. 이미 처리된 주문이 있다면 사용자에게 알립니다.
+                    if len(actual_ids_to_approve) != len(selected_pending_ids):
+                        st.warning("선택한 주문 중 일부는 이미 처리되어 제외되었습니다.")
+                    
+                    # 4. 최종적으로 승인 가능한 주문이 있을 때만 로직을 실행합니다.
+                    if not actual_ids_to_approve:
+                        st.error("처리할 주문이 없습니다. 페이지를 새로고침합니다.")
+                        time.sleep(2)
+                        st.rerun()
                     else:
-                        st.session_state.error_message = "발주 승인 중 재고 차감 단계에서 오류가 발생했습니다."
-                    st.rerun()
+                        orders_to_approve_df = df_all[df_all['발주번호'].isin(actual_ids_to_approve)]
+                        items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
+                        items_to_deduct['수량변경'] = -items_to_deduct['수량']
+                        ref_id = ", ".join(actual_ids_to_approve)
+                        
+                        # (기존 재고 차감 및 상태 업데이트 로직 실행)
+                        if update_inventory(items_to_deduct, CONFIG['INV_CHANGE_TYPE']['SHIPMENT'], "system_auto", date.today(), ref_id=ref_id):
+                            if update_order_status(actual_ids_to_approve, CONFIG['ORDER_STATUS']['APPROVED'], st.session_state.auth["name"]):
+                                st.session_state.success_message = f"{len(actual_ids_to_approve)}건이 승인 처리되고 재고가 차감되었습니다."
+                                st.session_state.admin_orders_selection.clear()
+                                st.rerun()
+                            else:
+                                st.session_state.error_message = "치명적 오류: 재고는 차감되었으나 발주 상태 변경에 실패했습니다."
+                        else:
+                            st.session_state.error_message = "발주 승인 중 재고 차감 단계에서 오류가 발생했습니다."
+                        st.rerun()
 
     with btn_cols[1]:
         if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
