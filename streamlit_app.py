@@ -396,74 +396,55 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
     if orders_df.empty:
         return output
 
-    # =============================================================================
-    # 1. 데이터 사전 처리 (Pre-processing)
-    # - 날짜별, 품목별로 데이터를 그룹화하고 수량과 금액을 합산합니다.
-    # - '발주번호'는 더 이상 사용하지 않으므로 이 단계에서 제외됩니다.
-    # =============================================================================
+    # 1. 데이터 사전 처리: 기존과 동일하게 날짜별/품목별 데이터 집계
     df = orders_df.copy()
     df['거래일자'] = pd.to_datetime(df['주문일시']).dt.date
 
-    # 동일 날짜, 동일 품목의 수량 및 금액을 합산
     aggregation_rules = {
-        '수량': 'sum',
-        '공급가액': 'sum',
-        '세액': 'sum',
-        '합계금액': 'sum'
+        '수량': 'sum', '공급가액': 'sum', '세액': 'sum', '합계금액': 'sum'
     }
-    # 단가는 품목별로 동일하므로 'first' 사용
-    grouping_keys = ['거래일자', '품목코드', '품목명', '단위', '단가']
+    # 발주번호는 날짜별로 묶어서 관리하기 위해 'unique'와 'tolist'를 사용
+    aggregation_rules['발주번호'] = ('발주번호', lambda x: ', '.join(x.unique().tolist()))
     
+    grouping_keys = ['거래일자', '품목코드', '품목명', '단위', '단가']
     df_agg = df.groupby(grouping_keys).agg(aggregation_rules).reset_index()
     df_agg = df_agg.sort_values(by=['거래일자', '품목명'])
-
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet("품목거래명세서")
 
-        # =============================================================================
-        # 2. Excel 서식(Format) 정의
-        # - 문서의 각 부분에 사용될 다양한 서식을 미리 정의합니다.
-        # =============================================================================
-        fmt_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        # 2. Excel 서식 정의 (제목, 요약 등 서식 추가)
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 20, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
-        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'bg_color': '#EAEAEA', 'align': 'center', 'valign': 'vcenter', 'top': 1, 'bottom': 1})
+        
+        fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_summary_data = workbook.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_summary_money = workbook.add_format({'bold': True, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'valign': 'vcenter'})
+
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'bg_color': '#EAEAEA', 'align': 'left', 'valign': 'vcenter', 'indent': 1})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         
-        # 데이터 행 서식
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
         fmt_money = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         
-        # 요약 행 서식
         fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_print_date = workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'})
 
-        # =============================================================================
-        # 3. 레이아웃 설정 (12열 그리드 시스템)
-        # - 12개의 기본 열을 설정하여 상단 정보와 하단 테이블의 너비를 분리합니다.
-        # =============================================================================
-        worksheet.set_column('A:A', 3)   # 좌측 여백
-        worksheet.set_column('B:B', 10)  # 품목코드
-        worksheet.set_column('C:E', 12)  # 품목명 (3칸 병합)
-        worksheet.set_column('F:F', 6)   # 단위
-        worksheet.set_column('G:G', 8)   # 수량
-        worksheet.set_column('H:I', 10)  # 단가 (2칸 병합)
-        worksheet.set_column('J:K', 12)  # 공급가액 (2칸 병합)
-        worksheet.set_column('L:L', 13)  # 합계금액
+        # 3. 레이아웃 설정 (공급자/공급받는자 너비 균형 조정)
+        col_widths = [3, 5, 10, 12, 10, 6, 3, 10, 12, 10, 6, 8] # A to L
+        for i, width in enumerate(col_widths):
+            worksheet.set_column(i, i, width)
 
-        # =============================================================================
         # 4. 헤더 영역 작성
-        # =============================================================================
-        worksheet.set_row(0, 36) # 제목 행 높이
-        worksheet.merge_range('A1:L1', '품 목  거 래 명 세 서', fmt_title)
+        worksheet.set_row(0, 36)
+        worksheet.merge_range('A1:L1', '품 목 거 래 명 세 서', fmt_title)
         worksheet.merge_range('A2:L2', f"출력일: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}", fmt_print_date)
         
-        # 공급자/공급받는자 정보
         worksheet.merge_range('A4:F4', '공급하는자', fmt_subtitle)
         worksheet.merge_range('G4:L4', '공급받는자', fmt_subtitle)
 
@@ -476,51 +457,60 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         for i, (label, key) in enumerate(info_data, 5):
             row_height = 45 if '주소' in label else 18
             worksheet.set_row(i - 1, row_height)
-
+            
             # 공급자 정보 (왼쪽)
             worksheet.merge_range(f'A{i}:B{i}', label, fmt_info_label)
-            if key == '업태/종목':
-                val = f"{supplier_info.get('업태', '')} / {supplier_info.get('종목', '')}"
-            else:
-                val = supplier_info.get(key, '')
-            worksheet.merge_range(f'C{i}:F{i}', val, fmt_info_data)
+            val_sup = f"{supplier_info.get('업태', '')} / {supplier_info.get('종목', '')}" if key == '업태/종목' else supplier_info.get(key, '')
+            worksheet.merge_range(f'C{i}:F{i}', val_sup, fmt_info_data)
             
             # 공급받는자 정보 (오른쪽)
             worksheet.merge_range(f'G{i}:H{i}', label, fmt_info_label)
-            if key == '업태/종목':
-                val = f"{customer_info.get('업태', '')} / {customer_info.get('종목', '')}"
-            else:
-                val = customer_info.get(key, '')
-            worksheet.merge_range(f'I{i}:L{i}', val, fmt_info_data)
+            val_cus = f"{customer_info.get('업태', '')} / {customer_info.get('종목', '')}" if key == '업태/종목' else customer_info.get(key, '')
+            worksheet.merge_range(f'I{i}:L{i}', val_cus, fmt_info_data)
         
-        current_row = 11 # 데이터 시작 행 번호 (헤더 아래)
+        # 5. 거래 요약 정보 추가 (헤더와 본문 사이)
+        min_date = df_agg['거래일자'].min().strftime('%Y-%m-%d')
+        max_date = df_agg['거래일자'].max().strftime('%Y-%m-%d')
+        date_range = min_date if min_date == max_date else f"{min_date} ~ {max_date}"
+        grand_total = df_agg['합계금액'].sum()
 
-        # =============================================================================
-        # 5. 본문 데이터 작성 (날짜별 그룹 루프)
-        # =============================================================================
+        worksheet.merge_range('A11:B11', '거래 기간', fmt_summary_header)
+        worksheet.merge_range('C11:F11', date_range, fmt_summary_data)
+        worksheet.merge_range('G11:H11', '총 합계 금액', fmt_summary_header)
+        worksheet.merge_range('I11:L11', grand_total, fmt_summary_money)
+
+        current_row = 13 # 데이터 시작 행 번호
+
+        # 6. 본문 데이터 작성 (날짜별 그룹 루프)
+        # 날짜별로 관련된 모든 발주번호를 미리 그룹화
+        order_ids_by_date = df.groupby('거래일자')['발주번호'].unique().apply(lambda x: ', '.join(x)).to_dict()
+
         unique_dates = df_agg['거래일자'].unique()
-
         for trade_date in unique_dates:
-            # 날짜 구분선
-            worksheet.set_row(current_row -1, 22)
-            worksheet.merge_range(f'A{current_row}:L{current_row}', f"▶ 거래일자 : {trade_date.strftime('%Y년 %m월 %d일')}", fmt_date_header)
+            # 날짜 및 관련 발주번호 헤더
+            related_orders = order_ids_by_date.get(trade_date, "")
+            date_display_text = f"▶ 거래일자 : {trade_date.strftime('%Y년 %m월 %d일')}   (관련 발주번호: {related_orders})"
+            worksheet.merge_range(f'A{current_row}:L{current_row}', date_display_text, fmt_date_header)
             current_row += 1
 
             # 테이블 헤더
-            headers = ['품목코드', '품목명', '단위', '수량', '단가', '공급가액', '합계금액']
-            worksheet.merge_range(f'B{current_row}:B{current_row}', headers[0], fmt_header)
-            worksheet.merge_range(f'C{current_row}:E{current_row}', headers[1], fmt_header)
-            worksheet.merge_range(f'F{current_row}:F{current_row}', headers[2], fmt_header)
-            worksheet.merge_range(f'G{current_row}:G{current_row}', headers[3], fmt_header)
-            worksheet.merge_range(f'H{current_row}:I{current_row}', headers[4], fmt_header)
-            worksheet.merge_range(f'J{current_row}:K{current_row}', headers[5], fmt_header)
-            worksheet.merge_range(f'L{current_row}:L{current_row}', headers[6], fmt_header)
+            headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '합계금액']
+            worksheet.write(f'A{current_row}', headers[0], fmt_header)
+            worksheet.write(f'B{current_row}', headers[1], fmt_header)
+            worksheet.merge_range(f'C{current_row}:E{current_row}', headers[2], fmt_header)
+            worksheet.write(f'F{current_row}', headers[3], fmt_header)
+            worksheet.write(f'G{current_row}', headers[4], fmt_header)
+            worksheet.merge_range(f'H{current_row}:I{current_row}', headers[5], fmt_header)
+            worksheet.merge_range(f'J{current_row}:K{current_row}', headers[6], fmt_header)
+            worksheet.write(f'L{current_row}', headers[7], fmt_header)
             current_row += 1
 
-            # 해당 날짜의 데이터만 필터링
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             
+            # 날짜별 No 카운터 초기화
+            item_counter = 1
             for _, record in date_df.iterrows():
+                worksheet.write(f'A{current_row}', item_counter, fmt_text_c)
                 worksheet.write(f'B{current_row}', record['품목코드'], fmt_text_c)
                 worksheet.merge_range(f'C{current_row}:E{current_row}', record['품목명'], fmt_text_l)
                 worksheet.write(f'F{current_row}', record['단위'], fmt_text_c)
@@ -529,16 +519,15 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 worksheet.merge_range(f'J{current_row}:K{current_row}', record['공급가액'], fmt_money)
                 worksheet.write(f'L{current_row}', record['합계금액'], fmt_money)
                 current_row += 1
+                item_counter += 1
 
             # 일 계 (Daily Subtotal)
             worksheet.merge_range(f'A{current_row}:I{current_row}', '일 계', fmt_subtotal_label)
             worksheet.merge_range(f'J{current_row}:K{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'L{current_row}', date_df['합계금액'].sum(), fmt_subtotal_money)
-            current_row += 2 # 다음 섹션을 위해 한 칸 띄우기
+            current_row += 2
 
-        # =============================================================================
-        # 6. 최종 합계 작성
-        # =============================================================================
+        # 7. 최종 합계 작성
         worksheet.merge_range(f'A{current_row}:I{current_row}', '총 계', fmt_subtotal_label)
         worksheet.merge_range(f'J{current_row}:K{current_row}', df_agg['공급가액'].sum(), fmt_subtotal_money)
         worksheet.write(f'L{current_row}', df_agg['합계금액'].sum(), fmt_subtotal_money)
