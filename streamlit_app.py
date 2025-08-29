@@ -812,10 +812,7 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         
-        # 텍스트 데이터용 왼쪽 정렬 포맷
-        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
-        
-        # 텍스트 데이터용 가운데 정렬 포맷
+        # 모든 데이터 셀에 적용할 가운데 정렬 포맷
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         
         # 수량 셀에 적용할 배경색 포맷을 테마 색상으로 변경
@@ -830,7 +827,7 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         
         # 4. 보고서 정보 (조회 기준일)
         current_row = 2
-        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'center', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
         worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기준일: {dt_to}", fmt_date_header)
         current_row += 2
 
@@ -842,8 +839,8 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         for _, row in df_display.iterrows():
             worksheet.write(f'A{current_row}', row['품목코드'], fmt_text_c)
             worksheet.write(f'B{current_row}', row['분류'], fmt_text_c)
-            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
-            worksheet.write(f'D{current_row}', row['품목규격'], fmt_text_l)
+            worksheet.write(f'C{current_row}', row['품목명'], fmt_text_c) # 품목명도 가운데 정렬로 변경
+            worksheet.write(f'D{current_row}', row['품목규격'], fmt_text_c) # 품목규격도 가운데 정렬로 변경
             worksheet.write(f'E{current_row}', row['단위'], fmt_text_c)
             worksheet.write(f'F{current_row}', row['현재고수량'], fmt_money_bg)
             current_row += 1
