@@ -21,6 +21,7 @@ import xlsxwriter
 import hashlib
 import random
 import string
+import time
 
 # =============================================================================
 # 0) 기본 설정 및 CONFIG
@@ -266,9 +267,11 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
 
         if cells_to_update:
             ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+            time.sleep(2)
         
         st.cache_data.clear()
         return True
+        
     except Exception as e:
         st.error(f"발주 상태 업데이트 중 오류가 발생했습니다: {e}")
         return False
