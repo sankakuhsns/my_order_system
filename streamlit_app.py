@@ -415,8 +415,8 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
         fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_summary_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'valign': 'vcenter', 'indent': 1})
-        fmt_summary_money = workbook.add_format({'bold': True, 'font_size': 9, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'align': 'left', 'valign': 'vcenter', 'indent': 1})
+        fmt_summary_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+        fmt_summary_money = workbook.add_format({'bold': True, 'font_size': 9, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'valign': 'vcenter'})
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'font_color': '#404040'})
         fmt_order_id_sub = workbook.add_format({'font_size': 8, 'align': 'left', 'valign': 'vcenter', 'indent': 2, 'font_color': '#808080'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
@@ -437,30 +437,36 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.merge_range('A1:I1', '품 목 거 래 명 세 서', fmt_title)
         worksheet.merge_range('A2:I2', f"출력일: {datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')}", fmt_print_date)
         
-        worksheet.merge_range('A4:C4', '공급하는자', fmt_subtitle)
-        worksheet.merge_range('D4:I4', '공급받는자', fmt_subtitle)
+        # ### 공급자/공급받는자 정보 (레이아웃 전면 수정) ###
+        worksheet.merge_range('A4:D4', '공급하는자', fmt_subtitle)
+        worksheet.merge_range('E4:I4', '공급받는자', fmt_subtitle)
 
         info_data = [('사업자번호', '사업자등록번호'), ('상호', '상호명'), ('대표자', '대표자명'), ('사업장주소', '사업장주소'), ('업태/종목', '업태/종목')]
         
-        for i, (label, key) in enumerate(info_data, 5):
+        # 모든 정보 행의 높이를 28로 통일
+        for i in range(5, 10):
             worksheet.set_row(i-1, 28)
+
+        for i, (label, key) in enumerate(info_data, 5):
             val_sup = f"{supplier_info.get('업태', '')}/{supplier_info.get('종목', '')}" if key == '업태/종목' else supplier_info.get(key, '')
             val_cus = f"{customer_info.get('업태', '')}/{customer_info.get('종목', '')}" if key == '업태/종목' else customer_info.get(key, '')
             
-            # 라벨(A,B병합), 내용(D,E병합) 규칙 적용
-            worksheet.merge_range(f'A{i}:B{i}', label, fmt_info_label)
-            worksheet.merge_range(f'D{i}:E{i}', val_sup, fmt_info_data)
-            worksheet.merge_range(f'F{i}:G{i}', label, fmt_info_label)
-            worksheet.merge_range(f'I{i}:I{i}', val_cus, fmt_info_data) # 공급받는자는 I열 하나만 사용
+            # 공급자 정보 (A-D열): 라벨(A), 내용(B-D)
+            worksheet.write(f'A{i}', label, fmt_info_label)
+            worksheet.merge_range(f'B{i}:D{i}', val_sup, fmt_info_data)
+            
+            # 공급받는자 정보 (E-I열): 라벨(E), 내용(F-I)
+            worksheet.write(f'E{i}', label, fmt_info_label)
+            worksheet.merge_range(f'F{i}:I{i}', val_cus, fmt_info_data)
         
         # 5. 거래 요약 정보
         min_date, max_date = df_agg['거래일자'].min(), df_agg['거래일자'].max()
         date_range = max_date.strftime('%Y-%m-%d') if min_date == max_date else f"{min_date.strftime('%Y-%m-%d')} ~ {max_date.strftime('%Y-%m-%d')}"
         grand_total = df_agg['합계금액'].sum()
         worksheet.merge_range('A11:B11', '거래 기간', fmt_summary_header)
-        worksheet.merge_range('D11:E11', date_range, fmt_summary_data)
-        worksheet.merge_range('F11:G11', '총 합계 금액', fmt_summary_header)
-        worksheet.merge_range('I11:I11', grand_total, fmt_summary_money)
+        worksheet.merge_range('C11:D11', date_range, fmt_summary_data)
+        worksheet.merge_range('E11:F11', '총 합계 금액', fmt_summary_header)
+        worksheet.merge_range('G11:I11', grand_total, fmt_summary_money)
 
         current_row = 13
 
@@ -474,7 +480,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
             current_row += 1
 
-            # ### 헤더 작성 (중요: 모든 제목 행 표시) ###
+            # ### 헤더 작성 (중요: 모든 제목 행 표시 확인) ###
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             current_row += 1
@@ -482,22 +488,16 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
-                row_data = [
-                    item_counter, record['품목코드'], record['품목명'], record['단위'],
-                    record['수량'], record['단가'], record['공급가액'],
-                    record['세액'], record['합계금액']
-                ]
-                worksheet.write_row(f'A{current_row}', row_data)
-                # 서식만 별도로 적용
-                worksheet.write(current_row, 0, row_data[0], fmt_text_c)
-                worksheet.write(current_row, 1, row_data[1], fmt_text_c)
-                worksheet.write(current_row, 2, row_data[2], fmt_text_l)
-                worksheet.write(current_row, 3, row_data[3], fmt_text_c)
-                worksheet.write(current_row, 4, row_data[4], fmt_money)
-                worksheet.write(current_row, 5, row_data[5], fmt_money)
-                worksheet.write(current_row, 6, row_data[6], fmt_money)
-                worksheet.write(current_row, 7, row_data[7], fmt_money)
-                worksheet.write(current_row, 8, row_data[8], fmt_money)
+                # 데이터 행 작성
+                worksheet.write(current_row, 0, item_counter, fmt_text_c)
+                worksheet.write(current_row, 1, record['품목코드'], fmt_text_c)
+                worksheet.write(current_row, 2, record['품목명'], fmt_text_l)
+                worksheet.write(current_row, 3, record['단위'], fmt_text_c)
+                worksheet.write(current_row, 4, record['수량'], fmt_money)
+                worksheet.write(current_row, 5, record['단가'], fmt_money)
+                worksheet.write(current_row, 6, record['공급가액'], fmt_money)
+                worksheet.write(current_row, 7, record['세액'], fmt_money)
+                worksheet.write(current_row, 8, record['합계금액'], fmt_money)
                 current_row += 1
                 item_counter += 1
 
