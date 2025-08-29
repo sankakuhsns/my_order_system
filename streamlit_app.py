@@ -2382,25 +2382,29 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.session_state.excel_buffer = None
     if 'report_filename' not in st.session_state:
         st.session_state.report_filename = ""
+    # 세션 상태에 마지막으로 선택된 보고서 타입을 저장하는 변수 추가
+    if 'last_selected_report_type' not in st.session_state:
+        st.session_state.last_selected_report_type = "지점별 서류 (거래내역서 등)"
+
+
+    # 라디오 버튼 선택 시, 세션 상태 초기화 및 페이지 리로드
+    def on_radio_change():
+        if st.session_state.doc_type_selected != st.session_state.last_selected_report_type:
+            st.session_state.report_df = pd.DataFrame()
+            st.session_state.excel_buffer = None
+            st.session_state.report_filename = ""
+            st.session_state.last_selected_report_type = st.session_state.doc_type_selected
+            st.rerun()
 
     doc_type_selected = st.radio(
         "원하는 보고서 종류를 선택하세요.",
         ["지점별 서류 (거래내역서 등)", "기간별 종합 리포트 (정산용)"],
-        horizontal=True, key="admin_doc_main_type", label_visibility="collapsed"
+        horizontal=True, 
+        key="doc_type_selected", 
+        label_visibility="collapsed",
+        on_change=on_radio_change
     )
     st.divider()
-
-    # 이전에 생성된 리포트가 있다면 다운로드 버튼을 먼저 표시
-    if st.session_state.excel_buffer:
-        st.markdown("##### ✅ 보고서 생성 완료!")
-        st.download_button(
-            label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
-            data=st.session_state.excel_buffer,
-            file_name=st.session_state.report_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        st.markdown("---")
 
     # 지점별 서류 생성 UI
     if doc_type_selected == "지점별 서류 (거래내역서 등)":
@@ -2431,7 +2435,8 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
             dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
             dt_from = c1.date_input("조회 시작일", dt_from_value, key="admin_doc_from_individual", disabled=is_inventory_report)
-
+            
+            # 리포트 생성 버튼
             if st.button("🔍 데이터 조회하기", key="preview_individual_doc", use_container_width=True, type="primary"):
                 st.session_state.report_df = pd.DataFrame()
                 st.session_state.excel_buffer = None
@@ -2496,10 +2501,14 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                                 excel_buffer = None
                                 file_name = "report.xlsx"
 
-                    st.session_state.excel_buffer = excel_buffer
-                    st.session_state.report_filename = file_name
-                    st.session_state.report_df = report_df
-                    st.rerun()
+                    if excel_buffer:
+                        st.session_state.excel_buffer = excel_buffer
+                        st.session_state.report_filename = file_name
+                        st.session_state.report_df = report_df
+                        st.rerun()
+                    else:
+                        st.session_state.report_df = report_df
+                        st.rerun()
 
     # 기간별 종합 리포트 생성 UI
     elif doc_type_selected == "기간별 종합 리포트 (정산용)":
@@ -2510,30 +2519,43 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             dt_from_report = c1.date_input("조회 시작일", date.today().replace(day=1), key="report_from")
             dt_to_report = c2.date_input("조회 종료일", date.today(), key="report_to")
             
-            if st.button("🚀 리포트 생성", use_container_width=True, type="primary"):
+            if st.button("🚀 리포트 생성", key="create_comprehensive_report", use_container_width=True, type="primary"):
+                st.session_state.report_df = pd.DataFrame()
+                st.session_state.excel_buffer = None
+                st.session_state.report_filename = ""
                 with st.spinner("종합 리포트를 생성하는 중입니다..."):
                     excel_buffer = make_settlement_report_excel(dt_from_report, dt_to_report, get_orders_df(), get_transactions_df())
                     st.session_state.excel_buffer = excel_buffer
                     st.session_state.report_filename = f"종합정산리포트_{dt_from_report}_to_{dt_to_report}.xlsx"
                     st.rerun()
 
-    st.divider()
+    st.markdown("---")
     st.markdown("##### 2. 미리보기 및 다운로드")
     
     report_df = st.session_state.get('report_df', pd.DataFrame())
     if not report_df.empty:
-        info = st.session_state.report_info
+        info = st.session_state.get('report_info', {'name': '', 'type': ''})
         st.markdown(f"**'{info['name']}'**의 **'{info['type']}'** 조회 결과입니다. (총 {len(report_df)}건)")
         st.dataframe(report_df.head(10), use_container_width=True, hide_index=True)
-
-    # placeholder를 사용하여 다운로드 버튼을 올바른 위치에 렌더링
-    if st.session_state.excel_buffer:
+        # 리포트 미리보기가 있는 경우 다운로드 버튼 표시
+        if st.session_state.excel_buffer:
+            st.download_button(
+                label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
+                data=st.session_state.excel_buffer,
+                file_name=st.session_state.report_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="download_button_final"
+            )
+    elif st.session_state.excel_buffer:
+        # 기간별 종합 리포트의 경우 미리보기 없이 바로 다운로드 버튼 표시
         st.download_button(
             label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
             data=st.session_state.excel_buffer,
             file_name=st.session_state.report_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            use_container_width=True,
+            key="download_button_comprehensive"
         )
     else:
         st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
