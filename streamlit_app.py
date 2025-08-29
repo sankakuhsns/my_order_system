@@ -780,8 +780,10 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
             worksheet.write(f'H{current_row}', row['처리자'], fmt_text_c)
             current_row += 1
 
-        # 한 페이지에 모든 열 맞추기
-        worksheet.fit_to_pages(1, 0)
+        # 열 너비 수동 복구
+        col_widths_final = [20, 10, 10, 30, 10, 10, 8, 12]
+        for i, width in enumerate(col_widths_final):
+            worksheet.set_column(i, i, width)
         
     output.seek(0)
     return output
