@@ -729,7 +729,10 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
-        fmt_money = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        
+        # 수량 및 재고 셀에 적용할 배경색 포맷
+        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#F2F2F2'})
+        fmt_text_c_bg = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#F2F2F2'})
 
         # 2. 데이터 전처리 및 열 선택
         df_display = df_report.drop(columns=['작업일자', '관련번호', '사유', '구분'], errors='ignore').copy()
@@ -765,8 +768,10 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
             worksheet.write(f'A{current_row}', row['변동일시'], fmt_text_c)
             worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
             worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
-            worksheet.write(f'D{current_row}', row['수량변경'], fmt_money)
-            worksheet.write(f'E{current_row}', row['처리후재고'], fmt_money)
+            # 수량변경 셀에 배경색 적용
+            worksheet.write(f'D{current_row}', row['수량변경'], fmt_money_bg)
+            # 처리후재고 셀에 배경색 적용
+            worksheet.write(f'E{current_row}', row['처리후재고'], fmt_money_bg)
             worksheet.write(f'F{current_row}', row['단위'], fmt_text_c)
             worksheet.write(f'G{current_row}', row['처리자'], fmt_text_c)
             current_row += 1
