@@ -727,8 +727,12 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         # 1. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        
+        # 텍스트 데이터용 왼쪽 정렬 포맷
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        
+        # 텍스트 데이터용 가운데 정렬 포맷
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         
         # 수량 및 재고 셀에 적용할 배경색 포맷을 테마 색상으로 변경
         fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
@@ -764,18 +768,17 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         current_row += 1
         
         for _, row in df_display.iterrows():
-            worksheet.write(f'A{current_row}', row['변동일시'], fmt_text_c)
+            # 품목코드, 단위, 처리자는 가운데 정렬, 나머지는 왼쪽 정렬
+            worksheet.write(f'A{current_row}', row['변동일시'], fmt_text_l)
             worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
             worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
-            # 수량변경 셀에 배경색 적용
             worksheet.write(f'D{current_row}', row['수량변경'], fmt_money_bg)
-            # 처리후재고 셀에 배경색 적용
             worksheet.write(f'E{current_row}', row['처리후재고'], fmt_money_bg)
             worksheet.write(f'F{current_row}', row['단위'], fmt_text_c)
             worksheet.write(f'G{current_row}', row['처리자'], fmt_text_c)
             current_row += 1
 
-        # 최종 너비 설정
+        # 최종 너비 설정 (수동 조정)
         col_widths_final = [20, 10, 30, 10, 10, 8, 12]
         for i, width in enumerate(col_widths_final):
             worksheet.set_column(i, i, width)
