@@ -2628,7 +2628,7 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
                 with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
                     st.markdown("\n".join(issues))
 
-def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame, orders_df: pd.DataFrame, balance_df: pd.DataFrame, transactions_df: pd.DataFrame, inventory_log_df: pd.DataFrame):
+def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame, orders_df: pd.DataFrame, balance_df: pd.DataFrame, transactions_df: pd.DataFrame, inventory_log_df: pd.DataFrame, charge_req_df: pd.DataFrame):
     st.subheader("🛠️ 관리 설정")
     if st.session_state.get('confirm_action') == "toggle_activation":
         data = st.session_state.confirm_data
