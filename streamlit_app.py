@@ -960,6 +960,15 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     st.subheader("💰 결제 관리")
     user = st.session_state.auth
 
+    # ### 1번 수정: 입력 필드 초기화 로직을 함수 최상단으로 이동 ###
+    # 'reset_form' 요청이 있으면, 위젯이 그려지기 전에 값을 먼저 초기화합니다.
+    if st.session_state.get("reset_form"):
+        st.session_state.depositor_name_input = ""
+        if st.session_state.charge_type_radio == '선충전':
+            st.session_state.charge_amount = 0
+        # 요청 처리 후 플래그 삭제
+        del st.session_state.reset_form
+
     prepaid_balance = int(balance_info.get('선충전잔액', 0))
     credit_limit = int(balance_info.get('여신한도', 0))
     used_credit = int(balance_info.get('사용여신액', 0))
@@ -985,30 +994,25 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
     if pending_repayment_sum > 0:
         st.warning(f"현재 처리 대기 중인 여신상환 요청 금액 {pending_repayment_sum:,.0f}원이 있습니다.\n\n해당 금액을 제외한 **{repayable_amount:,.0f}원**으로 상환 요청이 생성됩니다.")
 
-    # --- 1번 수정: on_change 콜백 함수 정의 ---
     def on_charge_type_change():
         if st.session_state.charge_type_radio == '여신상환':
-            # 라디오 버튼을 누르는 즉시 입금액을 상환 가능 금액으로 설정
             st.session_state.charge_amount = repayable_amount
         else:
-            # 선충전을 누르면 입금액을 기본값으로 리셋 (예: 0)
             st.session_state.charge_amount = 0
 
     charge_type = st.radio(
         "종류 선택", ["선충전", "여신상환"], 
         key="charge_type_radio", 
         horizontal=True,
-        on_change=on_charge_type_change # 콜백 함수 연결
+        on_change=on_charge_type_change
     )
 
-    # 라디오 버튼 선택에 따라 입금액 입력칸 비활성화 여부 결정
     is_disabled = st.session_state.charge_type_radio == '여신상환'
 
     with st.form("charge_request_form", border=True):
         st.markdown(f"##### {charge_type} 알림 보내기")
         c1, c2 = st.columns(2)
         
-        # 입금자명 위젯에 key를 부여하여 제어 가능하도록 함
         depositor_name = c1.text_input("입금자명", key="depositor_name_input")
         
         charge_amount = c2.number_input(
@@ -1028,9 +1032,8 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
                     if append_rows_to_sheet(CONFIG['CHARGE_REQ']['name'], [new_request], CONFIG['CHARGE_REQ']['cols']):
                         st.session_state.success_message = "관리자에게 입금 완료 알림을 보냈습니다. 확인 후 처리됩니다."
                         
-                        # --- 2번 수정: 성공 시 입력 필드 초기화 ---
-                        st.session_state.depositor_name_input = ""
-                        on_charge_type_change() # 현재 선택된 종류에 맞게 금액 초기화
+                        # ### 2번 수정: 직접 값을 바꾸는 대신, 'reset_form' 플래그를 설정 ###
+                        st.session_state.reset_form = True
                         
                         clear_data_cache()
                         st.rerun()
