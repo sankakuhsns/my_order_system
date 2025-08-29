@@ -1778,47 +1778,20 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
     return False
 
 def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame, master_df: pd.DataFrame):
-    # 버튼 클릭 후 작업이 진행 중인지 확인하는 상태 값 초기화
-    if 'processing_approval' not in st.session_state:
-        st.session_state.processing_approval = False
-
-    # 처리 후 메시지를 한 번만 표시하기 위한 플래그
-    if st.session_state.get("show_admin_feedback"):
-        display_feedback()
-        st.session_state.show_admin_feedback = False
-
-    page_size = 10
-    page_number = render_paginated_ui(len(pending_orders), page_size, "pending_orders")
-    start_idx = (page_number - 1) * page_size
-    end_idx = start_idx + page_size
     
-    pending_display = pending_orders.iloc[start_idx:end_idx].copy()
-    pending_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in pending_display['발주번호']])
-    
-    edited_pending = st.data_editor(pending_display, key="admin_pending_editor", hide_index=True, disabled=pending_display.columns.drop("선택"), column_order=("선택", "주문일시", "발주번호", "지점명", "건수", "합계금액(원)", "상태"))
-    
-    for _, row in edited_pending.iterrows():
-        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
-    
-    selected_pending_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in pending_orders['발주번호'].values]
-    
-    st.markdown("---")
-    st.markdown("##### 📦 선택한 발주 처리")
-
-    btn_cols = st.columns(2)
-    with btn_cols[0]:
-        if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids or st.session_state.processing_approval, use_container_width=True, type="primary"):
-            st.session_state.processing_approval = True
-            st.session_state.approve_ids = selected_pending_ids
-            st.rerun()
-
+    # --- 최종 수정: 로직 순서 변경 ---
+    # 1. 승인 작업 요청이 있는지 먼저 확인하고 처리합니다.
     if st.session_state.get('approve_ids'):
         with st.spinner("발주 승인 및 재고 차감 처리 중..."):
             ids_to_process = st.session_state.approve_ids
+            # 한 번 사용 후 바로 삭제하여 중복 실행 방지
             del st.session_state.approve_ids
 
+            # 최신 데이터로 처리하기 위해 캐시를 비우고 데이터를 다시 불러옵니다.
+            clear_data_cache()
             current_inv_df = get_inventory_from_log(master_df)
             all_pending_orders = get_orders_df().query(f"상태 == '{CONFIG['ORDER_STATUS']['PENDING']}'")
+            
             other_pending_orders = all_pending_orders[~all_pending_orders['발주번호'].isin(ids_to_process)]
             pending_qty = other_pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
             inventory_check = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
@@ -1856,8 +1829,33 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
                 else:
                     st.session_state.error_message = "처리 중 오류가 발생했습니다. 재고 또는 주문 상태를 확인해주세요."
             
-            st.session_state.show_admin_feedback = True
-            st.session_state.processing_approval = False
+            # 처리 완료 후 캐시를 비우고 즉시 새로고침하여 최신 상태를 반영
+            clear_data_cache()
+            st.rerun()
+
+    # 2. 페이지의 나머지 부분을 렌더링합니다.
+    page_size = 10
+    page_number = render_paginated_ui(len(pending_orders), page_size, "pending_orders")
+    start_idx = (page_number - 1) * page_size
+    end_idx = start_idx + page_size
+    
+    pending_display = pending_orders.iloc[start_idx:end_idx].copy()
+    pending_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in pending_display['발주번호']])
+    
+    edited_pending = st.data_editor(pending_display, key="admin_pending_editor", hide_index=True, disabled=pending_display.columns.drop("선택"), column_order=("선택", "주문일시", "발주번호", "지점명", "건수", "합계금액(원)", "상태"))
+    
+    for _, row in edited_pending.iterrows():
+        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
+    
+    selected_pending_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in pending_orders['발주번호'].values]
+    
+    st.markdown("---")
+    st.markdown("##### 📦 선택한 발주 처리")
+
+    btn_cols = st.columns(2)
+    with btn_cols[0]:
+        if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, use_container_width=True, type="primary"):
+            st.session_state.approve_ids = selected_pending_ids
             st.rerun()
 
     with btn_cols[1]:
