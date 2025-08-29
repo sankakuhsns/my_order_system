@@ -730,9 +730,8 @@ def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
         
-        # 수량 및 재고 셀에 적용할 배경색 포맷
-        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#F2F2F2'})
-        fmt_text_c_bg = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#F2F2F2'})
+        # 수량 및 재고 셀에 적용할 배경색 포맷을 테마 색상으로 변경
+        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
 
         # 2. 데이터 전처리 및 열 선택
         df_display = df_report.drop(columns=['작업일자', '관련번호', '사유', '구분'], errors='ignore').copy()
