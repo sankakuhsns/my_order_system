@@ -407,14 +407,12 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        # ### 1번 수정: 파일 이름을 '품목거래내역서'로 변경 ###
         worksheet = workbook.add_worksheet("품목거래내역서")
 
         # 인쇄 시 모든 열을 한 페이지에 맞춤
         worksheet.fit_to_pages(1, 0)
 
         # 2. Excel 서식 정의
-        # ### 1번 수정: 제목을 '품목 거래 내역서'로 변경 ###
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
@@ -467,7 +465,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.merge_range('D11:E11', '총 합계 금액', fmt_summary_header)
         worksheet.merge_range('F11:I11', grand_total, fmt_summary_money)
 
-        # ### 2번 수정: 요약 정보와 목록 사이에 한 줄 띄우기 위해 시작 행을 13으로 설정 ###
         current_row = 13 
 
         # 6. 본문 데이터 작성
@@ -482,11 +479,15 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
 
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
-            current_row += 1
+            
+            # ### 최종 수정: 헤더 작성 후 바로 다음 줄부터 데이터 작성을 위해 current_row를 여기서 증가시키지 않음 ###
+            # current_row += 1  <- 이 부분을 삭제해야 헤더와 목록이 붙습니다.
 
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
+                # 데이터 행을 쓰기 직전에 current_row를 1 증가시켜 헤더 바로 다음 줄부터 시작
+                current_row += 1
                 worksheet.write(current_row, 0, item_counter, fmt_text_c)
                 worksheet.write(current_row, 1, record['품목코드'], fmt_text_c)
                 worksheet.write(current_row, 2, record['품목명'], fmt_text_l)
@@ -496,9 +497,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 worksheet.write(current_row, 6, record['공급가액'], fmt_money)
                 worksheet.write(current_row, 7, record['세액'], fmt_money)
                 worksheet.write(current_row, 8, record['합계금액'], fmt_money)
-                current_row += 1
                 item_counter += 1
             
+            current_row += 1 
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'H{current_row}', date_df['세액'].sum(), fmt_subtotal_money)
