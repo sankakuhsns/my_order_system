@@ -535,7 +535,7 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
         fmt_summary_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-        fmt_summary_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'left', 'valign': 'vcenter'})
+        fmt_summary_data = workbook.add_format({'font_size': 9, 'border': 1, 'align': 'center', 'valign': 'vcenter'}) # 거래 기간을 중앙 정렬로 변경
         fmt_summary_money = workbook.add_format({'bold': True, 'font_size': 9, 'num_format': '#,##0 "원"', 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
@@ -559,8 +559,8 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
         
         # 4. 정보 영역
         # 요청에 따라 A열과 D열에 라벨을 쓰고 셀 병합도 수정
-        worksheet.merge_range('A4:B4', '공급하는자', fmt_subtitle)
-        worksheet.merge_range('C4:F4', '공급받는자', fmt_subtitle)
+        worksheet.merge_range('A4:C4', '공급하는자', fmt_subtitle)
+        worksheet.merge_range('D4:F4', '공급받는자', fmt_subtitle)
 
         info_data = [('사업자번호', '사업자등록번호'), ('상호', '상호명'), ('대표자', '대표자명'), ('사업장주소', '사업장주소'), ('업태/종목', '업태/종목')]
         for i in range(5, 10): worksheet.set_row(i-1, 28)
@@ -569,10 +569,10 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
             val_sup = f"{supplier_info.get('업태', '')}/{supplier_info.get('종목', '')}" if key == '업태/종목' else supplier_info.get(key, '')
             val_cus = f"{customer_info.get('업태', '')}/{customer_info.get('종목', '')}" if key == '업태/종목' else customer_info.get(key, '')
             
-            worksheet.write(f'A{i}', label, fmt_info_label)
-            worksheet.write(f'B{i}', val_sup, fmt_info_data)
-            worksheet.write(f'C{i}', label, fmt_info_label)
-            worksheet.merge_range(f'D{i}:F{i}', val_cus, fmt_info_data)
+            worksheet.merge_range(f'A{i}:B{i}', label, fmt_info_label)
+            worksheet.write(f'C{i}', val_sup, fmt_info_data)
+            worksheet.merge_range(f'D{i}:E{i}', label, fmt_info_label)
+            worksheet.write(f'F{i}', val_cus, fmt_info_data)
         
         # 5. 거래 요약 정보
         dt_from = pd.to_datetime(df_transactions_period['일시']).min().date()
