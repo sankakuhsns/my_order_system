@@ -1037,6 +1037,13 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
     
+    # 처리 후 메시지 표시
+    if st.session_state.get("show_feedback"):
+        if "success_message" in st.session_state and st.session_state.success_message:
+            st.success(st.session_state.success_message)
+            st.session_state.success_message = ""
+        st.session_state.show_feedback = False
+
     df_all_orders = get_orders_df()
     df_all_transactions = get_transactions_df()
     df_balance = get_balance_df()
@@ -1091,34 +1098,45 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         )
         
         selected_to_cancel = [oid for oid, selected in st.session_state.store_orders_selection.items() if selected and oid in pending['발주번호'].values]
+        
+        # 버튼 클릭 시, session_state에 취소할 ID 목록을 저장하고 rerun
         if st.button("선택한 발주 요청 취소하기", disabled=not selected_to_cancel, type="primary"):
-            for order_id in selected_to_cancel:
-                original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
-                if not original_transaction.empty:
-                    trans_info = original_transaction.iloc[0]
-                    refund_amount = abs(int(trans_info['금액']))
-                    
-                    balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
-                    if not balance_info_df.empty:
-                        balance_info = balance_info_df.iloc[0]
-                        new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
-                        credit_refund = min(refund_amount, new_used_credit)
-                        new_used_credit -= credit_refund
-                        new_prepaid += (refund_amount - credit_refund)
-                        update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit})
-                        
-                        refund_record = {
-                            "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
-                            "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
-                            "금액": refund_amount, "처리후선충전잔액": new_prepaid,
-                            "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
-                        }
-                        append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
-            
-            update_order_status(selected_to_cancel, "취소", user["name"])
-            st.session_state.success_message = f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다."
-            st.session_state.store_orders_selection = {}
+            st.session_state.cancel_ids = selected_to_cancel
             st.rerun()
+
+    # rerun 후, cancel_ids가 있으면 로직 실행
+    if "cancel_ids" in st.session_state and st.session_state.cancel_ids:
+        ids_to_process = st.session_state.cancel_ids
+        # 한 번 사용 후 바로 삭제하여 중복 실행 방지
+        del st.session_state.cancel_ids
+        
+        for order_id in ids_to_process:
+            original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
+            if not original_transaction.empty:
+                trans_info = original_transaction.iloc[0]
+                refund_amount = abs(int(trans_info['금액']))
+                balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
+                if not balance_info_df.empty:
+                    balance_info = balance_info_df.iloc[0]
+                    new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
+                    credit_refund = min(refund_amount, new_used_credit)
+                    new_used_credit -= credit_refund
+                    new_prepaid += (refund_amount - credit_refund)
+                    update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit})
+                    
+                    refund_record = {
+                        "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                        "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
+                        "금액": refund_amount, "처리후선충전잔액": new_prepaid,
+                        "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                    }
+                    append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
+        
+        update_order_status(ids_to_process, "취소", user["name"])
+        st.session_state.success_message = f"{len(ids_to_process)}건의 발주가 취소되고 환불 처리되었습니다."
+        st.session_state.store_orders_selection = {}
+        st.session_state.show_feedback = True # 메시지 표시 플래그
+        st.rerun()
     
     with tab2:
         shipped_display = shipped.copy()
@@ -1760,6 +1778,16 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
     return False
 
 def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame, master_df: pd.DataFrame):
+    # 처리 후 메시지 표시를 위한 로직
+    if st.session_state.get("show_admin_feedback"):
+        if "success_message" in st.session_state and st.session_state.success_message:
+            st.success(st.session_state.success_message)
+            st.session_state.success_message = ""
+        if "error_message" in st.session_state and st.session_state.error_message:
+            st.error(st.session_state.error_message)
+            st.session_state.error_message = ""
+        st.session_state.show_admin_feedback = False
+
     page_size = 10
     page_number = render_paginated_ui(len(pending_orders), page_size, "pending_orders")
     start_idx = (page_number - 1) * page_size
@@ -1780,51 +1808,60 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
 
     btn_cols = st.columns(2)
     with btn_cols[0]:
+        # 버튼 클릭 시, session_state에 승인할 ID 목록을 저장하고 rerun
         if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, use_container_width=True, type="primary"):
-            # ### 로직 수정: st.spinner를 제거하여 rerun과의 충돌 방지 ###
-
-            # 1. 재고 확인
-            current_inv_df = get_inventory_from_log(master_df)
-            all_pending_orders = get_orders_df().query(f"상태 == '{CONFIG['ORDER_STATUS']['PENDING']}'")
-            other_pending_orders = all_pending_orders[~all_pending_orders['발주번호'].isin(selected_pending_ids)]
-            pending_qty = other_pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
-            inventory_check = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
-            inventory_check['실질 가용 재고'] = inventory_check['현재고수량'] - inventory_check['출고 대기 수량']
-            
-            lacking_items_details = []
-            orders_to_approve_df = df_all[df_all['발주번호'].isin(selected_pending_ids)]
-            items_needed = orders_to_approve_df.groupby('품목코드')['수량'].sum().reset_index()
-
-            for _, needed in items_needed.iterrows():
-                item_code = needed['품목코드']
-                needed_qty = needed['수량']
-                stock_info = inventory_check.query(f"품목코드 == '{item_code}'")
-                available_stock = int(stock_info.iloc[0]['실질 가용 재고']) if not stock_info.empty else 0
-                if needed_qty > available_stock:
-                    item_name_series = master_df.loc[master_df['품목코드'] == item_code, '품목명']
-                    item_name = item_name_series.iloc[0] if not item_name_series.empty else item_code
-                    shortfall = needed_qty - available_stock
-                    lacking_items_details.append(f"- **{item_name}** (부족: **{shortfall}**개 / 필요: {needed_qty}개 / 가용: {available_stock}개)")
-
-            # 2. 재고 상태에 따라 처리 분기
-            if lacking_items_details:
-                details_str = "\n".join(lacking_items_details)
-                st.session_state.error_message = f"🚨 재고 부족으로 승인할 수 없습니다:\n{details_str}"
-            else:
-                items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
-                items_to_deduct['수량변경'] = -items_to_deduct['수량']
-                ref_id = ", ".join(selected_pending_ids)
-                
-                inventory_success = update_inventory(items_to_deduct, CONFIG['INV_CHANGE_TYPE']['SHIPMENT'], "system_auto", date.today(), ref_id=ref_id)
-                status_success = update_order_status(selected_pending_ids, CONFIG['ORDER_STATUS']['APPROVED'], st.session_state.auth["name"])
-
-                if inventory_success and status_success:
-                    st.session_state.success_message = f"{len(selected_pending_ids)}건이 승인 처리되고 재고가 차감되었습니다."
-                    st.session_state.admin_orders_selection.clear()
-                else:
-                    st.session_state.error_message = "처리 중 오류가 발생했습니다. 재고 또는 주문 상태를 확인해주세요."
-
+            st.session_state.approve_ids = selected_pending_ids
             st.rerun()
+
+    # approve_ids가 세션에 있으면 아래 로직을 실행
+    if "approve_ids" in st.session_state and st.session_state.approve_ids:
+        ids_to_process = st.session_state.approve_ids
+        # 한 번 사용 후 바로 삭제하여 중복 실행 방지
+        del st.session_state.approve_ids
+
+        # 1. 재고 확인
+        current_inv_df = get_inventory_from_log(master_df)
+        all_pending_orders = get_orders_df().query(f"상태 == '{CONFIG['ORDER_STATUS']['PENDING']}'")
+        other_pending_orders = all_pending_orders[~all_pending_orders['발주번호'].isin(ids_to_process)]
+        pending_qty = other_pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
+        inventory_check = pd.merge(current_inv_df, pending_qty, on='품목코드', how='left').fillna(0)
+        inventory_check['실질 가용 재고'] = inventory_check['현재고수량'] - inventory_check['출고 대기 수량']
+        
+        lacking_items_details = []
+        orders_to_approve_df = df_all[df_all['발주번호'].isin(ids_to_process)]
+        items_needed = orders_to_approve_df.groupby('품목코드')['수량'].sum().reset_index()
+
+        for _, needed in items_needed.iterrows():
+            item_code = needed['품목코드']
+            needed_qty = needed['수량']
+            stock_info = inventory_check.query(f"품목코드 == '{item_code}'")
+            available_stock = int(stock_info.iloc[0]['실질 가용 재고']) if not stock_info.empty else 0
+            if needed_qty > available_stock:
+                item_name_series = master_df.loc[master_df['품목코드'] == item_code, '품목명']
+                item_name = item_name_series.iloc[0] if not item_name_series.empty else item_code
+                shortfall = needed_qty - available_stock
+                lacking_items_details.append(f"- **{item_name}** (부족: **{shortfall}**개 / 필요: {needed_qty}개 / 가용: {available_stock}개)")
+
+        # 2. 재고 상태에 따라 처리 분기
+        if lacking_items_details:
+            details_str = "\n".join(lacking_items_details)
+            st.session_state.error_message = f"🚨 재고 부족으로 승인할 수 없습니다:\n{details_str}"
+        else:
+            items_to_deduct = orders_to_approve_df.groupby(['품목코드', '품목명'])['수량'].sum().reset_index()
+            items_to_deduct['수량변경'] = -items_to_deduct['수량']
+            ref_id = ", ".join(ids_to_process)
+            
+            inventory_success = update_inventory(items_to_deduct, CONFIG['INV_CHANGE_TYPE']['SHIPMENT'], "system_auto", date.today(), ref_id=ref_id)
+            status_success = update_order_status(ids_to_process, CONFIG['ORDER_STATUS']['APPROVED'], st.session_state.auth["name"])
+
+            if inventory_success and status_success:
+                st.session_state.success_message = f"{len(ids_to_process)}건이 승인 처리되고 재고가 차감되었습니다."
+                st.session_state.admin_orders_selection.clear()
+            else:
+                st.session_state.error_message = "처리 중 오류가 발생했습니다. 재고 또는 주문 상태를 확인해주세요."
+        
+        st.session_state.show_admin_feedback = True
+        st.rerun()
 
     with btn_cols[1]:
         if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
