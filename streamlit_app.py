@@ -1394,32 +1394,54 @@ def perform_initial_audit():
         balance_df = get_balance_df()
         transactions_df = get_transactions_df()
         inventory_log_df = get_inventory_log_df()
+        charge_req_df = get_charge_requests_df() # ✅ 충전 요청 데이터 불러오기 추가
 
         results = {}
-        results['financial'] = audit_financial_data(balance_df, transactions_df)
+        # ✅ audit_financial_data에 charge_req_df 전달
+        results['financial'] = audit_financial_data(balance_df, transactions_df, charge_req_df)
         results['links'] = audit_transaction_links(transactions_df, orders_df)
         results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
         results['integrity'] = audit_data_integrity(orders_df, transactions_df, stores_df, master_df)
         
         st.session_state['audit_results'] = results
         st.session_state['initial_audit_done'] = True
-
-def audit_financial_data(balance_df, transactions_df):
+        
+def audit_financial_data(balance_df, transactions_df, charge_req_df):
     issues = []
     store_ids = balance_df[balance_df['지점ID'] != ''].dropna(subset=['지점ID'])['지점ID'].unique()
+    
     for store_id in store_ids:
         store_balance = balance_df[balance_df['지점ID'] == store_id].iloc[0]
         store_tx = transactions_df[transactions_df['지점ID'] == store_id]
+        
+        # --- 선충전 잔액 감사 로직 수정 ---
         prepaid_tx = store_tx[store_tx['구분'].str.contains('선충전|발주취소|발주반려|수동조정\(충전\)', na=False)]
         calculated_prepaid = prepaid_tx['금액'].sum()
+
+        # ✅ '요청' 상태인 '선충전' 금액을 추가로 계산
+        pending_charges = charge_req_df[
+            (charge_req_df['지점ID'] == store_id) &
+            (charge_req_df['상태'] == '요청') &
+            (charge_req_df['종류'] == '선충전')
+        ]
+        pending_charge_sum = pending_charges['입금액'].sum()
+        
+        # ✅ 마스터 잔액과 비교할 최종 계산 금액 = 거래내역 합산액 + 처리 대기중인 충전 요청액
+        final_calculated_prepaid = calculated_prepaid + pending_charge_sum
+        
+        master_prepaid = int(store_balance['선충전잔액'])
+
+        if master_prepaid != final_calculated_prepaid:
+            issues.append(f"- **{store_balance['지점명']}**: 선충전 잔액 불일치 (장부: {master_prepaid: ,}원 / 계산: {final_calculated_prepaid: ,}원)")
+        
+        # --- 사용 여신액 감사 로직 (변경 없음) ---
         credit_tx = store_tx[store_tx['구분'].str.contains('여신결제|여신상환|수동조정\(여신\)', na=False)]
         calculated_credit = credit_tx[credit_tx['구분'].str.contains('여신결제', na=False)]['금액'].abs().sum() - credit_tx[credit_tx['구분'].str.contains('여신상환', na=False)]['금액'].abs().sum()
-        master_prepaid = int(store_balance['선충전잔액'])
         master_credit = int(store_balance['사용여신액'])
-        if master_prepaid != calculated_prepaid:
-            issues.append(f"- **{store_balance['지점명']}**: 선충전 잔액 불일치 (장부: {master_prepaid: ,}원 / 계산: {calculated_prepaid: ,}원)")
+
         if master_credit != calculated_credit:
             issues.append(f"- **{store_balance['지점명']}**: 사용 여신액 불일치 (장부: {master_credit: ,}원 / 계산: {calculated_credit: ,}원)")
+
     if issues:
         return "❌ 오류", issues
     return "✅ 정상", []
