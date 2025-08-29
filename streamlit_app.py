@@ -1199,7 +1199,9 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     supplier_info = supplier_info_df.iloc[0]
                     customer_info = customer_info_df.iloc[0]
                     buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                    st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+                    
+                    # ### 1번 수정: 버튼명과 파일명을 '품목거래내역서'로 변경 ###
+                    st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
@@ -1214,9 +1216,10 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     dt_from = c1.date_input("조회 시작일", date.today() - timedelta(days=30), key="store_doc_from")
     dt_to = c2.date_input("조회 종료일", date.today(), key="store_doc_to")
     
-    doc_type = c3.selectbox("서류 종류", ["금전 거래내역서", "품목 거래명세서"])
+    # ### 2번 수정: 서류 종류 용어 통일 ###
+    doc_type = c3.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"])
     
-    if doc_type == "금전 거래내역서":
+    if doc_type == "금전거래내역서":
         c4.empty()
         transactions_df_all = get_transactions_df()
         my_transactions = transactions_df_all[transactions_df_all['지점ID'] == user['user_id']]
@@ -1238,9 +1241,9 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         if not customer_info_df.empty:
             customer_info = customer_info_df.iloc[0]
             buf = create_unified_financial_statement(dfv, transactions_df_all, customer_info)
-            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래명세서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+            st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래내역서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
     
-    elif doc_type == "품목 거래명세서":
+    elif doc_type == "품목거래내역서":
         orders_df = get_orders_df()
         my_orders = orders_df[(orders_df['지점ID'] == user['user_id']) & (orders_df['상태'].isin(['승인', '출고완료']))]
         
@@ -1263,7 +1266,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
         
         if supplier_info_df.empty or customer_info_df.empty:
-            st.error("거래명세서 출력에 필요한 공급자 또는 지점 정보가 없습니다.")
+            st.error("내역서 출력에 필요한 공급자 또는 지점 정보가 없습니다.")
             return
             
         supplier_info = supplier_info_df.iloc[0]
@@ -1277,8 +1280,9 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
         if not preview_df.empty:
             buf = create_unified_item_statement(preview_df, supplier_info, customer_info)
-            download_label = "기간 전체 명세서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 명세서"
-            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+            # ### 2번 수정: 버튼명과 파일명을 '품목거래내역서'로 변경 ###
+            download_label = "기간 전체 내역서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 내역서"
+            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
