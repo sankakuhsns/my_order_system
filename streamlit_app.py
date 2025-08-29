@@ -2583,7 +2583,7 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                     st.session_state.confirm_data = {'store_id': store_id, 'is_active': is_active, 'name': selected_store_name}
                     st.rerun()
 
-def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df):
+def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df, charge_req_df):
     st.markdown("##### 🩺 시스템 점검")
     with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
         st.markdown("""
@@ -2593,7 +2593,8 @@ def render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance
     if st.button("🚀 전체 시스템 점검 시작", use_container_width=True, type="primary"):
         with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
             results = {}
-            results['financial'] = audit_financial_data(balance_df, transactions_df)
+            # ✅ charge_req_df를 함께 전달
+            results['financial'] = audit_financial_data(balance_df, transactions_df, charge_req_df)
             results['links'] = audit_transaction_links(transactions_df, orders_df)
             results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
             results['integrity'] = audit_data_integrity(orders_df, transactions_df, store_info_df_raw, master_df_raw)
@@ -2668,7 +2669,7 @@ def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataF
     with tabs[1]:
         render_store_settings_tab(store_info_df_raw)
     with tabs[2]:
-        render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df)
+        render_system_audit_tab(store_info_df_raw, master_df_raw, orders_df, balance_df, transactions_df, inventory_log_df, charge_req_df)
     with tabs[3]:
         page_admin_audit_log()
 
@@ -2701,7 +2702,8 @@ if __name__ == "__main__":
             with tabs[7]:
                 page_admin_settings(
                     get_stores_df(), get_master_df(), get_orders_df(), 
-                    get_balance_df(), get_transactions_df(), get_inventory_log_df()
+                    get_balance_df(), get_transactions_df(), get_inventory_log_df(),
+                    get_charge_requests_df() # ✅ 이 부분을 추가합니다.
                 )
 
         else: # store
