@@ -2390,9 +2390,19 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     )
     st.divider()
 
-    # 다운로드 버튼 표시를 위한 placeholder
-    download_button_placeholder = st.empty()
+    # 이전에 생성된 리포트가 있다면 다운로드 버튼을 먼저 표시
+    if st.session_state.excel_buffer:
+        st.markdown("##### ✅ 보고서 생성 완료!")
+        st.download_button(
+            label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
+            data=st.session_state.excel_buffer,
+            file_name=st.session_state.report_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+        st.markdown("---")
 
+    # 지점별 서류 생성 UI
     if doc_type_selected == "지점별 서류 (거래내역서 등)":
         st.markdown("##### 1. 조건 설정")
         with st.container(border=True):
@@ -2486,16 +2496,16 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                                 excel_buffer = None
                                 file_name = "report.xlsx"
 
-                    if excel_buffer:
-                        st.session_state.excel_buffer = excel_buffer
-                        st.session_state.report_filename = file_name
-                        st.session_state.report_df = report_df
+                    st.session_state.excel_buffer = excel_buffer
+                    st.session_state.report_filename = file_name
+                    st.session_state.report_df = report_df
                     st.rerun()
 
+    # 기간별 종합 리포트 생성 UI
     elif doc_type_selected == "기간별 종합 리포트 (정산용)":
-        st.markdown("###### 📅 기간별 종합 리포트")
-        st.info("아래에서 설정된 조회 기간의 전체 데이터를 종합하여 정산용 엑셀 파일을 생성합니다.")
         with st.container(border=True):
+            st.markdown("###### 📅 기간별 종합 리포트")
+            st.info("아래에서 설정된 조회 기간의 전체 데이터를 종합하여 정산용 엑셀 파일을 생성합니다.")
             c1, c2 = st.columns(2)
             dt_from_report = c1.date_input("조회 시작일", date.today().replace(day=1), key="report_from")
             dt_to_report = c2.date_input("조회 종료일", date.today(), key="report_to")
@@ -2518,7 +2528,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
     # placeholder를 사용하여 다운로드 버튼을 올바른 위치에 렌더링
     if st.session_state.excel_buffer:
-        download_button_placeholder.download_button(
+        st.download_button(
             label=f"⬇️ '{st.session_state.report_filename}' 엑셀 파일 다운로드",
             data=st.session_state.excel_buffer,
             file_name=st.session_state.report_filename,
@@ -2526,8 +2536,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             use_container_width=True
         )
     else:
-        # 파일이 생성되지 않은 경우 메시지 출력
-        download_button_placeholder.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
+        st.info("조회할 조건을 선택하고 '데이터 조회하기' 버튼을 눌러주세요.")
         
 def page_admin_balance_management(store_info_df: pd.DataFrame):
     st.subheader("💰 결제 관리")
