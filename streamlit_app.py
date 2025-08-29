@@ -475,17 +475,19 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             current_row += 1
             related_orders = order_ids_by_date.get(trade_date, "")
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
+            current_row += 1
+
+            headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
+            worksheet.write_row(f'A{current_row}', headers, fmt_header)
             
             # ### 최종 수정: 아래 current_row 증가 코드를 제거하여 헤더와 목록 사이의 빈 줄 삭제 ###
             # current_row += 1 
 
-            headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
-            worksheet.write_row(f'A{current_row}', headers, fmt_header)
-            current_row += 1
-
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
+                # 데이터 행을 쓰기 직전에 current_row를 1 증가시킴
+                current_row += 1
                 worksheet.write(current_row, 0, item_counter, fmt_text_c)
                 worksheet.write(current_row, 1, record['품목코드'], fmt_text_c)
                 worksheet.write(current_row, 2, record['품목명'], fmt_text_l)
@@ -495,9 +497,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 worksheet.write(current_row, 6, record['공급가액'], fmt_money)
                 worksheet.write(current_row, 7, record['세액'], fmt_money)
                 worksheet.write(current_row, 8, record['합계금액'], fmt_money)
-                current_row += 1
                 item_counter += 1
             
+            current_row += 1 # 마지막 데이터 행 다음으로 이동
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'H{current_row}', date_df['세액'].sum(), fmt_subtotal_money)
