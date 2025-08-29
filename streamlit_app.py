@@ -798,7 +798,8 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
 
     # 상품마스터 데이터를 불러와 품목규격 및 단위 정보를 결합
     master_df = get_master_df()
-    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위', '분류']], on='품목코드', how='left')
+    # df_report에 없는 '품목규격'과 '단위'만 병합하도록 수정
+    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위']], on='품목코드', how='left')
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
