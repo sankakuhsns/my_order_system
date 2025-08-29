@@ -1092,34 +1092,34 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         
         selected_to_cancel = [oid for oid, selected in st.session_state.store_orders_selection.items() if selected and oid in pending['발주번호'].values]
         if st.button("선택한 발주 요청 취소하기", disabled=not selected_to_cancel, type="primary"):
-            with st.spinner("발주 취소 및 환불 처리 중..."):
-                for order_id in selected_to_cancel:
-                    original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
-                    if not original_transaction.empty:
-                        trans_info = original_transaction.iloc[0]
-                        refund_amount = abs(int(trans_info['금액']))
+            # ### 로직 수정: st.spinner를 제거하여 rerun과의 충돌 방지 ###
+            for order_id in selected_to_cancel:
+                original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
+                if not original_transaction.empty:
+                    trans_info = original_transaction.iloc[0]
+                    refund_amount = abs(int(trans_info['금액']))
+                    
+                    balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
+                    if not balance_info_df.empty:
+                        balance_info = balance_info_df.iloc[0]
+                        new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
+                        credit_refund = min(refund_amount, new_used_credit)
+                        new_used_credit -= credit_refund
+                        new_prepaid += (refund_amount - credit_refund)
+                        update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit})
                         
-                        balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
-                        if not balance_info_df.empty:
-                            balance_info = balance_info_df.iloc[0]
-                            new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
-                            credit_refund = min(refund_amount, new_used_credit)
-                            new_used_credit -= credit_refund
-                            new_prepaid += (refund_amount - credit_refund)
-                            update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit})
-                            
-                            refund_record = {
-                                "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
-                                "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
-                                "금액": refund_amount, "처리후선충전잔액": new_prepaid,
-                                "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
-                            }
-                            append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
-                
-                update_order_status(selected_to_cancel, "취소", user["name"])
-                st.session_state.success_message = f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다."
-                st.session_state.store_orders_selection = {}
-                st.rerun()
+                        refund_record = {
+                            "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                            "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
+                            "금액": refund_amount, "처리후선충전잔액": new_prepaid,
+                            "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                        }
+                        append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
+            
+            update_order_status(selected_to_cancel, "취소", user["name"])
+            st.session_state.success_message = f"{len(selected_to_cancel)}건의 발주가 취소되고 환불 처리되었습니다."
+            st.session_state.store_orders_selection = {}
+            st.rerun()
     
     with tab2:
         shipped_display = shipped.copy()
@@ -1168,7 +1168,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     supplier_info = supplier_info_df.iloc[0]
                     customer_info = customer_info_df.iloc[0]
                     buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                    st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+                    st.download_button("📄 품목 거래명세서 다운로드", data=buf, file_name=f"품목거래명세서_{user['name']}_{target_id}.xlsx", mime="application/vnd.ms-excel", use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
