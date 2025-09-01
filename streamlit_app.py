@@ -2402,8 +2402,8 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
         'period': f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}",
         'store': store_sel
     }
-    excel_buffer = make_sales_summary_excel(df_sales, daily_pivot, monthly_pivot, summary_data, filter_info)
-    # 버튼 이름 변경
+    # orders_df 인자를 추가하여 make_sales_summary_excel 함수에 전달
+    excel_buffer = make_sales_summary_excel(df_sales, df_orders, daily_pivot, monthly_pivot, summary_data, filter_info)
     st.download_button(label="📥 매출정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
