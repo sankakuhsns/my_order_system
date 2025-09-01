@@ -1219,7 +1219,14 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             )
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-                items_to_add = coerce_cart_df(pd.DataFrame(edited_disp))
+                # ✨ 추가된 부분: 음수 값 입력 방지 로직
+                edited_df = pd.DataFrame(edited_disp)
+                if (pd.to_numeric(edited_df['수량'], errors='coerce') < 0).any():
+                    st.session_state.error_message = "발주 수량은 0 이상이어야 합니다. 음수 값을 수정해주세요."
+                    st.rerun()
+                # ✨ 수정 끝
+                
+                items_to_add = coerce_cart_df(edited_df)
                 if not items_to_add[items_to_add["수량"] > 0].empty:
                     add_to_cart(items_to_add, master_df)
                     st.session_state.store_editor_ver += 1
@@ -1989,7 +1996,14 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                 if production_date != date.today() and not change_reason:
                     st.warning("생산일자를 변경한 경우, 변경 사유를 반드시 입력해야 합니다.")
                 else:
-                    items_to_add = pd.DataFrame(edited_production)[pd.DataFrame(edited_production)['생산수량'] > 0]
+                    # ✨ 추가된 부분: 음수 값 입력 방지 로직
+                    edited_df = pd.DataFrame(edited_production)
+                    if (edited_df['생산수량'] < 0).any():
+                        st.session_state.error_message = "생산수량은 0 이상이어야 합니다. 음수 값을 수정해주세요."
+                        st.rerun()
+                    # ✨ 수정 끝
+                    
+                    items_to_add = edited_df[edited_df['생산수량'] > 0]
                     if not items_to_add.empty:
                         current_cart = st.session_state.production_cart
                         
@@ -2039,7 +2053,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                         st.session_state.production_cart = pd.DataFrame()
                         st.session_state.success_message = "생산 목록을 모두 삭제했습니다."
                         st.rerun()
-
+                        
 def page_admin_inventory_management(master_df: pd.DataFrame):
     st.subheader("📊 생산/재고 관리")
     inventory_tabs = st.tabs(["현재고 현황", "재고 변동 내역", "재고 수동 조정"])
@@ -2119,6 +2133,10 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             if st.form_submit_button("재고 조정 실행", type="primary"):
                 if not (selected_item and adj_reason and adj_qty != 0):
                     st.warning("모든 필드를 올바르게 입력해주세요.")
+                # ✨ 추가된 부분: 조정 후 재고가 음수가 되는 것을 방지
+                elif (current_stock + adj_qty) < 0:
+                    st.error(f"조정 후 재고가 음수가 될 수 없습니다. (현재고: {current_stock}개, 조정량: {adj_qty}개)")
+                # ✨ 수정 끝
                 else:
                     item_info_df = master_df[master_df['품목명'] == selected_item]
                     if not item_info_df.empty:
@@ -2930,6 +2948,12 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             user = st.session_state.auth
                             old_value = int(current_balance[adj_type])
                             new_value = old_value + adj_amount
+
+                            # ✨ 수정된 부분: '여신한도'를 포함한 모든 항목에 음수 방지 로직 적용
+                            if new_value < 0:
+                                st.error(f"조정 후 {adj_type}이(가) 0보다 작아질 수 없습니다. (현재값: {old_value}, 조정액: {adj_amount})")
+                                st.rerun()
+                            # ✨ 수정 끝
 
                             add_audit_log(
                                 user_id=user['user_id'], user_name=user['name'],
