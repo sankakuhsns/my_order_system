@@ -803,7 +803,7 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
     # ✨ 총 금액 열 계산
     df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
     df_merged['현재고수량'] = pd.to_numeric(df_merged['현재고수량'], errors='coerce').fillna(0).astype(int)
-    df_merged['총 금액'] = df_merged['단가'] * df_merged['현재고수량']
+    df_merged['총금액'] = df_merged['단가'] * df_merged['현재고수량']
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
@@ -824,7 +824,7 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'num_format': '#,##0 "원"', 'align': 'right', 'valign': 'vcenter', 'border': 1})
 
         # 2. 데이터 및 열 순서 재정의
-        columns_order = ['품목코드', '분류', '품목명', '품목규격', '단위', '단가', '현재고수량', '총 금액']
+        columns_order = ['품목코드', '분류', '품목명', '품목규격', '단위', '단가', '현재고수량', '총금액']
         df_display = df_merged[columns_order].copy()
 
         # 3. 헤더 영역 작성
@@ -837,7 +837,7 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         current_row += 2
 
         # 5. 본문 데이터
-        headers = ['품목코드', '분류', '품목명', '품목규격', '단위', '단가', '현재고수량', '총 금액']
+        headers = ['품목코드', '분류', '품목명', '품목규격', '단위', '단가', '현재고수량', '총금액']
         worksheet.write_row(f'A{current_row}', headers, fmt_header)
         current_row += 1
         
@@ -849,13 +849,13 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
             worksheet.write(f'E{current_row}', row['단위'], fmt_text_c)
             worksheet.write(f'F{current_row}', row['단가'], fmt_money_c) # 단가 열 추가
             worksheet.write(f'G{current_row}', row['현재고수량'], fmt_money_bg_c)
-            worksheet.write(f'H{current_row}', row['총 금액'], fmt_money_bg_c) # 총 금액 열 추가
+            worksheet.write(f'H{current_row}', row['총금액'], fmt_money_bg_c) # 총 금액 열 추가
             current_row += 1
 
         # ✨ 6. 총 평가금액 합계 행 추가
         current_row += 1 # 한 칸 띄우기
-        total_valuation = df_display['총 금액'].sum()
-        worksheet.merge_range(f'A{current_row}:G{current_row}', '총 평가금액', fmt_subtotal_label)
+        total_valuation = df_display['총금액'].sum()
+        worksheet.merge_range(f'A{current_row}:G{current_row}', '총평가금액', fmt_subtotal_label)
         worksheet.write(f'H{current_row}', total_valuation, fmt_subtotal_money)
 
         # 7. 최종 열 너비 및 행 높이 설정
