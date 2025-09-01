@@ -633,82 +633,93 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
     if df_report.empty:
         return output
 
-    # 상품마스터 데이터를 불러와 단위 정보를 결합
+    # 1. 데이터 전처리: 단가 정보를 가져오고 '총 금액' 계산
     master_df = get_master_df()
-    df_merged = pd.merge(df_report, master_df[['품목코드', '단위']], on='품목코드', how='left')
+    df_merged = pd.merge(df_report, master_df[['품목코드', '단위', '단가']], on='품목코드', how='left')
     
+    # 숫자형으로 변환 및 '총 금액' 계산
+    df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
+    df_merged['수량변경'] = pd.to_numeric(df_merged['수량변경'], errors='coerce').fillna(0).astype(int)
+    df_merged['총 금액'] = df_merged['단가'] * df_merged['수량변경']
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet("품목생산보고서")
-
-        # 인쇄 시 모든 열을 한 페이지에 맞춤
         worksheet.fit_to_pages(1, 0)
         
-        # 1. Excel 서식 정의
+        # 2. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        fmt_money_r = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_subtotal_qty = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
+        # 최종 합계용 서식 추가
+        fmt_grand_total_label = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_grand_total_money = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'num_format': '#,##0 "원"', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+
         
-        # 2. 데이터 전처리 및 열 선택
-        # '로그일시', '관련번호', '사유', '구분' 열 삭제
+        # 3. 데이터 및 열 순서 재정의
         df_display = df_merged.drop(columns=['로그일시', '관련번호', '사유', '구분'], errors='ignore').copy()
-        
-        # '작업일자'를 'YYYY-MM-DD' 형식으로 포맷팅
         df_display['작업일자'] = pd.to_datetime(df_display['작업일자']).dt.strftime('%Y-%m-%d')
         
-        # 열 순서 재정의 (품목명 옆에 단위 추가)
-        columns_order = ['작업일자', '품목코드', '품목명', '단위', '수량변경', '처리후재고']
+        columns_order = ['작업일자', '품목코드', '품목명', '단위', '단가', '수량변경', '총 금액', '처리후재고']
         df_display = df_display.reindex(columns=columns_order, fill_value='')
 
-        # 3. 헤더 영역 작성
+        # 4. 헤더 영역 작성 (8개 열로 확장)
+        num_cols = len(df_display.columns)
+        last_col_letter = chr(64 + num_cols)
         worksheet.set_row(0, 50)
-        worksheet.merge_range('A1:F1', '품 목 생 산 보 고 서', fmt_title)
+        worksheet.merge_range(f'A1:{last_col_letter}1', '품 목 생 산 보 고 서', fmt_title)
 
-        # 4. 보고서 정보 (조회 기간 및 설명)
+        # 5. 보고서 정보
         current_row = 2
-        worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
+        worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
         current_row += 1
         
-        # 안내 문구 오른쪽 정렬 및 볼드 처리
         fmt_info_text_right_bold = workbook.add_format({'font_size': 9, 'align': 'right', 'valign': 'top', 'text_wrap': True, 'bold': True})
-        worksheet.merge_range(f'A{current_row}:F{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등 다른 항목들은 반영되지 않습니다.", fmt_info_text_right_bold)
+        worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등 다른 항목들은 반영되지 않습니다.", fmt_info_text_right_bold)
         current_row += 2
 
-        # 5. 본문 데이터 (일자별 구분)
+        # 6. 본문 데이터
         grouped_by_date = df_display.groupby('작업일자')
         for date_str, date_group in grouped_by_date:
-            # 일자별 헤더 (좌측 정렬)
-            worksheet.merge_range(f'A{current_row}:F{current_row}', f"■ 생산일자: {date_str}", fmt_date_header)
+            worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', f"■ 생산일자: {date_str}", fmt_date_header)
             current_row += 1
             
-            # 일자별 테이블 헤더 (단위 열 추가)
-            headers = ['작업일자', '품목코드', '품목명', '단위', '생산수량', '처리후재고']
+            headers = ['작업일자', '품목코드', '품목명', '단위', '단가', '생산수량', '총 금액', '처리후재고']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             current_row += 1
 
-            # 일자별 데이터
             for _, row in date_group.iterrows():
-                # 작업일자 가운데 정렬
                 worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_c)
                 worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
                 worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
                 worksheet.write(f'D{current_row}', row['단위'], fmt_text_c)
-                worksheet.write(f'E{current_row}', row['수량변경'], fmt_subtotal_qty)
-                worksheet.write(f'F{current_row}', row['처리후재고'], fmt_subtotal_qty)
+                worksheet.write(f'E{current_row}', row['단가'], fmt_money_r)
+                worksheet.write(f'F{current_row}', row['수량변경'], fmt_subtotal_money)
+                worksheet.write(f'G{current_row}', row['총 금액'], fmt_subtotal_money)
+                worksheet.write(f'H{current_row}', row['처리후재고'], fmt_money_r)
                 current_row += 1
             
-            # 일자별 소계 (셀 병합 조정)
-            worksheet.merge_range(f'A{current_row}:D{current_row}', '일 계', fmt_subtotal_label)
-            worksheet.write(f'E{current_row}', date_group['수량변경'].sum(), fmt_subtotal_qty)
-            worksheet.write(f'F{current_row}', '', fmt_subtotal_label) # 처리후재고는 집계하지 않지만 색상만 적용
+            # 일계 (생산수량과 총금액 집계)
+            worksheet.merge_range(f'A{current_row}:E{current_row}', '일 계', fmt_subtotal_label)
+            worksheet.write(f'F{current_row}', date_group['수량변경'].sum(), fmt_subtotal_money)
+            worksheet.write(f'G{current_row}', date_group['총 금액'].sum(), fmt_subtotal_money)
+            worksheet.write(f'H{current_row}', '', fmt_subtotal_label)
             current_row += 2
 
-        # 최종 너비 설정 (단위 열 너비 조정)
-        col_widths_final = [12, 10, 30, 8, 10, 10]
+        # 7. 최종 합계
+        current_row += 1 # 한 칸 띄우기
+        grand_total_amount = df_display['총 금액'].sum()
+        label_text = f"조회기간 ({dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}) 총 생산 평가금액"
+        worksheet.merge_range(f'A{current_row}:G{current_row}', label_text, fmt_grand_total_label)
+        worksheet.write(f'H{current_row}', grand_total_amount, fmt_grand_total_money)
+        
+        # 8. 최종 너비 설정
+        col_widths_final = [12, 10, 30, 8, 10, 10, 12, 10]
         for i, width in enumerate(col_widths_final):
             worksheet.set_column(i, i, width)
 
