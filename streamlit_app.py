@@ -2133,9 +2133,10 @@ def page_admin_inventory_management(master_df: pd.DataFrame):
             if st.form_submit_button("재고 조정 실행", type="primary"):
                 if not (selected_item and adj_reason and adj_qty != 0):
                     st.warning("모든 필드를 올바르게 입력해주세요.")
-                # ✨ 추가된 부분: 조정 후 재고가 음수가 되는 것을 방지
+                # ✨ 수정된 부분: st.error 대신 st.session_state.error_message 사용
                 elif (current_stock + adj_qty) < 0:
-                    st.error(f"조정 후 재고가 음수가 될 수 없습니다. (현재고: {current_stock}개, 조정량: {adj_qty}개)")
+                    st.session_state.error_message = f"조정 후 재고가 음수가 될 수 없습니다. (현재고: {current_stock}개, 조정량: {adj_qty}개)"
+                    st.rerun()
                 # ✨ 수정 끝
                 else:
                     item_info_df = master_df[master_df['품목명'] == selected_item]
@@ -2949,9 +2950,9 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             old_value = int(current_balance[adj_type])
                             new_value = old_value + adj_amount
 
-                            # ✨ 수정된 부분: '여신한도'를 포함한 모든 항목에 음수 방지 로직 적용
+                            # ✨ 수정된 부분: st.error 대신 st.session_state.error_message 사용
                             if new_value < 0:
-                                st.error(f"조정 후 {adj_type}이(가) 0보다 작아질 수 없습니다. (현재값: {old_value}, 조정액: {adj_amount})")
+                                st.session_state.error_message = f"조정 후 {adj_type}이(가) 0보다 작아질 수 없습니다. (현재값: {old_value}, 조정액: {adj_amount})"
                                 st.rerun()
                             # ✨ 수정 끝
 
