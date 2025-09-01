@@ -497,7 +497,19 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 row_idx += 1
 
             current_row = row_idx + 1
+
+            # ✨✨✨ 수정된 부분 시작 ✨✨✨
+            # 해당 날짜의 요청사항(비고)을 가져와서 '일계' 바로 위에 추가
+            memos_series = df[df['거래일자'] == trade_date]['비고'].dropna().unique()
+            day_memo = ", ".join([str(memo) for memo in memos_series if str(memo).strip()])
+
+            if day_memo:
+                worksheet.merge_range(f'A{current_row}:B{current_row}', '요청사항', fmt_info_label)
+                worksheet.merge_range(f'C{current_row}:I{current_row}', day_memo, fmt_info_data)
+                current_row += 1
+            # ✨✨✨ 수정된 부분 끝 ✨✨✨
             
+            # 일계
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'H{current_row}', date_df['세액'].sum(), fmt_subtotal_money)
@@ -509,14 +521,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.write(f'G{current_row}', df_agg['공급가액'].sum(), fmt_subtotal_money)
         worksheet.write(f'H{current_row}', df_agg['세액'].sum(), fmt_subtotal_money)
         worksheet.write(f'I{current_row}', df_agg['합계금액'].sum(), fmt_subtotal_money)
-
-        # 8. 요청사항 추가
-        memo = orders_df['비고'].iloc[0] if not orders_df.empty and '비고' in orders_df.columns else ""
-        if pd.notna(memo) and memo.strip():
-            current_row += 2 # 한 칸 띄우기
-            worksheet.set_row(current_row -1, 35) # 행 높이 조절
-            worksheet.merge_range(f'A{current_row}:B{current_row}', '요청사항', fmt_info_label)
-            worksheet.merge_range(f'C{current_row}:I{current_row}', memo, fmt_info_data)
 
     output.seek(0)
     return output
