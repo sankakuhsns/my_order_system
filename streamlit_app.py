@@ -1570,25 +1570,32 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         if len(selected_ids) == 1:
             target_id = selected_ids[0]
             target_df = df_user[df_user["발주번호"] == target_id]
-            total_amount = target_df['합계금액'].sum()
             
-            st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
-            
-            display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
-            display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
-            display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
-            
-            st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
+            if not target_df.empty:
+                total_amount = target_df['합계금액'].sum()
+                memo = target_df['비고'].iloc[0] if '비고' in target_df.columns else ""
 
-            if not target_df.empty and target_df.iloc[0]['상태'] in ["승인", "출고완료"]:
-                supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
-                customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
-                if not supplier_info_df.empty and not customer_info_df.empty:
-                    supplier_info = supplier_info_df.iloc[0]
-                    customer_info = customer_info_df.iloc[0]
-                    buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                    
-                    st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+                st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
+
+                if pd.notna(memo) and memo.strip():
+                    st.markdown("**요청사항:**")
+                    st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
+                
+                display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+                display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
+                display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
+                
+                st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
+
+                if target_df.iloc[0]['상태'] in ["승인", "출고완료"]:
+                    supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
+                    customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
+                    if not supplier_info_df.empty and not customer_info_df.empty:
+                        supplier_info = supplier_info_df.iloc[0]
+                        customer_info = customer_info_df.iloc[0]
+                        buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                        
+                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
