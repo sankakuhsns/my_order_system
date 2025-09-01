@@ -979,9 +979,9 @@ def make_sales_summary_excel(sales_df: pd.DataFrame, daily_pivot: pd.DataFrame, 
         # --- 6. 06_상세_발주_내역 시트 ---
         ws_orders = workbook.add_worksheet('06_상세_발주_내역')
         ws_orders.fit_to_pages(1, 0)
-        ws_orders.merge_range(0, 0, 0, len(orders_df.columns) - 1, '상 세 발 주 내 역', fmt_title)
+        ws_orders.merge_range(0, 0, 0, len(sales_df.columns) - 1, '상 세 발 주 내 역', fmt_title)
         sales_df.to_excel(writer, sheet_name='06_상세_발주_내역', index=False, startrow=2, header=False)
-        ws_orders.write_row('A3', orders_df.columns, fmt_header)
+        ws_orders.write_row('A3', sales_df.columns, fmt_header)
         
     output.seek(0)
     return output
