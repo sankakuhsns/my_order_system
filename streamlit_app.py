@@ -856,7 +856,7 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
     output.seek(0)
     return output
 
-def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, summary_data: dict, filter_info: dict) -> BytesIO:
+def make_sales_summary_excel(sales_df: pd.DataFrame, daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, summary_data: dict, filter_info: dict) -> BytesIO:
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
