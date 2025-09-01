@@ -1562,7 +1562,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         my_transactions['일시_dt'] = pd.to_datetime(my_transactions['일시'], errors='coerce').dt.date
         my_transactions.dropna(subset=['일시_dt'], inplace=True)
         mask = (my_transactions['일시_dt'] >= dt_from) & (my_transactions['일시_dt'] <= dt_to)
-        dfv = my_transactions.loc[mask].copy() # .loc를 사용하여 복사본 명시
+        dfv = my_transactions.loc[mask].copy()
         if dfv.empty: 
             st.warning("해당 기간의 거래 내역이 없습니다.")
             return
@@ -1570,11 +1570,23 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
         
         customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
-        if not customer_info_df.empty:
+        
+        # ✨✨✨ 수정된 부분 시작 ✨✨✨
+        # 공급자(admin) 정보를 불러오는 로직 추가
+        supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
+
+        if not customer_info_df.empty and not supplier_info_df.empty:
             customer_info = customer_info_df.iloc[0]
-            buf = create_unified_financial_statement(dfv, transactions_df_all, customer_info)
+            supplier_info = supplier_info_df.iloc[0] # supplier_info 변수 할당
+
+            # 빠져있던 supplier_info 인자를 추가하여 함수 호출
+            buf = create_unified_financial_statement(dfv, transactions_df_all, supplier_info, customer_info)
+            
             st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래내역서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
-    
+        else:
+            st.error("엑셀 생성에 필요한 공급자 또는 지점 정보가 마스터 시트에 없습니다.")
+        # ✨✨✨ 수정된 부분 끝 ✨✨✨
+
     elif doc_type == "품목거래내역서":
         orders_df = get_orders_df()
         my_orders = orders_df[(orders_df['지점ID'] == user['user_id']) & (orders_df['상태'].isin(['승인', '출고완료']))]
@@ -1585,7 +1597,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
         my_orders['주문일시_dt'] = pd.to_datetime(my_orders['주문일시'], errors='coerce').dt.date
         my_orders.dropna(subset=['주문일시_dt'], inplace=True)
-        filtered_orders = my_orders.loc[my_orders['주문일시_dt'].between(dt_from, dt_to)].copy() # .loc 사용 및 복사본 명시
+        filtered_orders = my_orders.loc[my_orders['주문일시_dt'].between(dt_from, dt_to)].copy()
         
         if filtered_orders.empty:
             st.warning("선택한 기간 내에 승인/출고된 발주 내역이 없습니다.")
@@ -1596,7 +1608,6 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
         supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
         
-        # ### 최종 수정: customer_info를 현재 로그인한 사용자의 정보로 명확하게 지정 ###
         customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
         
         if supplier_info_df.empty or customer_info_df.empty:
@@ -1615,7 +1626,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         if not preview_df.empty:
             buf = create_unified_item_statement(preview_df, supplier_info, customer_info)
             download_label = "기간 전체 내역서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 내역서"
-            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
