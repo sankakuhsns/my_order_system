@@ -667,19 +667,23 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
     if df_report.empty:
         return output
 
-    # 1. 데이터 전처리: '가격이력'을 기반으로 '총금액' 계산
+    # 1. 데이터 전처리: '가격이력'을 기반으로 정확한 과거 시점의 '단가'와 '총금액'을 계산합니다.
     master_df = get_master_df()
     price_history_df = get_price_history_df()
     
+    # '작업일자'를 datetime 객체로 변환하여 계산에 사용합니다.
     df_report['작업일자_dt'] = pd.to_datetime(df_report['작업일자']).dt.date
     
-    # 각 생산 건에 대해 해당 작업일자의 단가를 조회
+    # 각 생산 건에 대해 해당 작업일자의 단가를 '가격이력' 시트에서 조회하여 '단가' 컬럼을 생성합니다.
     df_report['단가'] = df_report.apply(
         lambda row: get_price_at_date(row['품목코드'], row['작업일자_dt'], price_history_df, master_df),
         axis=1
     )
 
+    # 상품마스터에서 '단위' 정보만 가져와 결합합니다.
     df_merged = pd.merge(df_report, master_df[['품목코드', '단위']], on='품목코드', how='left')
+    
+    # 숫자형으로 변환 및 '총금액' 최종 계산
     df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
     df_merged['수량변경'] = pd.to_numeric(df_merged['수량변경'], errors='coerce').fillna(0).astype(int)
     df_merged['총금액'] = df_merged['단가'] * df_merged['수량변경']
@@ -698,19 +702,18 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
         fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
         fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
-        # 최종 합계용 서식 추가
         fmt_grand_total_label = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_grand_total_money = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'num_format': '#,##0 "원"', 'align': 'right', 'valign': 'vcenter', 'border': 1})
 
         
         # 3. 데이터 및 열 순서 재정의
-        df_display = df_merged.drop(columns=['로그일시', '관련번호', '사유', '구분'], errors='ignore').copy()
+        df_display = df_merged.drop(columns=['로그일시', '관련번호', '사유', '구분', '작업일자_dt'], errors='ignore').copy()
         df_display['작업일자'] = pd.to_datetime(df_display['작업일자']).dt.strftime('%Y-%m-%d')
         
         columns_order = ['작업일자', '품목코드', '품목명', '단위', '단가', '수량변경', '총금액', '처리후재고']
         df_display = df_display.reindex(columns=columns_order, fill_value='')
 
-        # 4. 헤더 영역 작성 (8개 열로 확장)
+        # 4. 헤더 영역 작성
         num_cols = len(df_display.columns)
         last_col_letter = chr(64 + num_cols)
         worksheet.set_row(0, 50)
@@ -718,7 +721,7 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
 
         # 5. 보고서 정보
         current_row = 2
-        worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', f"조회 기간: {dt_from} ~ {dt_to}", fmt_date_header)
+        worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', f"조회 기간: {dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}", fmt_date_header)
         current_row += 1
         
         fmt_info_text_right_bold = workbook.add_format({'font_size': 9, 'align': 'right', 'valign': 'top', 'text_wrap': True, 'bold': True})
@@ -746,7 +749,7 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
                 worksheet.write(f'H{current_row}', row['처리후재고'], fmt_money_r)
                 current_row += 1
             
-            # 일계 (생산수량과 총금액 집계)
+            # 일계
             worksheet.merge_range(f'A{current_row}:E{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'F{current_row}', date_group['수량변경'].sum(), fmt_subtotal_money)
             worksheet.write(f'G{current_row}', date_group['총금액'].sum(), fmt_subtotal_money)
@@ -754,11 +757,11 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
             current_row += 2
 
         # 7. 최종 합계
-        current_row += 1 # 한 칸 띄우기
+        current_row += 1
         grand_total_amount = df_display['총금액'].sum()
         label_text = f"조회기간 ({dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}) 총생산평가금액"
         worksheet.merge_range(f'A{current_row}:E{current_row}', label_text, fmt_grand_total_label)
-        worksheet.merge_range(f'F{current_row}:H{current_row}', grand_total_amount, fmt_grand_total_money)
+        worksheet.merge_range(f'F{current_row}:{last_col_letter}{current_row}', grand_total_amount, fmt_grand_total_money)
         
         # 8. 최종 너비 설정
         col_widths_final = [12, 10, 30, 8, 10, 10, 12, 10]
