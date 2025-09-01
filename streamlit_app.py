@@ -858,39 +858,131 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
 
 def make_sales_summary_excel(daily_pivot: pd.DataFrame, monthly_pivot: pd.DataFrame, summary_data: dict, filter_info: dict) -> BytesIO:
     output = BytesIO()
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        fmt_h1 = workbook.add_format({'bold': True, 'font_size': 18, 'align': 'center', 'valign': 'vcenter'})
-        fmt_h2 = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#F2F2F2'})
-        fmt_money = workbook.add_format({'num_format': '#,##0'})
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
-        fmt_pivot_money = workbook.add_format({'num_format': '#,##0', 'border': 1})
         
-        ws_summary = workbook.add_worksheet('종합 분석')
-        ws_summary.set_column('A:A', 20); ws_summary.set_column('B:B', 25)
-        ws_summary.merge_range('A1:B1', '매출 종합 분석', fmt_h1)
-        
-        ws_summary.write('A3', '조회 조건', fmt_h2)
-        ws_summary.write('A4', '조회 기간'); ws_summary.write('B4', filter_info['period'])
-        ws_summary.write('A5', '조회 지점'); ws_summary.write('B5', filter_info['store'])
-        
-        ws_summary.write('A7', '주요 지표', fmt_h2)
-        ws_summary.write('A8', '총 매출 (VAT 포함)'); ws_summary.write('B8', summary_data['total_sales'], fmt_money)
-        ws_summary.write('A9', '공급가액'); ws_summary.write('B9', summary_data['total_supply'], fmt_money)
-        ws_summary.write('A10', '부가세액'); ws_summary.write('B10', summary_data['total_tax'], fmt_money)
-        ws_summary.write('A11', '총 발주 건수'); ws_summary.write('B11', summary_data['total_orders'])
+        # 엑셀 보고서 테마 서식 정의 (기존 보고서들과 동일)
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
+        fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
+        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
 
-        for name, pivot_df in [('일별매출현황', daily_pivot), ('월별매출현황', monthly_pivot)]:
-            pivot_df.to_excel(writer, sheet_name=name, index=True, startrow=2)
-            worksheet = writer.sheets[name]
-            worksheet.set_zoom(90)
-            df_for_format = pivot_df.reset_index()
-            worksheet.merge_range(0, 0, 0, len(df_for_format.columns) - 1, f"거래처별 {name}", fmt_h1)
-            for col_num, value in enumerate(df_for_format.columns.values):
-                worksheet.write(2, col_num, value, fmt_header)
-            worksheet.set_column(0, len(df_for_format.columns), 14)
-            worksheet.conditional_format(3, 1, len(df_for_format) + 2, len(df_for_format.columns), {'type': 'no_blanks', 'format': fmt_pivot_money})
+        # --- 1. 01_종합_현황 시트 ---
+        ws_summary = workbook.add_worksheet('01_종합_현황')
+        ws_summary.fit_to_pages(1, 0)
+        ws_summary.set_column('A:A', 20)
+        ws_summary.set_column('B:B', 25)
+        
+        ws_summary.merge_range('A1:B1', '매 출 정 산 표', fmt_title)
+        ws_summary.merge_range('A2:B2', f"출력일: {now_kst_str()}", workbook.add_format({'font_size': 8, 'align': 'right', 'font_color': '#777777'}))
+        
+        ws_summary.write('A4', '조회 조건', fmt_subtitle)
+        ws_summary.write('A5', '조회 기간', fmt_info_label)
+        ws_summary.write('B5', filter_info['period'], fmt_info_data)
+        ws_summary.write('A6', '조회 지점', fmt_info_label)
+        ws_summary.write('B6', filter_info['store'], fmt_info_data)
 
+        ws_summary.write('A8', '주요 지표', fmt_subtitle)
+        ws_summary.write('A9', '총 매출 (VAT 포함)', fmt_info_label)
+        ws_summary.write('B9', summary_data['total_sales'], fmt_money_bg)
+        ws_summary.write('A10', '공급가액', fmt_info_label)
+        ws_summary.write('B10', summary_data['total_supply'], fmt_money_bg)
+        ws_summary.write('A11', '부가세액', fmt_info_label)
+        ws_summary.write('B11', summary_data['total_tax'], fmt_money_bg)
+        ws_summary.write('A12', '총 발주 건수', fmt_info_label)
+        ws_summary.write('B12', summary_data['total_orders'], fmt_text_c)
+
+        # --- 2. 02_일별_매출현황 시트 ---
+        ws_daily = workbook.add_worksheet('02_일별_매출현황')
+        ws_daily.fit_to_pages(1, 0)
+        ws_daily.merge_range(0, 0, 0, len(daily_pivot.columns) - 1, '일 별 매 출 현 황', fmt_title)
+        ws_daily.merge_range(1, 0, 1, len(daily_pivot.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        
+        daily_pivot.reset_index().to_excel(writer, sheet_name='02_일별_매출현황', index=False, startrow=2, header=False)
+        
+        headers_daily = daily_pivot.reset_index().columns
+        ws_daily.write_row(2, 0, headers_daily, fmt_header)
+        for row_num, row_data in enumerate(daily_pivot.reset_index().values):
+            ws_daily.write_row(row_num + 3, 0, row_data, fmt_money_bg)
+
+        # 연, 월, 일 열 너비 좁게 설정
+        ws_daily.set_column(0, 2, 7)
+
+        # --- 3. 03_월별_매출현황 시트 ---
+        ws_monthly = workbook.add_worksheet('03_월별_매출현황')
+        ws_monthly.fit_to_pages(1, 0)
+        ws_monthly.merge_range(0, 0, 0, len(monthly_pivot.columns) - 1, '월 별 매 출 현 황', fmt_title)
+        ws_monthly.merge_range(1, 0, 1, len(monthly_pivot.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        
+        monthly_pivot.reset_index().to_excel(writer, sheet_name='03_월별_매출현황', index=False, startrow=2, header=False)
+        
+        headers_monthly = monthly_pivot.reset_index().columns
+        ws_monthly.write_row(2, 0, headers_monthly, fmt_header)
+        for row_num, row_data in enumerate(monthly_pivot.reset_index().values):
+            ws_monthly.write_row(row_num + 3, 0, row_data, fmt_money_bg)
+        
+        # 연, 월 열 너비 좁게 설정
+        ws_monthly.set_column(0, 1, 7)
+
+        # --- 4. 04_지점별_매출순위 시트 ---
+        ws_store_rank = workbook.add_worksheet('04_지점별_매출순위')
+        ws_store_rank.fit_to_pages(1, 0)
+        ws_store_rank.merge_range('A1:C1', '지 점 별 매 출 순 위', fmt_title)
+        ws_store_rank.merge_range('A2:C2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        
+        store_sales_df = sales_df.groupby("지점명")["합계금액"].sum().nlargest(10).reset_index()
+        store_sales_df.columns = ['지점명', '총 매출액']
+        
+        ws_store_rank.write_row('A4', store_sales_df.columns, fmt_header)
+        for row_num, row_data in enumerate(store_sales_df.values):
+            ws_store_rank.write_row(row_num + 4, 0, row_data, fmt_money_bg)
+        
+        # --- 5. 05_품목별_판매순위 시트 ---
+        ws_item_rank = workbook.add_worksheet('05_품목별_판매순위')
+        ws_item_rank.fit_to_pages(1, 0)
+        ws_item_rank.merge_range('A1:C1', '품 목 별 판 매 순 위', fmt_title)
+        ws_item_rank.merge_range('A2:C2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
+
+        if not sales_df.empty:
+            item_sales_df = sales_df.groupby("품목명").agg(
+                총판매수량=('수량', 'sum'), 총매출액=('합계금액', 'sum')
+            ).nlargest(10, '총매출액').reset_index()
+            
+            total_sales_sum = item_sales_df['총매출액'].sum()
+            item_sales_df['매출 비중 (%)'] = (item_sales_df['총매출액'] / total_sales_sum) * 100
+        else:
+            item_sales_df = pd.DataFrame(columns=['품목명', '총판매수량', '총매출액', '매출 비중 (%)'])
+
+        headers = ['품목명', '총 판매 수량', '총 매출액', '매출 비중 (%)']
+        ws_item_rank.write_row('A4', headers, fmt_header)
+        
+        # 막대그래프 형식으로 매출 비중 시각화
+        max_ratio = item_sales_df['매출 비중 (%)'].max() if not item_sales_df.empty else 0
+        fmt_bar = workbook.add_format({'bg_color': '#DDEBF7', 'border': 1})
+        for row_num, row_data in enumerate(item_sales_df.values):
+            ws_item_rank.write(row_num + 4, 0, row_data[0], fmt_text_l)
+            ws_item_rank.write(row_num + 4, 1, row_data[1], fmt_money_bg)
+            ws_item_rank.write(row_num + 4, 2, row_data[2], fmt_money_bg)
+            
+            # 막대그래프를 위한 조건부 서식
+            ratio = row_data[3]
+            ws_item_rank.write(row_num + 4, 3, ratio, workbook.add_format({'num_format': '0.00%', 'align': 'center', 'valign': 'vcenter', 'border': 1}))
+            
+            cell_range = f'D{row_num + 5}'
+            ws_item_rank.conditional_format(cell_range, {'type': 'data_bar', 'bar_color': '#FF9900', 'min_type': 'num', 'min_value': 0, 'max_type': 'num', 'max_value': max_ratio})
+        
+        # --- 6. 06_상세_발주_내역 시트 ---
+        ws_orders = workbook.add_worksheet('06_상세_발주_내역')
+        ws_orders.fit_to_pages(1, 0)
+        ws_orders.merge_range(0, 0, 0, len(orders_df.columns) - 1, '상 세 발 주 내 역', fmt_title)
+        orders_df.to_excel(writer, sheet_name='06_상세_발주_내역', index=False, startrow=2, header=False)
+        ws_orders.write_row('A3', orders_df.columns, fmt_header)
+        
     output.seek(0)
     return output
 
