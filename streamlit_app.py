@@ -1570,22 +1570,17 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         st.dataframe(dfv.drop(columns=['일시_dt']), use_container_width=True, hide_index=True)
         
         customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
-        
-        # ✨✨✨ 수정된 부분 시작 ✨✨✨
-        # 공급자(admin) 정보를 불러오는 로직 추가
         supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
 
         if not customer_info_df.empty and not supplier_info_df.empty:
             customer_info = customer_info_df.iloc[0]
-            supplier_info = supplier_info_df.iloc[0] # supplier_info 변수 할당
+            supplier_info = supplier_info_df.iloc[0]
 
-            # 빠져있던 supplier_info 인자를 추가하여 함수 호출
             buf = create_unified_financial_statement(dfv, transactions_df_all, supplier_info, customer_info)
             
             st.download_button("엑셀 다운로드", data=buf, file_name=f"금전거래내역서_{user['name']}_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
         else:
             st.error("엑셀 생성에 필요한 공급자 또는 지점 정보가 마스터 시트에 없습니다.")
-        # ✨✨✨ 수정된 부분 끝 ✨✨✨
 
     elif doc_type == "품목거래내역서":
         orders_df = get_orders_df()
@@ -1607,7 +1602,6 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         selected_order_id = c4.selectbox("발주번호 선택", order_options, key="store_doc_order_select")
 
         supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
-        
         customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
         
         if supplier_info_df.empty or customer_info_df.empty:
@@ -1626,7 +1620,9 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         if not preview_df.empty:
             buf = create_unified_item_statement(preview_df, supplier_info, customer_info)
             download_label = "기간 전체 내역서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 내역서"
-            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
+            
+            # ✨✨✨ 수정된 부분: 닫는 괄호 ')'와 type="primary" 추가 ✨✨✨
+            st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
 def page_store_master_view(master_df: pd.DataFrame):
     st.subheader("🏷️ 품목 단가 조회")
