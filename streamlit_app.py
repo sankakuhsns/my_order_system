@@ -674,7 +674,7 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
     output.seek(0)
     return output
     
-# [진단용 코드] make_inventory_production_report_excel 함수
+# [최종 진단용 코드] make_inventory_production_report_excel 함수
 def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     if df_report.empty:
@@ -708,10 +708,11 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
     st.caption("이 표의 '단가'가 작업일자에 따라 다르게 표시되어야 합니다. (예: 8-29는 21400, 9-01은 25000)")
     st.dataframe(df_merged[['작업일자', '품목명', '단가', '수량변경', '총금액']].head())
     
-    st.error("진단 모드가 활성화되어 있습니다. Excel 파일은 생성되지 않습니다. 위 진단 결과를 확인해주세요.")
-    # --- 진단 코드 종료 (실제 파일 생성은 막음) ---
+    st.error("진단 모드가 활성화되어 있습니다. Excel 파일은 생성되지 않으며, 여기서 실행을 멈춥니다.")
     
-    return output # 진단 모드에서는 빈 파일을 반환
+    # ▼▼▼ [수정] 이 부분을 추가하여 미리보기 화면이 나타나지 않도록 합니다. ▼▼▼
+    st.stop()
+    # ▲▲▲ 여기까지 ▲▲▲
 
 def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
