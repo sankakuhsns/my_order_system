@@ -1411,53 +1411,81 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
 
-    # --- 최종 수정: 로직 순서 변경 ---
-    # 1. 취소 작업 요청이 있는지 먼저 확인하고 처리합니다.
     if 'cancel_ids' in st.session_state and st.session_state.cancel_ids:
         with st.spinner("발주 취소 및 환불 처리 중..."):
             ids_to_process = st.session_state.cancel_ids
-            # 한 번 사용 후 바로 삭제하여 중복 실행 방지
             del st.session_state.cancel_ids
 
-            # 최신 데이터로 처리하기 위해 함수 내에서 직접 데이터를 다시 불러옵니다.
             df_all_transactions = load_data(CONFIG['TRANSACTIONS']['name'], CONFIG['TRANSACTIONS']['cols'])
             df_balance = load_data(CONFIG['BALANCE']['name'], CONFIG['BALANCE']['cols'])
             user = st.session_state.auth
             
+            success_count = 0
+            fail_count = 0
+
             for order_id in ids_to_process:
                 original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
-                if not original_transaction.empty:
-                    trans_info = original_transaction.iloc[0]
-                    refund_amount = abs(int(trans_info['금액']))
-                    balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
-                    if not balance_info_df.empty:
-                        balance_info = balance_info_df.iloc[0]
-                        new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
-                        credit_refund = min(refund_amount, new_used_credit)
-                        new_used_credit -= credit_refund
-                        new_prepaid += (refund_amount - credit_refund)
-                        update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit})
+                if original_transaction.empty:
+                    st.warning(f"발주번호 {order_id}에 대한 원본 거래내역을 찾을 수 없어 환불 처리를 건너뜁니다.")
+                    fail_count += 1
+                    continue
+
+                trans_info = original_transaction.iloc[0]
+                refund_amount = abs(int(trans_info['금액']))
+                balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
+                
+                if balance_info_df.empty:
+                    st.error(f"'{user['name']}'님의 잔액 정보를 찾을 수 없습니다.")
+                    fail_count += 1
+                    continue
+
+                balance_info = balance_info_df.iloc[0]
+                new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
+                
+                credit_refund = min(refund_amount, new_used_credit)
+                new_used_credit -= credit_refund
+                new_prepaid += (refund_amount - credit_refund)
+
+                refund_record = {
+                    "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                    "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
+                    "금액": refund_amount, "처리후선충전잔액": new_prepaid,
+                    "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                }
+                
+                # ✨ 수정된 로직: 기록 -> 상태 변경 -> 실제 금액 변경 순으로 진행
+                try:
+                    # 1. 거래내역 기록
+                    if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
+                        raise Exception("거래내역 기록 실패")
+                    
+                    # 2. 발주 상태 변경
+                    if not update_order_status([order_id], "취소", user["name"]):
+                        raise Exception("발주 상태 변경 실패")
                         
-                        refund_record = {
-                            "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
-                            "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
-                            "금액": refund_amount, "처리후선충전잔액": new_prepaid,
-                            "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
-                        }
-                        append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
-            
-            update_order_status(ids_to_process, "취소", user["name"])
-            st.session_state.success_message = f"{len(ids_to_process)}건의 발주가 취소되고 환불 처리되었습니다."
+                    # 3. 잔액 정보 업데이트 (최종 단계)
+                    if not update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit}):
+                        raise Exception("잔액 정보 업데이트 실패")
+                    
+                    success_count += 1
+
+                except Exception as e:
+                    fail_count += 1
+                    st.error(f"발주번호 {order_id} 처리 중 오류 발생: {e}. 해당 건은 관리자에게 문의하세요.")
+                    # 여기에 실패 시 복구 로직을 추가할 수 있지만, 현재는 기록이 남아있으므로 수동 처리가 가능합니다.
+
+            if success_count > 0:
+                st.session_state.success_message = f"{success_count}건의 발주가 취소되고 환불 처리되었습니다."
+            if fail_count > 0:
+                 st.session_state.error_message = f"{fail_count}건의 발주 취소에 실패했습니다. 관리자에게 문의하세요."
+
             st.session_state.store_orders_selection = {}
-            
-            # 처리 완료 후 캐시를 비우고 즉시 새로고침하여 최신 상태를 반영
             clear_data_cache()
             st.rerun()
 
-    # 2. 페이지의 나머지 부분을 렌더링합니다.
+    # (이하 페이지 렌더링 코드는 기존과 동일)
     df_all_orders = get_orders_df()
     user = st.session_state.auth
-    
     df_user = df_all_orders[df_all_orders["지점ID"] == user["user_id"]]
     if df_user.empty:
         st.info("발주 데이터가 없습니다.")
@@ -1560,7 +1588,6 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     customer_info = customer_info_df.iloc[0]
                     buf = create_unified_item_statement(target_df, supplier_info, customer_info)
                     
-                    # ### 1번 수정: 버튼명과 파일명을 '품목거래내역서'로 변경 ###
                     st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
