@@ -2275,7 +2275,14 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
     shipped_display = shipped_orders.iloc[start_idx:end_idx].copy()
 
     shipped_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in shipped_display['발주번호']])
-    edited_shipped = st.data_editor(shipped_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '처리일시']], key="admin_shipped_editor", hide_index=True, disabled=shipped_orders.columns)
+    
+    # ✨ 수정된 부분: 체크박스가 동작하도록 disabled 속성 수정
+    edited_shipped = st.data_editor(
+        shipped_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '처리일시']], 
+        key="admin_shipped_editor", 
+        hide_index=True, 
+        disabled=shipped_display.columns.drop("선택")
+    )
     
     for _, row in edited_shipped.iterrows():
         st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
@@ -2286,6 +2293,26 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
         st.session_state.confirm_action = "revert_to_pending"
         st.session_state.confirm_data = {'ids': selected_shipped_ids}
         st.rerun()
+
+def render_rejected_orders_tab(rejected_orders: pd.DataFrame):
+    page_size = 10
+    page_number = render_paginated_ui(len(rejected_orders), page_size, "rejected_orders")
+    start_idx = (page_number - 1) * page_size
+    end_idx = start_idx + page_size
+    rejected_display = rejected_orders.iloc[start_idx:end_idx].copy()
+
+    rejected_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in rejected_display['발주번호']])
+
+    # ✨ 수정된 부분: 체크박스가 동작하도록 disabled 속성 수정
+    edited_rejected = st.data_editor(
+        rejected_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '반려사유']], 
+        key="admin_rejected_editor", 
+        hide_index=True, 
+        disabled=rejected_display.columns.drop("선택")
+    )
+
+    for _, row in edited_rejected.iterrows():
+        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
 
 def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     with st.container(border=True):
