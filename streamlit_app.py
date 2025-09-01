@@ -2357,16 +2357,16 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
             if not target_df.empty:
                 total_amount = target_df['합계금액'].sum()
                 
-                # 요청사항(비고)을 가져오는 로직 추가
-                memo = target_df['비고'].iloc[0]
+                # ✨ 요청사항(비고)을 가져오는 로직 추가
+                memo = target_df['비고'].iloc[0] if '비고' in target_df.columns else ""
 
                 st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
 
-                # 요청사항이 있을 경우 화면에 표시
+                # ✨ 요청사항이 있을 경우 화면에 표시
                 if pd.notna(memo) and memo.strip():
                     st.markdown("**요청사항:**")
                     st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
-
+                
                 display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
                 display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
                 display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
