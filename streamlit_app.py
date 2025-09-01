@@ -211,16 +211,28 @@ def append_rows_to_sheet(sheet_name: str, rows_data: List[Dict], columns_order: 
 
 def update_balance_sheet(store_id: str, updates: Dict):
     try:
+        balance_df = get_balance_df() # 캐시된 DataFrame 로드
         ws = open_spreadsheet().worksheet(CONFIG['BALANCE']['name'])
-        cell = ws.find(store_id, in_column=1)
-        if not cell:
+        header = ws.row_values(1)
+
+        # DataFrame에서 해당 지점의 인덱스를 찾음
+        target_indices = balance_df.index[balance_df['지점ID'] == store_id].tolist()
+        if not target_indices:
             st.error(f"'{CONFIG['BALANCE']['name']}' 시트에서 지점ID '{store_id}'를 찾을 수 없습니다.")
             return False
-        header = ws.row_values(1)
+        
+        # gspread는 1-based index, pandas는 0-based. 헤더 행(+1)과 인덱스(+1) 고려
+        sheet_row_index = target_indices[0] + 2 
+
+        cells_to_update = []
         for key, value in updates.items():
             if key in header:
                 col_idx = header.index(key) + 1
-                ws.update_cell(cell.row, col_idx, int(value))
+                cells_to_update.append(gspread.Cell(sheet_row_index, col_idx, int(value)))
+        
+        if cells_to_update:
+            ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -2216,36 +2228,82 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
         c1, c2 = st.columns(2)
         if c1.button("예, 반려합니다.", key="confirm_yes_reject", type="primary", use_container_width=True):
             with st.spinner("발주 반려 및 환불 처리 중..."):
+                success_count = 0
+                fail_count = 0
+                
+                # 최신 데이터로 작업하기 위해 한번 더 불러오기
                 balance_df = get_balance_df()
                 transactions_df = get_transactions_df()
+                
                 for order_id in data['ids']:
                     order_items = df_all[df_all['발주번호'] == order_id]
-                    if order_items.empty: continue
+                    if order_items.empty:
+                        fail_count += 1
+                        continue
+
                     store_id = order_items.iloc[0]['지점ID']
                     original_tx = transactions_df[transactions_df['관련발주번호'] == order_id]
-                    if not original_tx.empty:
-                        tx_info = original_tx.iloc[0]
-                        refund_amount = abs(int(tx_info['금액']))
-                        balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
-                        new_prepaid = int(balance_info['선충전잔액'])
-                        new_used_credit = int(balance_info['사용여신액'])
-                        credit_refund = min(refund_amount, new_used_credit)
-                        new_used_credit -= credit_refund
-                        new_prepaid += (refund_amount - credit_refund)
-                        update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit})
-                        refund_record = {
-                            "일시": now_kst_str(), "지점ID": store_id, "지점명": tx_info['지점명'],
-                            "구분": "발주반려", "내용": f"발주 반려 환불 ({order_id})", "금액": refund_amount,
-                            "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit,
-                            "관련발주번호": order_id, "처리자": st.session_state.auth["name"]
-                        }
-                        append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols'])
+                    
+                    if original_tx.empty:
+                        st.session_state.warning_message = f"발주번호 {order_id}의 원본 거래내역이 없어 환불 처리를 건너뜁니다."
+                        fail_count += 1
+                        # 상태는 반려로 변경
+                        update_order_status([order_id], CONFIG['ORDER_STATUS']['REJECTED'], st.session_state.auth["name"], reason=data['reason'])
+                        continue
+
+                    # 환불 및 잔액 계산
+                    tx_info = original_tx.iloc[0]
+                    refund_amount = abs(int(tx_info['금액']))
+                    balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
+                    new_prepaid = int(balance_info['선충전잔액'])
+                    new_used_credit = int(balance_info['사용여신액'])
+                    
+                    if tx_info['구분'] == '선충전결제':
+                        new_prepaid += refund_amount
+                    else: # 여신결제
+                        new_used_credit -= refund_amount
+                    
+                    refund_record = {
+                        "일시": now_kst_str(), "지점ID": store_id, "지점명": tx_info['지점명'],
+                        "구분": "발주반려", "내용": f"발주 반려 환불 ({order_id})", "금액": refund_amount,
+                        "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit,
+                        "관련발주번호": order_id, "처리자": st.session_state.auth["name"]
+                    }
+                    
+                    # [안정성] 기록 -> 처리 -> 금액 변경 순서 적용
+                    try:
+                        # 1. 발주 상태 먼저 '반려'로 변경
+                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['REJECTED'], st.session_state.auth["name"], reason=data['reason']):
+                            raise Exception("발주 상태 변경 실패")
+                        
+                        # 2. 거래 내역에 환불 기록 추가
+                        if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
+                            # 롤백: 발주 상태를 다시 '요청'으로 되돌림
+                            update_order_status([order_id], CONFIG['ORDER_STATUS']['PENDING'], "system_rollback")
+                            raise Exception("거래내역 기록 실패")
+                        
+                        # 3. 모든 기록이 성공한 후, 최종적으로 잔액(돈) 변경
+                        if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
+                            # 이 경우 수동 조치가 필요함을 명확히 알림
+                            st.session_state.error_message = f"CRITICAL ERROR: {order_id}의 환불이 기록되었으나 잔액 반영에 실패했습니다. 즉시 수동 조치가 필요합니다!"
+                            fail_count += 1
+                            continue
+                        
+                        success_count += 1
+
+                    except Exception as e:
+                        fail_count += 1
+                        st.session_state.error_message = f"발주번호 {order_id} 처리 중 오류 발생: {e}"
+
+                if success_count > 0:
+                    st.session_state.success_message = f"{success_count}건이 성공적으로 반려 처리되었습니다."
+                if fail_count > 0:
+                    st.session_state.warning_message = f"{fail_count}건 처리 중 문제가 발생했습니다."
                 
-                update_order_status(data['ids'], CONFIG['ORDER_STATUS']['REJECTED'], st.session_state.auth["name"], reason=data['reason'])
-                st.session_state.success_message = f"{len(data['ids'])}건이 반려 처리되고 환불되었습니다."
                 st.session_state.confirm_action = None
                 st.session_state.confirm_data = None
                 st.session_state.admin_orders_selection.clear()
+                clear_data_cache()
                 st.rerun()
 
         if c2.button("아니요, 취소합니다.", key="confirm_no_reject", use_container_width=True):
@@ -2273,6 +2331,7 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
                 st.session_state.confirm_action = None
                 st.session_state.confirm_data = None
                 st.session_state.admin_orders_selection.clear()
+                clear_data_cache()
                 st.rerun()
 
         if c2.button("아니요, 취소합니다.", key="confirm_no_revert", use_container_width=True):
@@ -3009,12 +3068,11 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             
                             clear_data_cache()
                             st.rerun()
-                            
-# 기존 render_master_settings_tab 함수를 아래 코드로 전체 교체하세요.
 
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
     st.markdown("##### 🏷️ 품목 정보 설정")
     
+    # 원본 데이터의 숫자형 변환 (비교를 위해)
     master_df_raw['단가'] = pd.to_numeric(master_df_raw['단가'], errors='coerce').fillna(0)
 
     edited_master_df = st.data_editor(
@@ -3029,39 +3087,44 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
             edited_df = pd.DataFrame(edited_master_df)
             edited_df['단가'] = pd.to_numeric(edited_df['단가'], errors='coerce').fillna(0)
 
-            comparison_df = pd.merge(
-                master_df_raw.rename(columns={'단가': '단가_old', '품목명': '품목명_old'}),
-                edited_df.rename(columns={'단가': '단가_new', '품목명': '품목명_new'}),
-                on="품목코드",
-                how='inner'
-            )
-            
-            price_changes = comparison_df[comparison_df['단가_old'] != comparison_df['단가_new']]
-            
-            new_history_records = []
-            if not price_changes.empty:
-                for _, row in price_changes.iterrows():
-                    record = {
-                        "변경일시": now_kst_str(),
-                        "품목코드": row['품목코드'],
-                        "품목명": row['품목명_new'],
-                        "이전단가": row['단가_old'],
-                        "새단가": row['단가_new'],
-                    }
-                    new_history_records.append(record)
-            
-            if new_history_records:
-                append_rows_to_sheet(
-                    CONFIG['PRICE_HISTORY']['name'], 
-                    new_history_records, 
-                    CONFIG['PRICE_HISTORY']['cols']
-                )
-
+            # 1. [순서 변경] 가장 중요한 상품마스터를 먼저 저장합니다.
             if save_df_to_sheet(CONFIG['MASTER']['name'], edited_df):
+                
+                # 2. 저장이 성공했을 때만, 가격 변경 이력을 감지하고 기록합니다.
+                comparison_df = pd.merge(
+                    master_df_raw.rename(columns={'단가': '단가_old', '품목명': '품목명_old'}),
+                    edited_df.rename(columns={'단가': '단가_new', '품목명': '품목명_new'}),
+                    on="품목코드",
+                    how='inner'
+                )
+                price_changes = comparison_df[comparison_df['단가_old'] != comparison_df['단가_new']]
+                
+                new_history_records = []
+                if not price_changes.empty:
+                    for _, row in price_changes.iterrows():
+                        record = {
+                            "변경일시": now_kst_str(),
+                            "품목코드": row['품목코드'],
+                            "품목명": row['품목명_new'],
+                            "이전단가": row['단가_old'],
+                            "새단가": row['단가_new'],
+                        }
+                        new_history_records.append(record)
+                
+                if new_history_records:
+                    # 이력 기록에 실패하더라도 이미 원본 데이터는 저장되었으므로 치명적이지 않음
+                    if not append_rows_to_sheet(CONFIG['PRICE_HISTORY']['name'], new_history_records, CONFIG['PRICE_HISTORY']['cols']):
+                         st.session_state.warning_message = "품목 정보는 저장되었으나, 가격 변경 이력 기록에 실패했습니다. 수동 확인이 필요합니다."
+
                 st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
                 if new_history_records:
                     st.session_state.success_message += f" ({len(new_history_records)}건의 가격 변경 이력이 기록되었습니다.)"
+                
                 clear_data_cache()
+                st.rerun()
+            else:
+                # 마스터 시트 저장 자체에 실패한 경우
+                st.session_state.error_message = "품목 정보 저장에 실패했습니다. 잠시 후 다시 시도해주세요."
                 st.rerun()
 
     st.divider()
@@ -3083,7 +3146,11 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
         else:
             filtered_history = price_history_df
 
-        st.dataframe(filtered_history, use_container_width=True, hide_index=True)
+        st.dataframe(
+            filtered_history,
+            use_container_width=True,
+            hide_index=True
+        )
 
 def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
     st.markdown("##### 🏢 지점(사용자) 정보 설정")
