@@ -2357,12 +2357,12 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
             if not target_df.empty:
                 total_amount = target_df['합계금액'].sum()
                 
-                # ✨ 요청사항(비고)을 가져오는 로직 추가
+                # 요청사항(비고)을 가져오는 로직
                 memo = target_df['비고'].iloc[0] if '비고' in target_df.columns else ""
 
                 st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
 
-                # ✨ 요청사항이 있을 경우 화면에 표시
+                # 요청사항이 있을 경우 화면에 표시
                 if pd.notna(memo) and memo.strip():
                     st.markdown("**요청사항:**")
                     st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
@@ -2372,33 +2372,6 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                 display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
                 st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
                 
-                if target_df.iloc[0]['상태'] in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]:
-                    supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                    store_name = target_df.iloc[0]['지점명']
-                    customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
-                    if not supplier_info_df.empty and not customer_info_df.empty:
-                        supplier_info = supplier_info_df.iloc[0]
-                        customer_info = customer_info_df.iloc[0]
-                        buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
-        elif len(selected_ids) > 1:
-            st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
-        else:
-            st.info("상세 내용을 보려면 위 목록에서 발주를 선택하세요.")
-
-def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
-    with st.container(border=True):
-        st.markdown("##### 📄 발주 품목 상세 조회")
-        if len(selected_ids) == 1:
-            target_id = selected_ids[0]
-            target_df = df_all[df_all["발주번호"] == target_id]
-            if not target_df.empty:
-                total_amount = target_df['합계금액'].sum()
-                st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
-                display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
-                display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
-                display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
-                st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
                 if target_df.iloc[0]['상태'] in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]:
                     supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
                     store_name = target_df.iloc[0]['지점명']
