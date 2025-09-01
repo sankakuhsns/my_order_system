@@ -396,21 +396,33 @@ def require_login():
 # =============================================================================
 # 가격 및 보고서 유틸리티
 # =============================================================================
+# [최종 수정 코드] get_price_at_date 함수
 @st.cache_data(ttl=300)
 def get_price_at_date(item_code: str, target_date: date, price_history_df: pd.DataFrame, master_df: pd.DataFrame) -> int:
-    """특정 날짜 기준의 품목 단가를 가격 이력에서 조회"""
+    """특정 날짜 기준의 품목 단가를 가격 이력에서 조회 (수정된 로직)"""
     target_datetime = datetime.combine(target_date, datetime.max.time())
 
     item_history = price_history_df[price_history_df['품목코드'] == item_code].copy()
     
     if not item_history.empty:
         item_history['변경일시_dt'] = pd.to_datetime(item_history['변경일시'], errors='coerce')
-        relevant_history = item_history[item_history['변경일시_dt'] <= target_datetime].dropna(subset=['변경일시_dt'])
-        
-        if not relevant_history.empty:
-            latest_price_row = relevant_history.sort_values(by='변경일시_dt', ascending=False).iloc[0]
-            return int(latest_price_row['새단가'])
+        item_history.dropna(subset=['변경일시_dt'], inplace=True)
 
+        # 1. target_date 이전에 변경된 기록이 있는지 확인
+        past_history = item_history[item_history['변경일시_dt'] <= target_datetime]
+        if not past_history.empty:
+            # 있다면, 가장 최신 기록의 '새단가'를 반환
+            latest_price_row = past_history.sort_values(by='변경일시_dt', ascending=False).iloc[0]
+            return int(latest_price_row['새단가'])
+        
+        # 2. [개선] 과거 기록이 없다면, target_date 이후의 기록을 찾음
+        future_history = item_history[item_history['변경일시_dt'] > target_datetime]
+        if not future_history.empty:
+            # 있다면, 가장 오래된 기록(첫 변경)의 '이전단가'를 반환
+            first_change_row = future_history.sort_values(by='변경일시_dt', ascending=True).iloc[0]
+            return int(first_change_row['이전단가'])
+
+    # 3. 가격 변경 이력이 전혀 없는 품목이라면, 상품 마스터의 현재 단가를 반환
     current_price_series = master_df.loc[master_df['품목코드'] == item_code, '단가']
     return int(current_price_series.iloc[0]) if not current_price_series.empty else 0
 
@@ -674,45 +686,100 @@ def create_unified_financial_statement(df_transactions_period: pd.DataFrame, df_
     output.seek(0)
     return output
     
-# [최종 진단용 코드] make_inventory_production_report_excel 함수
+# [정상 코드] make_inventory_production_report_excel 함수
 def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
     if df_report.empty:
-        st.warning("보고서를 생성할 데이터가 없습니다.")
         return output
 
-    # --- 진단 코드 시작 ---
-    st.info("🕵️‍♂️ 보고서 생성 전 데이터를 진단합니다. 아래 내용을 확인해주세요.")
-    
     master_df = get_master_df()
     price_history_df = get_price_history_df()
     
-    st.subheader("진단 1: 조회된 '가격변경이력' 데이터 (최신 5건)")
-    st.caption("이 표가 비어있거나, 예상과 다른 데이터가 보인다면 '가격변경이력' 시트 자체를 확인해야 합니다.")
-    st.dataframe(price_history_df.head())
-
-    st.subheader("진단 2: 보고서 대상 원본 데이터 (생산 기록)")
-    st.caption("보고서에 포함될 생산 기록 원본입니다.")
-    st.dataframe(df_report.head())
-
-    # --- 핵심 로직 실행 ---
     df_report['작업일자_dt'] = pd.to_datetime(df_report['작업일자']).dt.date
+    
     df_report['단가'] = df_report.apply(
         lambda row: get_price_at_date(row['품목코드'], row['작업일자_dt'], price_history_df, master_df),
         axis=1
     )
-    df_merged = pd.merge(df_report, master_df[['품목코드', '단위']], on='품목코드', how='left')
-    df_merged['총금액'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0) * pd.to_numeric(df_merged['수량변경'], errors='coerce').fillna(0)
 
-    st.subheader("진단 3: 날짜별 단가가 적용된 최종 계산 데이터")
-    st.caption("이 표의 '단가'가 작업일자에 따라 다르게 표시되어야 합니다. (예: 8-29는 21400, 9-01은 25000)")
-    st.dataframe(df_merged[['작업일자', '품목명', '단가', '수량변경', '총금액']].head())
-    
-    st.error("진단 모드가 활성화되어 있습니다. Excel 파일은 생성되지 않으며, 여기서 실행을 멈춥니다.")
-    
-    # ▼▼▼ [수정] 이 부분을 추가하여 미리보기 화면이 나타나지 않도록 합니다. ▼▼▼
-    st.stop()
-    # ▲▲▲ 여기까지 ▲▲▲
+    df_merged = pd.merge(df_report, master_df[['품목코드', '단위']], on='품목코드', how='left')
+    df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
+    df_merged['수량변경'] = pd.to_numeric(df_merged['수량변경'], errors='coerce').fillna(0).astype(int)
+    df_merged['총금액'] = df_merged['단가'] * df_merged['수량변경']
+
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("품목생산보고서")
+        worksheet.fit_to_pages(1, 0)
+        
+        fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
+        fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        fmt_money_r = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#DDEBF7', 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'left', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
+        fmt_grand_total_label = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_grand_total_money = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'num_format': '#,##0 "원"', 'align': 'right', 'valign': 'vcenter', 'border': 1})
+        
+        df_display = df_merged.drop(columns=['로그일시', '관련번호', '사유', '구분', '작업일자_dt'], errors='ignore').copy()
+        df_display['작업일자'] = pd.to_datetime(df_display['작업일자']).dt.strftime('%Y-%m-%d')
+        
+        columns_order = ['작업일자', '품목코드', '품목명', '단위', '단가', '수량변경', '총금액', '처리후재고']
+        df_display = df_display.reindex(columns=columns_order, fill_value='')
+
+        num_cols = len(df_display.columns)
+        last_col_letter = chr(64 + num_cols)
+        worksheet.set_row(0, 50)
+        worksheet.merge_range(f'A1:{last_col_letter}1', '품 목 생 산 보 고 서', fmt_title)
+
+        current_row = 2
+        worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', f"조회 기간: {dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}", fmt_date_header)
+        current_row += 1
+        
+        fmt_info_text_right_bold = workbook.add_format({'font_size': 9, 'align': 'right', 'valign': 'top', 'text_wrap': True, 'bold': True})
+        worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', "※ 본 보고서는 '생산입고' 내역만 포함하며, 재고 조정 등 다른 항목들은 반영되지 않습니다.", fmt_info_text_right_bold)
+        current_row += 2
+
+        grouped_by_date = df_display.groupby('작업일자')
+        for date_str, date_group in grouped_by_date:
+            worksheet.merge_range(f'A{current_row}:{last_col_letter}{current_row}', f"■ 생산일자: {date_str}", fmt_date_header)
+            current_row += 1
+            
+            headers = ['작업일자', '품목코드', '품목명', '단위', '단가', '생산수량', '총금액', '처리후재고']
+            worksheet.write_row(f'A{current_row}', headers, fmt_header)
+            current_row += 1
+
+            for _, row in date_group.iterrows():
+                worksheet.write(f'A{current_row}', row['작업일자'], fmt_text_c)
+                worksheet.write(f'B{current_row}', row['품목코드'], fmt_text_c)
+                worksheet.write(f'C{current_row}', row['품목명'], fmt_text_l)
+                worksheet.write(f'D{current_row}', row['단위'], fmt_text_c)
+                worksheet.write(f'E{current_row}', row['단가'], fmt_money_r)
+                worksheet.write(f'F{current_row}', row['수량변경'], fmt_subtotal_money)
+                worksheet.write(f'G{current_row}', row['총금액'], fmt_subtotal_money)
+                worksheet.write(f'H{current_row}', row['처리후재고'], fmt_money_r)
+                current_row += 1
+            
+            worksheet.merge_range(f'A{current_row}:E{current_row}', '일 계', fmt_subtotal_label)
+            worksheet.write(f'F{current_row}', date_group['수량변경'].sum(), fmt_subtotal_money)
+            worksheet.write(f'G{current_row}', date_group['총금액'].sum(), fmt_subtotal_money)
+            worksheet.write(f'H{current_row}', '', fmt_subtotal_label)
+            current_row += 2
+
+        current_row += 1
+        grand_total_amount = df_display['총금액'].sum()
+        label_text = f"조회기간 ({dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}) 총생산평가금액"
+        worksheet.merge_range(f'A{current_row}:E{current_row}', label_text, fmt_grand_total_label)
+        worksheet.merge_range(f'F{current_row}:{last_col_letter}{current_row}', grand_total_amount, fmt_grand_total_money)
+        
+        col_widths_final = [12, 10, 30, 8, 10, 10, 12, 10]
+        for i, width in enumerate(col_widths_final):
+            worksheet.set_column(i, i, width)
+
+    output.seek(0)
+    return output
 
 def make_inventory_change_report_excel(df_report: pd.DataFrame, report_type: str, dt_from: date, dt_to: date) -> BytesIO:
     output = BytesIO()
