@@ -899,35 +899,31 @@ def make_sales_summary_excel(sales_df: pd.DataFrame, daily_pivot: pd.DataFrame, 
 
         # --- 2. 02_일별_매출현황 시트 ---
         ws_daily = workbook.add_worksheet('02_일별_매출현황')
+        daily_display_df = daily_pivot.reset_index()
         ws_daily.fit_to_pages(1, 0)
-        ws_daily.merge_range(0, 0, 0, len(daily_pivot.columns) - 1, '일 별 매 출 현 황', fmt_title)
-        ws_daily.merge_range(1, 0, 1, len(daily_pivot.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        # ✨ 제목 범위를 '합계' 열까지 확장
+        ws_daily.merge_range(0, 0, 0, len(daily_display_df.columns) - 1, '일 별 매 출 현 황', fmt_title)
+        ws_daily.merge_range(1, 0, 1, len(daily_display_df.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
         
-        daily_pivot.reset_index().to_excel(writer, sheet_name='02_일별_매출현황', index=False, startrow=2, header=False)
+        daily_display_df.to_excel(writer, sheet_name='02_일별_매출현황', index=False, startrow=2)
         
-        headers_daily = daily_pivot.reset_index().columns
-        ws_daily.write_row(2, 0, headers_daily, fmt_header)
-        for row_num, row_data in enumerate(daily_pivot.reset_index().values):
-            ws_daily.write_row(row_num + 3, 0, row_data, fmt_money_bg)
-
-        # 연, 월, 일 열 너비 좁게 설정
-        ws_daily.set_column(0, 2, 7)
+        # ✨ 열 너비 조정
+        ws_daily.set_column(0, 2, 8)  # 연, 월, 일
+        ws_daily.set_column(3, len(daily_display_df.columns) - 1, 12) # 데이터 열
 
         # --- 3. 03_월별_매출현황 시트 ---
         ws_monthly = workbook.add_worksheet('03_월별_매출현황')
+        monthly_display_df = monthly_pivot.reset_index()
         ws_monthly.fit_to_pages(1, 0)
-        ws_monthly.merge_range(0, 0, 0, len(monthly_pivot.columns) - 1, '월 별 매 출 현 황', fmt_title)
-        ws_monthly.merge_range(1, 0, 1, len(monthly_pivot.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        # ✨ 제목 범위를 '합계' 열까지 확장
+        ws_monthly.merge_range(0, 0, 0, len(monthly_display_df.columns) - 1, '월 별 매 출 현 황', fmt_title)
+        ws_monthly.merge_range(1, 0, 1, len(monthly_display_df.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
         
-        monthly_pivot.reset_index().to_excel(writer, sheet_name='03_월별_매출현황', index=False, startrow=2, header=False)
-        
-        headers_monthly = monthly_pivot.reset_index().columns
-        ws_monthly.write_row(2, 0, headers_monthly, fmt_header)
-        for row_num, row_data in enumerate(monthly_pivot.reset_index().values):
-            ws_monthly.write_row(row_num + 3, 0, row_data, fmt_money_bg)
-        
-        # 연, 월 열 너비 좁게 설정
-        ws_monthly.set_column(0, 1, 7)
+        monthly_display_df.to_excel(writer, sheet_name='03_월별_매출현황', index=False, startrow=2)
+
+        # ✨ 열 너비 조정
+        ws_monthly.set_column(0, 1, 8) # 연, 월
+        ws_monthly.set_column(2, len(monthly_display_df.columns) - 1, 12) # 데이터 열
 
         # --- 4. 04_지점별_매출순위 시트 ---
         ws_store_rank = workbook.add_worksheet('04_지점별_매출순위')
@@ -940,49 +936,46 @@ def make_sales_summary_excel(sales_df: pd.DataFrame, daily_pivot: pd.DataFrame, 
         
         ws_store_rank.write_row('A4', store_sales_df.columns, fmt_header)
         for row_num, row_data in enumerate(store_sales_df.values):
-            ws_store_rank.write_row(row_num + 4, 0, row_data, fmt_money_bg)
-        
+            ws_store_rank.write_row(row_num + 4, 0, row_data)
+        ws_store_rank.set_column(0, 0, 20)
+        ws_store_rank.set_column(1, 1, 15)
+
+
         # --- 5. 05_품목별_판매순위 시트 ---
         ws_item_rank = workbook.add_worksheet('05_품목별_판매순위')
         ws_item_rank.fit_to_pages(1, 0)
-        ws_item_rank.merge_range('A1:C1', '품 목 별 판 매 순 위', fmt_title)
-        ws_item_rank.merge_range('A2:C2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        ws_item_rank.merge_range('A1:D1', '품 목 별 판 매 순 위', fmt_title)
+        ws_item_rank.merge_range('A2:D2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
 
         if not sales_df.empty:
             item_sales_df = sales_df.groupby("품목명").agg(
                 총판매수량=('수량', 'sum'), 총매출액=('합계금액', 'sum')
             ).nlargest(10, '총매출액').reset_index()
             
-            total_sales_sum = item_sales_df['총매출액'].sum()
-            item_sales_df['매출 비중 (%)'] = (item_sales_df['총매출액'] / total_sales_sum) * 100
+            # ✨ 매출 비중 계산 오류 수정: Top 10 합계가 아닌, 전체 기간의 총매출로 계산
+            total_sales_for_share = summary_data.get('total_sales', 0)
+            if total_sales_for_share > 0:
+                item_sales_df['매출 비중 (%)'] = (item_sales_df['총매출액'] / total_sales_for_share) * 100
+            else:
+                item_sales_df['매출 비중 (%)'] = 0
         else:
             item_sales_df = pd.DataFrame(columns=['품목명', '총판매수량', '총매출액', '매출 비중 (%)'])
 
         headers = ['품목명', '총 판매 수량', '총 매출액', '매출 비중 (%)']
         ws_item_rank.write_row('A4', headers, fmt_header)
         
-        # 막대그래프 형식으로 매출 비중 시각화
-        max_ratio = item_sales_df['매출 비중 (%)'].max() if not item_sales_df.empty else 0
-        fmt_bar = workbook.add_format({'bg_color': '#DDEBF7', 'border': 1})
         for row_num, row_data in enumerate(item_sales_df.values):
             ws_item_rank.write(row_num + 4, 0, row_data[0], fmt_text_l)
             ws_item_rank.write(row_num + 4, 1, row_data[1], fmt_money_bg)
             ws_item_rank.write(row_num + 4, 2, row_data[2], fmt_money_bg)
-            
-            # 막대그래프를 위한 조건부 서식
-            ratio = row_data[3]
-            ws_item_rank.write(row_num + 4, 3, ratio, workbook.add_format({'num_format': '0.00%', 'align': 'center', 'valign': 'vcenter', 'border': 1}))
-            
-            cell_range = f'D{row_num + 5}'
-            ws_item_rank.conditional_format(cell_range, {'type': 'data_bar', 'bar_color': '#FF9900', 'min_type': 'num', 'min_value': 0, 'max_type': 'num', 'max_value': max_ratio})
-        
-        # --- 6. 06_상세_발주_내역 시트 ---
-        ws_orders = workbook.add_worksheet('06_상세_발주_내역')
-        ws_orders.fit_to_pages(1, 0)
-        ws_orders.merge_range(0, 0, 0, len(sales_df.columns) - 1, '상 세 발 주 내 역', fmt_title)
-        sales_df.to_excel(writer, sheet_name='06_상세_발주_내역', index=False, startrow=2, header=False)
-        ws_orders.write_row('A3', sales_df.columns, fmt_header)
-        
+            # ✨ 퍼센트 서식 적용
+            ws_item_rank.write(row_num + 4, 3, row_data[3] / 100, workbook.add_format({'num_format': '0.00%', 'align': 'right', 'border': 1}))
+
+        ws_item_rank.set_column(0, 0, 30)
+        ws_item_rank.set_column(1, 3, 15)
+
+        # --- 6. 상세 발주 내역 시트는 요청에 따라 제거 ---
+
     output.seek(0)
     return output
     
@@ -2440,7 +2433,10 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
         
         c1, c2 = st.columns(2)
+        
+        # ✨ 수정된 부분: "매출정산표"는 더 이상 is_inventory_report에 포함되지 않음
         is_inventory_report = sub_doc_type == "현재고현황보고서"
+        
         dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
         dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
         dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
@@ -2459,7 +2455,6 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                 if selected_info['역할'] == CONFIG['ROLES']['ADMIN']:
                     log_df_raw = get_inventory_log_df()
                     orders_df = get_orders_df()
-                    transactions_df = get_transactions_df()
                     
                     if sub_doc_type == "매출정산표":
                         df_sales_raw = orders_df[orders_df['상태'].isin(['승인', '출고완료'])].copy()
@@ -2467,20 +2462,28 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                         df_sales = df_sales_raw[(df_sales_raw['주문일시_dt'] >= dt_from) & (df_sales_raw['주문일시_dt'] <= dt_to)]
                         
                         if not df_sales.empty:
-                            daily_pivot = df_sales.pivot_table(index=['주문일시_dt'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
-                            monthly_pivot = df_sales.pivot_table(index=['주문일시_dt'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
+                            # ✨ 추가된 부분: '연', '월', '일' 열 생성
+                            df_sales['연'] = df_sales['주문일시'].dt.strftime('%y')
+                            df_sales['월'] = df_sales['주문일시'].dt.month
+                            df_sales['일'] = df_sales['주문일시'].dt.day
+
+                            # ✨ 수정된 부분: 피벗 테이블 인덱스를 '연', '월', '일'로 변경
+                            daily_pivot = df_sales.pivot_table(index=['연', '월', '일'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
+                            monthly_pivot = df_sales.pivot_table(index=['연', '월'], columns='지점명', values='합계금액', aggfunc='sum', fill_value=0, margins=True, margins_name='합계')
+
                             summary_data = {
                                 'total_sales': df_sales["합계금액"].sum(), 'total_supply': df_sales["공급가액"].sum(),
                                 'total_tax': df_sales["세액"].sum(), 'total_orders': df_sales['발주번호'].nunique()
                             }
                             filter_info = {
                                 'period': f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}",
-                                'store': selected_entity_real_name
+                                'store': "(전체 통합)"
                             }
                             excel_buffer = make_sales_summary_excel(df_sales, daily_pivot, monthly_pivot, summary_data, filter_info)
                             file_name = f"매출정산표_{dt_from}_to_{dt_to}.xlsx"
                             st.session_state.excel_buffer = excel_buffer
                             st.session_state.report_filename = file_name
+                            st.session_state.report_df = df_sales
                             st.session_state.report_info = {'name': selected_entity_real_name, 'type': sub_doc_type, 'from': dt_from, 'to': dt_to}
                             st.rerun()
                         else:
