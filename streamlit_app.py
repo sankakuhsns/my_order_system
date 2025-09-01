@@ -49,6 +49,7 @@ CONFIG = {
     'TRANSACTIONS': { 'name': "거래내역", 'cols': ["일시", "지점ID", "지점명", "구분", "내용", "금액", "처리후선충전잔액", "처리후사용여신액", "관련발주번호", "처리자"] },
     'AUDIT_LOG': { 'name': "활동로그", 'cols': ["로그일시", "변경자 ID", "변경자 이름", "작업 종류", "대상 ID", "대상 이름", "변경 항목", "이전 값", "새로운 값", "사유"] },
     'INVENTORY_LOG': { 'name': "재고로그", 'cols': ["로그일시", "작업일자", "품목코드", "품목명", "구분", "수량변경", "처리후재고", "관련번호", "처리자", "사유"] },
+    'PRICE_HISTORY': { 'name': "가격변경이력", 'cols': ["변경일시", "품목코드", "품목명", "이전단가", "새단가"] },
     'CART': { 'cols': ["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)", "수량", "합계금액(VAT포함)"] },
     'ROLES': { 'ADMIN': 'admin', 'STORE': 'store' },
     'ORDER_STATUS': { 'PENDING': '요청', 'APPROVED': '승인', 'SHIPPED': '출고완료', 'REJECTED': '반려', 'CANCELED_STORE': '취소', 'CANCELED_ADMIN': '승인취소' },
@@ -63,13 +64,13 @@ def now_kst_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
 
 def display_feedback():
     if "success_message" in st.session_state and st.session_state.success_message:
-        st.success(st.session_state.success_message)
+        st.success(st.session_state.success_message, icon="✅")
         st.session_state.success_message = ""
     if "error_message" in st.session_state and st.session_state.error_message:
-        st.error(st.session_state.error_message)
+        st.error(st.session_state.error_message, icon="🚨")
         st.session_state.error_message = ""
     if "warning_message" in st.session_state and st.session_state.warning_message:
-        st.warning(st.session_state.warning_message)
+        st.warning(st.session_state.warning_message, icon="⚠️")
         st.session_state.warning_message = ""
 
 def v_spacer(height: int):
@@ -141,7 +142,7 @@ def open_spreadsheet():
         st.error(f"스프레드시트 열기 실패: {e}")
         st.stop()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def load_data(sheet_name: str, columns: List[str] = None) -> pd.DataFrame:
     try:
         ws = open_spreadsheet().worksheet(sheet_name)
@@ -344,6 +345,11 @@ def get_inventory_log_df():
         st.session_state.inventory_log_df = load_data(CONFIG['INVENTORY_LOG']['name'], CONFIG['INVENTORY_LOG']['cols'])
     return st.session_state.inventory_log_df
 
+def get_price_history_df():
+    if 'price_history_df' not in st.session_state:
+        st.session_state.price_history_df = load_data(CONFIG['PRICE_HISTORY']['name'], CONFIG['PRICE_HISTORY']['cols'])
+    return st.session_state.price_history_df
+
 def require_login():
     if st.session_state.get("auth", {}).get("login"):
         user = st.session_state.auth
@@ -374,7 +380,28 @@ def require_login():
             else:
                 st.error(auth_result.get("message", "로그인 실패"))
     return False
+
+# =============================================================================
+# 가격 및 보고서 유틸리티
+# =============================================================================
+@st.cache_data(ttl=300)
+def get_price_at_date(item_code: str, target_date: date, price_history_df: pd.DataFrame, master_df: pd.DataFrame) -> int:
+    """특정 날짜 기준의 품목 단가를 가격 이력에서 조회"""
+    target_datetime = datetime.combine(target_date, datetime.max.time())
+
+    item_history = price_history_df[price_history_df['품목코드'] == item_code].copy()
     
+    if not item_history.empty:
+        item_history['변경일시_dt'] = pd.to_datetime(item_history['변경일시'], errors='coerce')
+        relevant_history = item_history[item_history['변경일시_dt'] <= target_datetime].dropna(subset=['변경일시_dt'])
+        
+        if not relevant_history.empty:
+            latest_price_row = relevant_history.sort_values(by='변경일시_dt', ascending=False).iloc[0]
+            return int(latest_price_row['새단가'])
+
+    current_price_series = master_df.loc[master_df['품목코드'] == item_code, '단가']
+    return int(current_price_series.iloc[0]) if not current_price_series.empty else 0
+
 # =============================================================================
 # 4) Excel 생성 (통합 양식 v2.1 - 최종 수정본)
 # =============================================================================
@@ -640,11 +667,19 @@ def make_inventory_production_report_excel(df_report: pd.DataFrame, report_type:
     if df_report.empty:
         return output
 
-    # 1. 데이터 전처리: 단가 정보를 가져오고 '총금액' 계산
+    # 1. 데이터 전처리: '가격이력'을 기반으로 '총금액' 계산
     master_df = get_master_df()
-    df_merged = pd.merge(df_report, master_df[['품목코드', '단위', '단가']], on='품목코드', how='left')
+    price_history_df = get_price_history_df()
     
-    # 숫자형으로 변환 및 '총금액' 계산
+    df_report['작업일자_dt'] = pd.to_datetime(df_report['작업일자']).dt.date
+    
+    # 각 생산 건에 대해 해당 작업일자의 단가를 조회
+    df_report['단가'] = df_report.apply(
+        lambda row: get_price_at_date(row['품목코드'], row['작업일자_dt'], price_history_df, master_df),
+        axis=1
+    )
+
+    df_merged = pd.merge(df_report, master_df[['품목코드', '단위']], on='품목코드', how='left')
     df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
     df_merged['수량변경'] = pd.to_numeric(df_merged['수량변경'], errors='coerce').fillna(0).astype(int)
     df_merged['총금액'] = df_merged['단가'] * df_merged['수량변경']
@@ -814,11 +849,17 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
     if df_report.empty:
         return output
 
-    # 상품마스터 데이터를 불러와 단가 등 추가 정보 결합
     master_df = get_master_df()
-    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위', '단가']], on='품목코드', how='left').fillna(0)
+    price_history_df = get_price_history_df()
     
-    # ✨ 총 금액 열 계산
+    # 조회 기준일(dt_to)의 단가를 가져옴
+    df_report['단가'] = df_report.apply(
+        lambda row: get_price_at_date(row['품목코드'], dt_to, price_history_df, master_df),
+        axis=1
+    )
+    
+    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위']], on='품목코드', how='left').fillna('')
+    
     df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
     df_merged['현재고수량'] = pd.to_numeric(df_merged['현재고수량'], errors='coerce').fillna(0).astype(int)
     df_merged['총금액'] = df_merged['단가'] * df_merged['현재고수량']
@@ -1219,18 +1260,19 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
             )
             
             if st.form_submit_button("장바구니 추가", use_container_width=True, type="primary"):
-                # ✨ 추가된 부분: 음수 값 입력 방지 로직
                 edited_df = pd.DataFrame(edited_disp)
+                # [개선] 음수 값 입력 방지 로직
                 if (pd.to_numeric(edited_df['수량'], errors='coerce') < 0).any():
                     st.session_state.error_message = "발주 수량은 0 이상이어야 합니다. 음수 값을 수정해주세요."
                     st.rerun()
-                # ✨ 수정 끝
                 
                 items_to_add = coerce_cart_df(edited_df)
                 if not items_to_add[items_to_add["수량"] > 0].empty:
                     add_to_cart(items_to_add, master_df)
                     st.session_state.store_editor_ver += 1
                     st.session_state.success_message = "선택한 품목이 장바구니에 추가되었습니다."
+                else:
+                    st.session_state.warning_message = "장바구니에 추가할 품목의 수량을 입력해주세요."
                 st.rerun()
 
     v_spacer(16)
@@ -1284,40 +1326,45 @@ def page_store_register_confirm(master_df: pd.DataFrame, balance_info: pd.Series
                         for _, r in cart_with_master.iterrows():
                             rows.append({"주문일시": now_kst_str(), "발주번호": order_id, "지점ID": user["user_id"], "지점명": user["name"], "품목코드": r["품목코드"], "품목명": r["품목명"], "단위": r["단위"], "수량": r["수량"], "단가": r["단가"], "공급가액": r['공급가액'], "세액": r['세액'], "합계금액": r['합계금액_final'], "비고": memo, "상태": CONFIG['ORDER_STATUS']['PENDING'], "처리자": "", "처리일시": "", "반려사유":""})
 
-                        original_balance = {"선충전잔액": prepaid_balance, "사용여신액": used_credit}
-                        
                         if payment_method == "선충전 잔액 결제":
                             new_balance = prepaid_balance - total_final_amount_sum
                             new_used_credit = used_credit
                             trans_desc = "선충전결제"
-                        else:
+                        else: # 여신 결제
                             new_balance = prepaid_balance
                             new_used_credit = used_credit + total_final_amount_sum
                             trans_desc = "여신결제"
 
-                        if update_balance_sheet(user["user_id"], {"선충전잔액": new_balance, "사용여신액": new_used_credit}):
-                            try:
-                                append_rows_to_sheet(CONFIG['ORDERS']['name'], rows, CONFIG['ORDERS']['cols'])
-                                transaction_record = {
-                                    "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
-                                    "구분": trans_desc, "내용": f"{cart_now.iloc[0]['품목명']} 등 {len(cart_now)}건 발주",
-                                    "금액": -total_final_amount_sum, "처리후선충전잔액": new_balance,
-                                    "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
-                                }
-                                append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [transaction_record], CONFIG['TRANSACTIONS']['cols'])
-                                
-                                st.session_state.success_message = "발주 및 결제가 성공적으로 완료되었습니다."
-                                st.session_state.cart = pd.DataFrame(columns=CONFIG['CART']['cols'])
-                                clear_data_cache()
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"발주/거래 기록 중 오류 발생: {e}. 결제를 원상복구합니다.")
-                                update_balance_sheet(user["user_id"], original_balance)
-                                clear_data_cache()
-                                st.rerun()
-                        else:
-                            st.session_state.error_message = "결제 처리 중 오류가 발생했습니다."
+                        # [안정성] 기록 -> 처리 -> 금액 변경 순서 적용 (발주 요청은 선결제 방식이므로 금액 변경부터)
+                        try:
+                            # 1. 발주서 기록
+                            if not append_rows_to_sheet(CONFIG['ORDERS']['name'], rows, CONFIG['ORDERS']['cols']):
+                                raise Exception("발주 기록 실패")
+                            
+                            # 2. 거래내역 기록
+                            transaction_record = {
+                                "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
+                                "구분": trans_desc, "내용": f"{cart_now.iloc[0]['품목명']} 등 {len(cart_now)}건 발주",
+                                "금액": -total_final_amount_sum, "처리후선충전잔액": new_balance,
+                                "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                            }
+                            if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [transaction_record], CONFIG['TRANSACTIONS']['cols']):
+                                 raise Exception("거래내역 기록 실패, 발주 기록 롤백 필요")
+
+                            # 3. 모든 기록 성공 후 실제 잔액 변경
+                            if not update_balance_sheet(user["user_id"], {"선충전잔액": new_balance, "사용여신액": new_used_credit}):
+                                raise Exception("최종 결제 처리 실패, 수동 확인 필요")
+
+                            st.session_state.success_message = "발주 및 결제가 성공적으로 완료되었습니다."
+                            st.session_state.cart = pd.DataFrame(columns=CONFIG['CART']['cols'])
+                            clear_data_cache()
                             st.rerun()
+
+                        except Exception as e:
+                            st.session_state.error_message = f"발주 처리 중 오류가 발생했습니다: {e}. 문제가 지속되면 관리자에게 문의하세요."
+                            # 롤백 로직 추가 가능 (예: 생성된 발주서 삭제 등)
+                            st.rerun()
+                            
                 with c2:
                     if st.form_submit_button("🗑️ 장바구니 비우기", use_container_width=True):
                         st.session_state.cart = pd.DataFrame(columns=CONFIG['CART']['cols'])
@@ -1421,11 +1468,10 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 
     if 'cancel_ids' in st.session_state and st.session_state.cancel_ids:
         with st.spinner("발주 취소 및 환불 처리 중..."):
-            ids_to_process = st.session_state.cancel_ids
-            del st.session_state.cancel_ids
-
-            df_all_transactions = load_data(CONFIG['TRANSACTIONS']['name'], CONFIG['TRANSACTIONS']['cols'])
-            df_balance = load_data(CONFIG['BALANCE']['name'], CONFIG['BALANCE']['cols'])
+            ids_to_process = st.session_state.pop('cancel_ids')
+            
+            df_all_transactions = get_transactions_df()
+            df_balance = get_balance_df()
             user = st.session_state.auth
             
             success_count = 0
@@ -1434,25 +1480,28 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             for order_id in ids_to_process:
                 original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
                 if original_transaction.empty:
-                    st.warning(f"발주번호 {order_id}에 대한 원본 거래내역을 찾을 수 없어 환불 처리를 건너뜁니다.")
+                    st.session_state.warning_message = f"발주번호 {order_id}의 원본 거래내역이 없어 환불 처리를 건너뜁니다."
                     fail_count += 1
                     continue
 
                 trans_info = original_transaction.iloc[0]
-                refund_amount = abs(int(trans_info['금액']))
                 balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
                 
                 if balance_info_df.empty:
-                    st.error(f"'{user['name']}'님의 잔액 정보를 찾을 수 없습니다.")
+                    st.session_state.error_message = f"'{user['name']}'님의 잔액 정보를 찾을 수 없습니다."
                     fail_count += 1
                     continue
 
                 balance_info = balance_info_df.iloc[0]
-                new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
+                current_prepaid, current_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
                 
-                credit_refund = min(refund_amount, new_used_credit)
-                new_used_credit -= credit_refund
-                new_prepaid += (refund_amount - credit_refund)
+                refund_amount = abs(int(trans_info['금액']))
+                
+                new_prepaid, new_used_credit = current_prepaid, current_used_credit
+                if trans_info['구분'] == '선충전결제':
+                    new_prepaid += refund_amount
+                else: # 여신결제
+                    new_used_credit -= refund_amount
 
                 refund_record = {
                     "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
@@ -1461,37 +1510,38 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
                 }
                 
-                # ✨ 수정된 로직: 기록 -> 상태 변경 -> 실제 금액 변경 순으로 진행
+                # [안정성] 기록 -> 처리 -> 금액 변경 순서 적용
                 try:
-                    # 1. 거래내역 기록
-                    if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
-                        raise Exception("거래내역 기록 실패")
-                    
-                    # 2. 발주 상태 변경
-                    if not update_order_status([order_id], "취소", user["name"]):
+                    # 1. 발주 상태 먼저 '취소'로 변경
+                    if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_STORE'], user["name"]):
                         raise Exception("발주 상태 변경 실패")
                         
-                    # 3. 잔액 정보 업데이트 (최종 단계)
+                    # 2. 거래내역에 환불 기록 추가
+                    if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
+                        update_order_status([order_id], CONFIG['ORDER_STATUS']['PENDING'], "system_rollback") 
+                        raise Exception("거래내역 기록 실패")
+                        
+                    # 3. 모든 기록과 처리가 성공한 후, 최종적으로 실제 잔액(돈) 변경
                     if not update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit}):
-                        raise Exception("잔액 정보 업데이트 실패")
+                        st.session_state.error_message = f"CRITICAL ERROR: {order_id} 환불 금액이 기록되었으나 잔액 반영에 실패했습니다. 즉시 수동 조치가 필요합니다!"
+                        fail_count += 1
+                        continue
                     
                     success_count += 1
 
                 except Exception as e:
                     fail_count += 1
-                    st.error(f"발주번호 {order_id} 처리 중 오류 발생: {e}. 해당 건은 관리자에게 문의하세요.")
-                    # 여기에 실패 시 복구 로직을 추가할 수 있지만, 현재는 기록이 남아있으므로 수동 처리가 가능합니다.
+                    st.session_state.error_message = f"발주번호 {order_id} 처리 중 오류 발생: {e}. 데이터가 원상 복구되었을 수 있습니다."
 
             if success_count > 0:
                 st.session_state.success_message = f"{success_count}건의 발주가 취소되고 환불 처리되었습니다."
             if fail_count > 0:
-                 st.session_state.error_message = f"{fail_count}건의 발주 취소에 실패했습니다. 관리자에게 문의하세요."
+                 st.session_state.warning_message = f"{fail_count}건의 발주 취소에 실패했습니다."
 
             st.session_state.store_orders_selection = {}
             clear_data_cache()
             st.rerun()
 
-    # (이하 페이지 렌더링 코드는 기존과 동일)
     df_all_orders = get_orders_df()
     user = st.session_state.auth
     df_user = df_all_orders[df_all_orders["지점ID"] == user["user_id"]]
@@ -1521,9 +1571,9 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     
     pending = orders[orders["상태"] == "요청"].copy()
     shipped = orders[orders["상태"].isin(["승인", "출고완료"])].copy()
-    rejected = orders[orders["상태"] == "반려"].copy()
+    rejected = orders[orders["상태"].isin(["반려", "취소", "승인취소"])].copy()
 
-    tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려 ({len(rejected)}건)"])
+    tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려/취소 ({len(rejected)}건)"])
     
     def handle_multiselect(key, source_df):
         edits = st.session_state[key].get("edited_rows", {})
@@ -1994,14 +2044,14 @@ def page_admin_daily_production(master_df: pd.DataFrame):
 
             if st.form_submit_button("생산 목록에 추가", type="primary", use_container_width=True):
                 if production_date != date.today() and not change_reason:
-                    st.warning("생산일자를 변경한 경우, 변경 사유를 반드시 입력해야 합니다.")
+                    st.session_state.warning_message = "생산일자를 변경한 경우, 변경 사유를 반드시 입력해야 합니다."
+                    st.rerun()
                 else:
-                    # ✨ 추가된 부분: 음수 값 입력 방지 로직
                     edited_df = pd.DataFrame(edited_production)
-                    if (edited_df['생산수량'] < 0).any():
+                    # [개선] 음수 값 입력 방지 로직
+                    if (pd.to_numeric(edited_df['생산수량'], errors='coerce') < 0).any():
                         st.session_state.error_message = "생산수량은 0 이상이어야 합니다. 음수 값을 수정해주세요."
                         st.rerun()
-                    # ✨ 수정 끝
                     
                     items_to_add = edited_df[edited_df['생산수량'] > 0]
                     if not items_to_add.empty:
@@ -2019,6 +2069,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                     else:
                         st.session_state.warning_message = "생산수량을 입력한 품목이 없습니다."
                     st.rerun()
+
     v_spacer(16)
 
     with st.container(border=True):
@@ -2047,6 +2098,7 @@ def page_admin_daily_production(master_df: pd.DataFrame):
                                 st.rerun()
                             else:
                                 st.session_state.error_message = "생산 기록 저장 중 오류가 발생했습니다."
+                                st.rerun()
                 
                 with btn_cols[1]:
                     if st.form_submit_button("🗑️ 목록 비우기", use_container_width=True):
@@ -2941,38 +2993,80 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             clear_data_cache()
                             st.rerun()
                             
+# 기존 render_master_settings_tab 함수를 아래 코드로 전체 교체하세요.
+
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
     st.markdown("##### 🏷️ 품목 정보 설정")
-    edited_master_df = st.data_editor(master_df_raw, num_rows="dynamic", use_container_width=True, key="master_editor")
+    
+    master_df_raw['단가'] = pd.to_numeric(master_df_raw['단가'], errors='coerce').fillna(0)
+
+    edited_master_df = st.data_editor(
+        master_df_raw, 
+        num_rows="dynamic", 
+        use_container_width=True, 
+        key="master_editor"
+    )
     
     if st.button("품목 정보 저장", type="primary", key="save_master"):
-        try:
-            master_df_raw_c = master_df_raw.astype(str)
-            edited_master_df_c = pd.DataFrame(edited_master_df).astype(str)
-            
-            diff = master_df_raw_c.compare(edited_master_df_c)
-            if not diff.empty:
-                user = st.session_state.auth
-                for idx, row in diff.iterrows():
-                    item_info = master_df_raw.iloc[int(idx)]
-                    for col_name in diff.columns.levels[0]:
-                        old_val = row[(col_name, 'self')]
-                        new_val = row[(col_name, 'other')]
-                        if pd.notna(old_val) or pd.notna(new_val):
-                            add_audit_log(
-                                user_id=user['user_id'], user_name=user['name'],
-                                action_type="품목 정보 수정",
-                                target_id=item_info['품목코드'], target_name=item_info['품목명'],
-                                changed_item=col_name,
-                                before_value=old_val, after_value=new_val
-                            )
-        except Exception as e:
-            print(f"Error during audit logging for master data: {e}")
+        with st.spinner("변경 사항을 저장하고 이력을 기록하는 중입니다..."):
+            edited_df = pd.DataFrame(edited_master_df)
+            edited_df['단가'] = pd.to_numeric(edited_df['단가'], errors='coerce').fillna(0)
 
-        if save_df_to_sheet(CONFIG['MASTER']['name'], edited_master_df):
-            st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
-            clear_data_cache()
-            st.rerun()
+            comparison_df = pd.merge(
+                master_df_raw.rename(columns={'단가': '단가_old', '품목명': '품목명_old'}),
+                edited_df.rename(columns={'단가': '단가_new', '품목명': '품목명_new'}),
+                on="품목코드",
+                how='inner'
+            )
+            
+            price_changes = comparison_df[comparison_df['단가_old'] != comparison_df['단가_new']]
+            
+            new_history_records = []
+            if not price_changes.empty:
+                for _, row in price_changes.iterrows():
+                    record = {
+                        "변경일시": now_kst_str(),
+                        "품목코드": row['품목코드'],
+                        "품목명": row['품목명_new'],
+                        "이전단가": row['단가_old'],
+                        "새단가": row['단가_new'],
+                    }
+                    new_history_records.append(record)
+            
+            if new_history_records:
+                append_rows_to_sheet(
+                    CONFIG['PRICE_HISTORY']['name'], 
+                    new_history_records, 
+                    CONFIG['PRICE_HISTORY']['cols']
+                )
+
+            if save_df_to_sheet(CONFIG['MASTER']['name'], edited_df):
+                st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
+                if new_history_records:
+                    st.session_state.success_message += f" ({len(new_history_records)}건의 가격 변경 이력이 기록되었습니다.)"
+                clear_data_cache()
+                st.rerun()
+
+    st.divider()
+
+    st.markdown("##### 🧾 품목 가격 변경 이력")
+    price_history_df = get_price_history_df()
+
+    if price_history_df.empty:
+        st.info("기록된 가격 변경 이력이 없습니다.")
+    else:
+        search_term = st.text_input("품목명 또는 코드로 이력 검색", placeholder="예: 양배추, P001")
+        
+        if search_term:
+            search_term_lower = search_term.lower()
+            filtered_history = price_history_df[
+                price_history_df['품목명'].str.lower().contains(search_term_lower, na=False) |
+                price_history_df['품목코드'].str.lower().contains(search_term_lower, na=False)
+            ]
+        else:
+            filtered_history = price_history_df
+
+        st.dataframe(filtered_history, use_container_width=True, hide_index=True)
 
 def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
     st.markdown("##### 🏢 지점(사용자) 정보 설정")
