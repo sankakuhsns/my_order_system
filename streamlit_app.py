@@ -2402,13 +2402,13 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
         'period': f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}",
         'store': store_sel
     }
-    excel_buffer = make_sales_summary_excel(daily_pivot, monthly_pivot, summary_data, filter_info)
+    excel_buffer = make_sales_summary_excel(df_sales, daily_pivot, monthly_pivot, summary_data, filter_info)
+    # 버튼 이름 변경
     st.download_button(label="📥 매출정산표 다운로드", data=excel_buffer, file_name=f"매출정산표_{dt_from}_to_{dt_to}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
 
-    # 세션 상태에 리포트 데이터 및 파일명 초기화
     if 'report_df' not in st.session_state:
         st.session_state.report_df = pd.DataFrame()
     if 'excel_buffer' not in st.session_state:
@@ -2435,14 +2435,12 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             selected_entity_info = store_info_df[store_info_df['지점명'] == selected_entity_real_name].iloc[0]
             with c2:
                 if selected_entity_info['역할'] == CONFIG['ROLES']['ADMIN']:
-                    # 관리자용 서류 목록에 '매출정산표' 추가
                     sub_doc_type = st.selectbox("서류 종류", ["매출정산표", "품목생산보고서", "재고변동보고서", "현재고현황보고서"], key="admin_doc_type_admin")
                 else:
                     sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
         
         c1, c2 = st.columns(2)
-        # '현재고현황보고서'만 조회 시작일 입력창을 비활성화
-        is_inventory_report = sub_doc_type == "현재고현황보고서"
+        is_inventory_report = sub_doc_type == "현재고현황보고서" or sub_doc_type == "매출정산표"
         dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
         dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
         dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
@@ -2464,7 +2462,6 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     transactions_df = get_transactions_df()
                     
                     if sub_doc_type == "매출정산표":
-                        # 매출정산표 로직
                         df_sales_raw = orders_df[orders_df['상태'].isin(['승인', '출고완료'])].copy()
                         df_sales_raw['주문일시_dt'] = pd.to_datetime(df_sales_raw['주문일시'], errors='coerce').dt.date
                         df_sales = df_sales_raw[(df_sales_raw['주문일시_dt'] >= dt_from) & (df_sales_raw['주문일시_dt'] <= dt_to)]
@@ -2480,10 +2477,8 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                                 'period': f"{dt_from.strftime('%Y-%m-%d')} ~ {dt_to.strftime('%Y-%m-%d')}",
                                 'store': selected_entity_real_name
                             }
-                            excel_buffer = make_sales_summary_excel(daily_pivot, monthly_pivot, summary_data, filter_info)
+                            excel_buffer = make_sales_summary_excel(df_sales, daily_pivot, monthly_pivot, summary_data, filter_info)
                             file_name = f"매출정산표_{dt_from}_to_{dt_to}.xlsx"
-                            report_df = pd.DataFrame()
-                            st.session_state.report_df = pd.DataFrame()
                             st.session_state.excel_buffer = excel_buffer
                             st.session_state.report_filename = file_name
                             st.session_state.report_info = {'name': selected_entity_real_name, 'type': sub_doc_type, 'from': dt_from, 'to': dt_to}
