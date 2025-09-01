@@ -796,30 +796,36 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
     if df_report.empty:
         return output
 
-    # 상품마스터 데이터를 불러와 품목규격 및 단위 정보를 결합
+    # 상품마스터 데이터를 불러와 단가 등 추가 정보 결합
     master_df = get_master_df()
-    # df_report에 없는 '품목규격'과 '단위'만 병합하도록 수정
-    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위']], on='품목코드', how='left')
+    df_merged = pd.merge(df_report, master_df[['품목코드', '품목규격', '단위', '단가']], on='품목코드', how='left').fillna(0)
+    
+    # ✨ 총 금액 열 계산
+    df_merged['단가'] = pd.to_numeric(df_merged['단가'], errors='coerce').fillna(0).astype(int)
+    df_merged['현재고수량'] = pd.to_numeric(df_merged['현재고수량'], errors='coerce').fillna(0).astype(int)
+    df_merged['총 금액'] = df_merged['단가'] * df_merged['현재고수량']
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet(report_type)
         
-        # 인쇄 시 모든 열을 한 페이지에 맞추는 설정을 추가합니다.
         worksheet.fit_to_pages(1, 0)
         
         # 1. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        
-        # 모든 데이터 셀에 적용할 가운데 정렬 포맷
         fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_money_c = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_money_bg_c = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
+        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'center', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
         
-        # 수량 셀에 적용할 배경색 포맷을 테마 색상으로 변경 (오른쪽 정렬을 가운데 정렬로 변경)
-        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
+        # ✨ 합계 행을 위한 서식 추가
+        fmt_subtotal_label = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
+        fmt_subtotal_money = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'num_format': '#,##0 "원"', 'align': 'right', 'valign': 'vcenter', 'border': 1})
 
-        # 2. 데이터 전처리 및 열 선택
-        df_display = df_merged[['품목코드', '분류', '품목명', '품목규격', '단위', '현재고수량']].copy()
+        # 2. 데이터 및 열 순서 재정의
+        columns_order = ['품목코드', '분류', '품목명', '품목규격', '단위', '단가', '현재고수량', '총 금액']
+        df_display = df_merged[columns_order].copy()
 
         # 3. 헤더 영역 작성
         worksheet.set_row(0, 50)
@@ -827,12 +833,11 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
         
         # 4. 보고서 정보 (조회 기준일)
         current_row = 2
-        fmt_date_header = workbook.add_format({'bold': True, 'font_size': 10, 'align': 'center', 'valign': 'vcenter', 'indent': 1, 'bg_color': '#EAF1F8', 'border': 1})
-        worksheet.merge_range(f'A{current_row}:F{current_row}', f"조회 기준일: {dt_to}", fmt_date_header)
+        worksheet.merge_range(f'A{current_row}:{chr(65 + len(df_display.columns) - 1)}{current_row}', f"조회 기준일: {dt_to}", fmt_date_header)
         current_row += 2
 
         # 5. 본문 데이터
-        headers = ['품목코드', '분류', '품목명', '품목규격', '단위', '현재고수량']
+        headers = ['품목코드', '분류', '품목명', '품목규격', '단위', '단가', '현재고수량', '총 금액']
         worksheet.write_row(f'A{current_row}', headers, fmt_header)
         current_row += 1
         
@@ -842,15 +847,23 @@ def make_inventory_current_report_excel(df_report: pd.DataFrame, report_type: st
             worksheet.write(f'C{current_row}', row['품목명'], fmt_text_c)
             worksheet.write(f'D{current_row}', row['품목규격'], fmt_text_c)
             worksheet.write(f'E{current_row}', row['단위'], fmt_text_c)
-            worksheet.write(f'F{current_row}', row['현재고수량'], fmt_money_bg)
+            worksheet.write(f'F{current_row}', row['단가'], fmt_money_c) # 단가 열 추가
+            worksheet.write(f'G{current_row}', row['현재고수량'], fmt_money_bg_c)
+            worksheet.write(f'H{current_row}', row['총 금액'], fmt_money_bg_c) # 총 금액 열 추가
             current_row += 1
 
-        # 열 너비를 고정 값으로 변경하고, 4행부터 높이를 20으로 설정
-        col_widths_final = [10, 10, 30, 10, 10, 10]
+        # ✨ 6. 총 평가금액 합계 행 추가
+        current_row += 1 # 한 칸 띄우기
+        total_valuation = df_display['총 금액'].sum()
+        worksheet.merge_range(f'A{current_row}:G{current_row}', '총 평가금액', fmt_subtotal_label)
+        worksheet.write(f'H{current_row}', total_valuation, fmt_subtotal_money)
+
+        # 7. 최종 열 너비 및 행 높이 설정
+        col_widths_final = [10, 10, 30, 10, 8, 10, 10, 15]
         for i, width in enumerate(col_widths_final):
             worksheet.set_column(i, i, width)
         
-        for i in range(4, len(df_display) + 4):
+        for i in range(4, len(df_display) + 5): # 헤더 포함한 행 개수만큼
             worksheet.set_row(i, 20)
 
     output.seek(0)
