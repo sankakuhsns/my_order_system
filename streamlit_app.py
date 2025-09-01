@@ -409,7 +409,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         workbook = writer.book
         worksheet = workbook.add_worksheet("품목거래내역서")
 
-        # 인쇄 시 모든 열을 한 페이지에 맞춤
         worksheet.fit_to_pages(1, 0)
 
         # 2. Excel 서식 정의
@@ -465,7 +464,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.merge_range('D11:E11', '총 합계 금액', fmt_summary_header)
         worksheet.merge_range('F11:I11', grand_total, fmt_summary_money)
 
-        # ### 1번 수정: 요약 정보와 목록 사이에 한 줄 띄우기 위해 시작 행을 13으로 설정 ###
         current_row = 13 
 
         # 6. 본문 데이터 작성
@@ -480,11 +478,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
 
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
-            current_row += 1  # 헤더 다음 줄부터 데이터
+            current_row += 1
 
-            # 🔧 여기서부터 최소 수정: 숫자 인덱스(0-based) 오프셋 보정
-            row_idx = current_row - 1  # 현 1-based를 0-based로 변환
-
+            row_idx = current_row - 1
             date_df = df_agg[df_agg['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
@@ -500,7 +496,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 item_counter += 1
                 row_idx += 1
 
-            # 다음 계산을 위해 current_row를 다시 1-based로 동기화
             current_row = row_idx + 1
             
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
@@ -514,6 +509,14 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         worksheet.write(f'G{current_row}', df_agg['공급가액'].sum(), fmt_subtotal_money)
         worksheet.write(f'H{current_row}', df_agg['세액'].sum(), fmt_subtotal_money)
         worksheet.write(f'I{current_row}', df_agg['합계금액'].sum(), fmt_subtotal_money)
+
+        # 8. 요청사항 추가
+        memo = orders_df['비고'].iloc[0] if not orders_df.empty and '비고' in orders_df.columns else ""
+        if pd.notna(memo) and memo.strip():
+            current_row += 2 # 한 칸 띄우기
+            worksheet.set_row(current_row -1, 35) # 행 높이 조절
+            worksheet.merge_range(f'A{current_row}:B{current_row}', '요청사항', fmt_info_label)
+            worksheet.merge_range(f'C{current_row}:I{current_row}', memo, fmt_info_data)
 
     output.seek(0)
     return output
@@ -2284,26 +2287,43 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
         st.session_state.confirm_data = {'ids': selected_shipped_ids}
         st.rerun()
 
-def render_rejected_orders_tab(rejected_orders: pd.DataFrame):
-    page_size = 10
-    page_number = render_paginated_ui(len(rejected_orders), page_size, "rejected_orders")
-    start_idx = (page_number - 1) * page_size
-    end_idx = start_idx + page_size
-    rejected_display = rejected_orders.iloc[start_idx:end_idx].copy()
+def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
+    with st.container(border=True):
+        st.markdown("##### 📄 발주 품목 상세 조회")
+        if len(selected_ids) == 1:
+            target_id = selected_ids[0]
+            target_df = df_all[df_all["발주번호"] == target_id]
+            if not target_df.empty:
+                total_amount = target_df['합계금액'].sum()
+                
+                # 요청사항(비고)을 가져오는 로직 추가
+                memo = target_df['비고'].iloc[0]
 
-    rejected_display.insert(0, '선택', [st.session_state.admin_orders_selection.get(x, False) for x in rejected_display['발주번호']])
-    edited_rejected = st.data_editor(rejected_display[['선택', '주문일시', '발주번호', '지점명', '건수', '합계금액(원)', '상태', '반려사유']], key="admin_rejected_editor", hide_index=True, disabled=rejected_orders.columns)
+                st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
 
-    for _, row in edited_rejected.iterrows():
-        st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
-            
-    selected_rejected_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in rejected_orders['발주번호'].values]
+                # 요청사항이 있을 경우 화면에 표시
+                if pd.notna(memo) and memo.strip():
+                    st.markdown("**요청사항:**")
+                    st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
 
-    if st.button("↩️ 선택 건 요청 상태로 되돌리기", key="revert_rejected", disabled=not selected_rejected_ids, use_container_width=True):
-        update_order_status(selected_rejected_ids, CONFIG['ORDER_STATUS']['PENDING'], "")
-        st.session_state.success_message = f"{len(selected_rejected_ids)}건이 '요청' 상태로 변경되었습니다."
-        st.session_state.admin_orders_selection.clear()
-        st.rerun()
+                display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+                display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
+                display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
+                st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
+                
+                if target_df.iloc[0]['상태'] in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]:
+                    supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                    store_name = target_df.iloc[0]['지점명']
+                    customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
+                    if not supplier_info_df.empty and not customer_info_df.empty:
+                        supplier_info = supplier_info_df.iloc[0]
+                        customer_info = customer_info_df.iloc[0]
+                        buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
+        elif len(selected_ids) > 1:
+            st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
+        else:
+            st.info("상세 내용을 보려면 위 목록에서 발주를 선택하세요.")
 
 def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     with st.container(border=True):
