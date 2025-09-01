@@ -862,15 +862,21 @@ def make_sales_summary_excel(sales_df: pd.DataFrame, daily_pivot: pd.DataFrame, 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         
-        # 엑셀 보고서 테마 서식 정의 (기존 보고서들과 동일)
+        # 1. 엑셀 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_header = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#4F81BD', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_label = workbook.add_format({'bold': True, 'font_size': 9, 'bg_color': '#F2F2F2', 'align': 'center', 'valign': 'vcenter', 'border': 1})
         fmt_info_data = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
-        fmt_money_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'right', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
-        fmt_text_c = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1})
-        fmt_text_l = workbook.add_format({'font_size': 9, 'align': 'left', 'valign': 'vcenter', 'border': 1})
+        
+        # ✨ 요청사항 1, 2, 3, 4를 위한 신규/수정 서식
+        fmt_money_c_bg = workbook.add_format({'font_size': 9, 'num_format': '#,##0', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
+        fmt_text_c_bg = workbook.add_format({'font_size': 9, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#DDEBF7'})
+        fmt_date_c = workbook.add_format({'align': 'center', 'border': 1})
+        fmt_money_r = workbook.add_format({'num_format': '#,##0', 'align': 'right', 'border': 1})
+        fmt_total_header_c = workbook.add_format({'bold': True, 'bg_color': '#EAEAEA', 'align': 'center', 'border': 1})
+        fmt_total_money_r = workbook.add_format({'bold': True, 'bg_color': '#EAEAEA', 'num_format': '#,##0', 'align': 'right', 'border': 1})
+        fmt_percent = workbook.add_format({'num_format': '0.00%', 'border': 1})
 
         # --- 1. 01_종합_현황 시트 ---
         ws_summary = workbook.add_worksheet('01_종합_현황')
@@ -889,93 +895,139 @@ def make_sales_summary_excel(sales_df: pd.DataFrame, daily_pivot: pd.DataFrame, 
 
         ws_summary.write('A8', '주요 지표', fmt_subtitle)
         ws_summary.write('A9', '총 매출 (VAT 포함)', fmt_info_label)
-        ws_summary.write('B9', summary_data['total_sales'], fmt_money_bg)
+        ws_summary.write('B9', summary_data['total_sales'], fmt_money_c_bg) # ✨ 가운데 정렬, 쉼표 서식 적용
         ws_summary.write('A10', '공급가액', fmt_info_label)
-        ws_summary.write('B10', summary_data['total_supply'], fmt_money_bg)
+        ws_summary.write('B10', summary_data['total_supply'], fmt_money_c_bg) # ✨ 가운데 정렬, 쉼표 서식 적용
         ws_summary.write('A11', '부가세액', fmt_info_label)
-        ws_summary.write('B11', summary_data['total_tax'], fmt_money_bg)
+        ws_summary.write('B11', summary_data['total_tax'], fmt_money_c_bg) # ✨ 가운데 정렬, 쉼표 서식 적용
         ws_summary.write('A12', '총 발주 건수', fmt_info_label)
-        ws_summary.write('B12', summary_data['total_orders'], fmt_text_c)
+        ws_summary.write('B12', summary_data['total_orders'], fmt_text_c_bg) # ✨ 가운데 정렬 적용
 
         # --- 2. 02_일별_매출현황 시트 ---
         ws_daily = workbook.add_worksheet('02_일별_매출현황')
         daily_display_df = daily_pivot.reset_index()
         ws_daily.fit_to_pages(1, 0)
-        # ✨ 제목 범위를 '합계' 열까지 확장
+        
         ws_daily.merge_range(0, 0, 0, len(daily_display_df.columns) - 1, '일 별 매 출 현 황', fmt_title)
         ws_daily.merge_range(1, 0, 1, len(daily_display_df.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
         
-        daily_display_df.to_excel(writer, sheet_name='02_일별_매출현황', index=False, startrow=2)
+        # ✨ 표 시작 행 (조회기간 밑에 한 칸 띄우기)
+        start_row = 3 
+        ws_daily.write_row(start_row, 0, daily_display_df.columns, fmt_header)
         
+        for r_idx, row_data in daily_display_df.iterrows():
+            row_num = start_row + 1 + r_idx
+            if row_data['연'] == '합계':
+                ws_daily.merge_range(row_num, 0, row_num, 2, '합계', fmt_total_header_c) # ✨ 합계 열 병합
+                for c_idx, cell_data in enumerate(row_data[3:], 3):
+                    ws_daily.write(row_num, c_idx, cell_data, fmt_total_money_r)
+            else:
+                ws_daily.write(row_num, 0, row_data['연'], fmt_date_c)
+                ws_daily.write(row_num, 1, row_data['월'], fmt_date_c)
+                ws_daily.write(row_num, 2, row_data['일'], fmt_date_c)
+                for c_idx, cell_data in enumerate(row_data[3:], 3):
+                    ws_daily.write(row_num, c_idx, cell_data, fmt_money_r)
+
         # ✨ 열 너비 조정
-        ws_daily.set_column(0, 2, 8)  # 연, 월, 일
-        ws_daily.set_column(3, len(daily_display_df.columns) - 1, 12) # 데이터 열
+        ws_daily.set_column(0, 2, 5) 
+        ws_daily.set_column(3, len(daily_display_df.columns) - 1, 12)
 
         # --- 3. 03_월별_매출현황 시트 ---
         ws_monthly = workbook.add_worksheet('03_월별_매출현황')
         monthly_display_df = monthly_pivot.reset_index()
         ws_monthly.fit_to_pages(1, 0)
-        # ✨ 제목 범위를 '합계' 열까지 확장
+        
         ws_monthly.merge_range(0, 0, 0, len(monthly_display_df.columns) - 1, '월 별 매 출 현 황', fmt_title)
         ws_monthly.merge_range(1, 0, 1, len(monthly_display_df.columns) - 1, f"조회 기간: {filter_info['period']}", fmt_subtitle)
         
-        monthly_display_df.to_excel(writer, sheet_name='03_월별_매출현황', index=False, startrow=2)
+        start_row = 3
+        ws_monthly.write_row(start_row, 0, monthly_display_df.columns, fmt_header)
+
+        for r_idx, row_data in monthly_display_df.iterrows():
+            row_num = start_row + 1 + r_idx
+            if row_data['연'] == '합계':
+                ws_monthly.merge_range(row_num, 0, row_num, 1, '합계', fmt_total_header_c) # ✨ 합계 열 병합
+                for c_idx, cell_data in enumerate(row_data[2:], 2):
+                    ws_monthly.write(row_num, c_idx, cell_data, fmt_total_money_r)
+            else:
+                ws_monthly.write(row_num, 0, row_data['연'], fmt_date_c)
+                ws_monthly.write(row_num, 1, row_data['월'], fmt_date_c)
+                for c_idx, cell_data in enumerate(row_data[2:], 2):
+                    ws_monthly.write(row_num, c_idx, cell_data, fmt_money_r)
 
         # ✨ 열 너비 조정
-        ws_monthly.set_column(0, 1, 8) # 연, 월
-        ws_monthly.set_column(2, len(monthly_display_df.columns) - 1, 12) # 데이터 열
+        ws_monthly.set_column(0, 1, 5)
+        ws_monthly.set_column(2, len(monthly_display_df.columns) - 1, 12)
 
         # --- 4. 04_지점별_매출순위 시트 ---
         ws_store_rank = workbook.add_worksheet('04_지점별_매출순위')
         ws_store_rank.fit_to_pages(1, 0)
-        ws_store_rank.merge_range('A1:C1', '지 점 별 매 출 순 위', fmt_title)
-        ws_store_rank.merge_range('A2:C2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
         
         store_sales_df = sales_df.groupby("지점명")["합계금액"].sum().nlargest(10).reset_index()
         store_sales_df.columns = ['지점명', '총 매출액']
         
-        ws_store_rank.write_row('A4', store_sales_df.columns, fmt_header)
-        for row_num, row_data in enumerate(store_sales_df.values):
-            ws_store_rank.write_row(row_num + 4, 0, row_data)
-        ws_store_rank.set_column(0, 0, 20)
-        ws_store_rank.set_column(1, 1, 15)
+        # ✨ NO, 매출 비중 열 추가
+        store_sales_df.insert(0, 'NO', range(1, 1 + len(store_sales_df)))
+        total_sales_for_share = summary_data.get('total_sales', 0)
+        if total_sales_for_share > 0:
+            store_sales_df['매출 비중 (%)'] = store_sales_df['총 매출액'] / total_sales_for_share
+        else:
+            store_sales_df['매출 비중 (%)'] = 0
 
+        ws_store_rank.merge_range('A1:D1', '지 점 별 매 출 순 위', fmt_title)
+        ws_store_rank.merge_range('A2:D2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        
+        ws_store_rank.write_row('A4', store_sales_df.columns, fmt_header)
+        
+        for row_num, row_data in store_sales_df.iterrows():
+            ws_store_rank.write(row_num + 4, 0, row_data['NO'], fmt_date_c) # NO
+            ws_store_rank.write(row_num + 4, 1, row_data['지점명'], fmt_date_c) # 지점명 가운데 정렬
+            ws_store_rank.write(row_num + 4, 2, row_data['총 매출액'], fmt_money_r) # 총 매출액
+            ws_store_rank.write(row_num + 4, 3, row_data['매출 비중 (%)'], fmt_percent) # 비중
+        
+        # ✨ 데이터 막대 추가
+        ws_store_rank.conditional_format(f'D5:D{4+len(store_sales_df)}', {'type': 'data_bar', 'bar_color': '#4F81BD'})
+
+        ws_store_rank.set_column('A:A', 5)
+        ws_store_rank.set_column('B:B', 20)
+        ws_store_rank.set_column('C:D', 15)
 
         # --- 5. 05_품목별_판매순위 시트 ---
         ws_item_rank = workbook.add_worksheet('05_품목별_판매순위')
         ws_item_rank.fit_to_pages(1, 0)
-        ws_item_rank.merge_range('A1:D1', '품 목 별 판 매 순 위', fmt_title)
-        ws_item_rank.merge_range('A2:D2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
 
         if not sales_df.empty:
             item_sales_df = sales_df.groupby("품목명").agg(
                 총판매수량=('수량', 'sum'), 총매출액=('합계금액', 'sum')
             ).nlargest(10, '총매출액').reset_index()
             
-            # ✨ 매출 비중 계산 오류 수정: Top 10 합계가 아닌, 전체 기간의 총매출로 계산
-            total_sales_for_share = summary_data.get('total_sales', 0)
+            # ✨ NO, 매출 비중 열 추가
+            item_sales_df.insert(0, 'NO', range(1, 1 + len(item_sales_df)))
             if total_sales_for_share > 0:
-                item_sales_df['매출 비중 (%)'] = (item_sales_df['총매출액'] / total_sales_for_share) * 100
+                item_sales_df['매출 비중 (%)'] = item_sales_df['총매출액'] / total_sales_for_share
             else:
                 item_sales_df['매출 비중 (%)'] = 0
         else:
-            item_sales_df = pd.DataFrame(columns=['품목명', '총판매수량', '총매출액', '매출 비중 (%)'])
+            item_sales_df = pd.DataFrame(columns=['NO', '품목명', '총판매수량', '총매출액', '매출 비중 (%)'])
 
-        headers = ['품목명', '총 판매 수량', '총 매출액', '매출 비중 (%)']
-        ws_item_rank.write_row('A4', headers, fmt_header)
+        ws_item_rank.merge_range('A1:E1', '품 목 별 판 매 순 위', fmt_title)
+        ws_item_rank.merge_range('A2:E2', f"조회 기간: {filter_info['period']}", fmt_subtitle)
+        ws_item_rank.write_row('A4', item_sales_df.columns, fmt_header)
         
-        for row_num, row_data in enumerate(item_sales_df.values):
-            ws_item_rank.write(row_num + 4, 0, row_data[0], fmt_text_l)
-            ws_item_rank.write(row_num + 4, 1, row_data[1], fmt_money_bg)
-            ws_item_rank.write(row_num + 4, 2, row_data[2], fmt_money_bg)
-            # ✨ 퍼센트 서식 적용
-            ws_item_rank.write(row_num + 4, 3, row_data[3] / 100, workbook.add_format({'num_format': '0.00%', 'align': 'right', 'border': 1}))
+        for row_num, row_data in item_sales_df.iterrows():
+            ws_item_rank.write(row_num + 4, 0, row_data['NO'], fmt_date_c) # NO
+            ws_item_rank.write(row_num + 4, 1, row_data['품목명'], fmt_date_c) # 품목명 가운데 정렬
+            ws_item_rank.write(row_num + 4, 2, row_data['총판매수량'], fmt_money_r) # 수량
+            ws_item_rank.write(row_num + 4, 3, row_data['총매출액'], fmt_money_r) # 매출액
+            ws_item_rank.write(row_num + 4, 4, row_data['매출 비중 (%)'], fmt_percent) # 비중
 
-        ws_item_rank.set_column(0, 0, 30)
-        ws_item_rank.set_column(1, 3, 15)
-
-        # --- 6. 상세 발주 내역 시트는 요청에 따라 제거 ---
-
+        # ✨ 데이터 막대 추가
+        ws_item_rank.conditional_format(f'E5:E{4+len(item_sales_df)}', {'type': 'data_bar', 'bar_color': '#C0504D'})
+        
+        ws_item_rank.set_column('A:A', 5)
+        ws_item_rank.set_column('B:B', 30)
+        ws_item_rank.set_column('C:E', 15)
+        
     output.seek(0)
     return output
     
