@@ -1620,11 +1620,14 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
         처리일시=("처리일시", "first"), 반려사유=("반려사유", "first")
     ).reset_index().sort_values("주문일시", ascending=False)
     
-    pending = orders[orders["상태"] == "요청"].copy()
-    shipped = orders[orders["상태"].isin(["승인", "출고완료"])].copy()
-    rejected = orders[orders["상태"].isin(["반려", "취소", "승인취소"])].copy()
+    pending = orders[orders["상태"] == CONFIG['ORDER_STATUS']['PENDING']].copy()
+    shipped = orders[orders["상태"].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])].copy()
+    # ✨ [기능 추가] '변동출고' 상태의 주문을 필터링합니다.
+    modified = orders[orders["상태"] == CONFIG['ORDER_STATUS']['MODIFIED']].copy()
+    rejected = orders[orders["상태"].isin([CONFIG['ORDER_STATUS']['REJECTED'], CONFIG['ORDER_STATUS']['CANCELED_STORE'], CONFIG['ORDER_STATUS']['CANCELED_ADMIN']])].copy()
 
-    tab1, tab2, tab3 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"반려/취소 ({len(rejected)}건)"])
+    # ✨ [기능 추가] '변동 출고' 탭을 새로 추가합니다.
+    tab1, tab2, tab3, tab4 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"🔄 변동/출고 ({len(modified)}건)", f"반려/취소 ({len(rejected)}건)"])
     
     def handle_multiselect(key, source_df):
         edits = st.session_state[key].get("edited_rows", {})
@@ -1659,7 +1662,17 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             on_change=handle_multiselect, kwargs={"key": "shipped_editor", "source_df": shipped}
         )
 
-    with tab3:
+    with tab3: # 변동/출고 탭
+        modified_display = modified.copy()
+        modified_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in modified['발주번호']])
+        st.data_editor(
+            modified_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], 
+            hide_index=True, use_container_width=True, key="modified_editor_store", 
+            disabled=modified_display.columns.drop('선택'),
+            on_change=handle_multiselect, kwargs={"key": "modified_editor_store", "source_df": modified}
+        )
+    
+    with tab4:
         rejected_display = rejected.copy()
         rejected_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in rejected['발주번호']])
         st.data_editor(
@@ -1687,7 +1700,7 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                 st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
 
                 if pd.notna(memo) and memo.strip():
-                    st.markdown("**요청사항:**")
+                    st.markdown("**비고 (변동사항 등):**")
                     st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
                 
                 display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
@@ -1696,7 +1709,8 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                 
                 st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
 
-                if target_df.iloc[0]['상태'] in ["승인", "출고완료"]:
+                # ✨ [기능 추가] 다운로드 버튼 활성화 조건에 '변동출고' 상태를 추가합니다.
+                if target_df.iloc[0]['상태'] in ["승인", "출고완료", CONFIG['ORDER_STATUS']['MODIFIED']]:
                     supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
                     customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
                     if not supplier_info_df.empty and not customer_info_df.empty:
