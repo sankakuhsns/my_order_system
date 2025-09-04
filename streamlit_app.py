@@ -3460,30 +3460,59 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
     st.markdown("##### 🔧 개별 지점 관리")
     all_stores = store_info_df_raw['지점명'].tolist()
     selected_store_name = st.selectbox("관리할 지점 선택", all_stores)
+    
     if selected_store_name:
         selected_store_info = store_info_df_raw[store_info_df_raw['지점명'] == selected_store_name].iloc[0]
         store_id = selected_store_info['지점ID']
         is_active = str(selected_store_info.get('활성', 'FALSE')).upper() == 'TRUE'
         role = selected_store_info['역할']
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🔑 비밀번호 초기화", key=f"reset_pw_{store_id}", use_container_width=True):
-                temp_pw = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-                hashed_pw = hash_password(temp_pw)
-                ws = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
-                cell = ws.find(store_id, in_column=1)
-                if cell:
-                    pw_col_idx = ws.row_values(1).index('지점PW') + 1
-                    ws.update_cell(cell.row, pw_col_idx, hashed_pw)
-                    
-                    user = st.session_state.auth
-                    add_audit_log(user['user_id'], user['name'], "비밀번호 초기화", store_id, selected_store_name)
 
-                    clear_data_cache()
-                    st.info(f"'{selected_store_name}'의 비밀번호가 임시 비밀번호 '{temp_pw}' (으)로 초기화되었습니다.")
-                else:
-                    st.error("시트에서 해당 지점을 찾을 수 없습니다.")
-        if role != CONFIG['ROLES']['ADMIN']:
+        # ▼▼▼ [수정] 역할(role)에 따라 다른 UI를 보여주도록 수정합니다 ▼▼▼
+        if role == CONFIG['ROLES']['ADMIN']:
+            # --- 관리자 계정일 경우: 비밀번호 변경 ---
+            with st.form("admin_change_password_form"):
+                st.markdown("###### 🔑 관리자 비밀번호 변경")
+                new_password = st.text_input("새 비밀번호", type="password")
+                confirm_password = st.text_input("새 비밀번호 확인", type="password")
+                
+                if st.form_submit_button("비밀번호 변경", type="primary", use_container_width=True):
+                    if not (new_password and confirm_password):
+                        st.session_state.warning_message = "모든 필드를 입력해주세요."
+                    elif new_password != confirm_password:
+                        st.session_state.error_message = "새 비밀번호가 일치하지 않습니다."
+                    else:
+                        try:
+                            ws = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
+                            cell = ws.find(store_id, in_column=1)
+                            pw_col_index = ws.row_values(1).index('지점PW') + 1
+                            ws.update_cell(cell.row, pw_col_index, hash_password(new_password))
+                            
+                            clear_data_cache()
+                            st.session_state.success_message = "관리자 비밀번호가 성공적으로 변경되었습니다."
+                            st.rerun()
+                        except Exception as e:
+                            st.session_state.error_message = f"비밀번호 변경 중 오류 발생: {e}"
+                            st.rerun()
+
+        else: # --- 일반 지점 계정일 경우: 기존 로직 유지 ---
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🔑 비밀번호 초기화", key=f"reset_pw_{store_id}", use_container_width=True):
+                    temp_pw = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                    hashed_pw = hash_password(temp_pw)
+                    ws = open_spreadsheet().worksheet(CONFIG['STORES']['name'])
+                    cell = ws.find(store_id, in_column=1)
+                    if cell:
+                        pw_col_idx = ws.row_values(1).index('지점PW') + 1
+                        ws.update_cell(cell.row, pw_col_idx, hashed_pw)
+                        
+                        user = st.session_state.auth
+                        add_audit_log(user['user_id'], user['name'], "비밀번호 초기화", store_id, selected_store_name)
+
+                        clear_data_cache()
+                        st.info(f"'{selected_store_name}'의 비밀번호가 임시 비밀번호 '{temp_pw}' (으)로 초기화되었습니다.")
+                    else:
+                        st.error("시트에서 해당 지점을 찾을 수 없습니다.")
             with c2:
                 action_key = f"deactivate_{store_id}" if is_active else f"activate_{store_id}"
                 button_text = "🔒 계정 비활성화" if is_active else "✅ 계정 활성화"
