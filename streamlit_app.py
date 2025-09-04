@@ -2478,24 +2478,18 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
     original_items = df_all[df_all['발주번호'] == order_id].copy()
     
     with st.form(key="edit_order_form"):
-        # 원본 데이터에서 수정에 필요한 컬럼만 선택하여 data_editor에 전달
         cols_to_edit = ['품목코드', '품목명', '단위', '수량', '단가']
         edited_items_df = st.data_editor(
-            original_items[cols_to_edit],
-            key=f"editor_{order_id}",
-            num_rows="dynamic", # 품목 추가는 불가, 삭제(수량 0)만 가능
-            use_container_width=True,
-            disabled=['품목코드', '품목명', '단위', '단가']
+            original_items[cols_to_edit], key=f"editor_{order_id}", num_rows="dynamic",
+            use_container_width=True, disabled=['품목코드', '품목명', '단위', '단가']
         )
         
         c1, c2 = st.columns(2)
         if c1.form_submit_button("💾 수정사항 저장", type="primary", use_container_width=True):
             with st.spinner("변경사항을 계산하고 재고 및 잔액을 업데이트하는 중..."):
-                # --- 1. 변경사항 계산 ---
-                original_items.set_index('품목코드', inplace=True)
-                edited_items = pd.DataFrame(edited_items_df).set_index('품목코드')
-                
-                comparison = original_items.join(edited_items, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
+                original_indexed = original_items.set_index('품목코드')
+                edited_indexed = pd.DataFrame(edited_items_df).set_index('품목코드')
+                comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
                 
                 inventory_changes = []
                 price_diff = 0.0
@@ -2508,32 +2502,24 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                     if qty_diff != 0:
                         price = int(row['단가_orig']) if qty_orig > 0 else int(row['단가_edit'])
                         item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
-                        
-                        # VAT 포함 금액으로 차액 계산 (감소: 환불(+), 증가: 추가결제(-))
-                        price_diff -= (qty_diff * price * 1.1) 
-                        # 재고는 반대로 증감
+                        price_diff -= (qty_diff * price * 1.1)
                         inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
                 
-                price_diff = int(round(price_diff, 0)) # 최종 금액을 정수로 변환
+                price_diff = int(round(price_diff, 0))
 
-                # --- 2. 데이터 처리 (재고 -> 거래/잔액 -> 주문서) ---
                 try:
                     user = st.session_state.auth
                     store_name = original_items.iloc[0]['지점명']
                     store_id = original_items.iloc[0]['지점ID']
 
-                    # 2-1. 재고 업데이트
                     if inventory_changes:
                         if not update_inventory(pd.DataFrame(inventory_changes), '재고조정(출고변경)', user['name'], date.today(), ref_id=order_id):
-                            raise Exception("재고 업데이트에 실패했습니다.")
+                            raise Exception("재고 업데이트 실패")
                     
-                    # 2-2. 거래내역 기록 및 잔액 업데이트
                     if price_diff != 0:
                         balance_df = get_balance_df()
                         balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
-                        new_prepaid = int(balance_info['선충전잔액'])
-                        new_used_credit = int(balance_info['사용여신액'])
-
+                        new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
                         trans_type = "부분환불" if price_diff > 0 else "추가 결제"
                         
                         if price_diff > 0: # 환불
@@ -2546,24 +2532,17 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             new_prepaid -= prepaid_payment
                             new_used_credit += (payment_amount - prepaid_payment)
 
-                        trans_record = {
-                            "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name,
-                            "구분": trans_type, "내용": f"발주번호 {order_id} 변경", "금액": price_diff,
-                            "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit,
-                            "관련발주번호": order_id, "처리자": user['name']
-                        }
+                        trans_record = { "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name, "구분": trans_type, "내용": f"발주번호 {order_id} 변경", "금액": price_diff, "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user['name'] }
                         if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [trans_record], CONFIG['TRANSACTIONS']['cols']):
-                            raise Exception("거래내역 기록에 실패했습니다.")
-                        
+                            raise Exception("거래내역 기록 실패")
                         if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
-                            raise Exception("잔액 정보 업데이트에 실패했습니다. (치명적 오류, 수동 확인 필요)")
+                            raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
 
-                    # 2-3. 주문서 업데이트 (기존 내역 삭제 후, 수정된 내역으로 새로 추가)
                     if not find_and_delete_rows(SHEET_NAMES["ORDERS"], "발주번호", [order_id]):
-                        raise Exception("기존 주문서 삭제에 실패했습니다.")
+                        raise Exception("기존 주문서 삭제 실패")
                     
-                    final_items_df = pd.DataFrame(edited_items_df).reset_index(drop=True)
-                    final_items_df = final_items_df[final_items_df['수량'] > 0] # 수량이 0인 품목은 최종 제외
+                    final_items_df = pd.DataFrame(edited_items_df)
+                    final_items_df = final_items_df[final_items_df['수량'] > 0]
                     
                     new_order_rows = []
                     if not final_items_df.empty:
@@ -2572,22 +2551,13 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             supply_price = row['단가'] * row['수량']
                             tax = math.ceil(supply_price * 0.1) if base_info['과세구분'] == '과세' else 0
                             total_price = supply_price + tax
-                            new_order_rows.append({
-                                "주문일시": base_info['주문일시'], "발주번호": order_id, 
-                                "지점ID": store_id, "지점명": store_name, 
-                                "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], 
-                                "수량": row['수량'], "단가": row['단가'], 
-                                "공급가액": supply_price, "세액": tax, "합계금액": total_price, 
-                                "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], 
-                                "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": ""
-                            })
+                            new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": row['수량'], "단가": row['단가'], "공급가액": supply_price, "세액": tax, "합계금액": total_price, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
                     
                     if new_order_rows:
                         if not append_rows_to_sheet(SHEET_NAMES["ORDERS"], new_order_rows, CONFIG['ORDERS']['cols']):
-                            raise Exception("수정된 주문서 생성에 실패했습니다.")
+                            raise Exception("수정된 주문서 생성 실패")
                     
                     add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason="관리자 수정")
-
                     st.session_state.success_message = f"발주번호 {order_id}가 성공적으로 수정되었습니다."
                     st.session_state.editing_order_id = None
                     clear_data_cache()
@@ -2668,26 +2638,15 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
 
                 if memo.strip():
                     st.markdown("**요청사항:**")
-                    # ▼▼▼ [수정] key에 context를 추가하여 고유성을 보장합니다 ▼▼▼
-                    st.text_area(
-                        "요청사항_상세", 
-                        value=memo, 
-                        height=80, 
-                        disabled=True, 
-                        label_visibility="collapsed",
-                        key=f"memo_display_{context}_{target_id}" 
-                    )
-                    # ▲▲▲ 수정 완료 ▲▲▲
+                    st.text_area("요청사항_상세", value=memo, height=80, disabled=True, 
+                                 label_visibility="collapsed", key=f"memo_display_{context}_{target_id}")
                 
                 display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
                 display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
                 display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
                 
-                st.dataframe(
-                    display_df[["품목코드", "품목명", "단위", "수량", "단가", "단가(VAT포함)", "합계금액(VAT포함)"]], 
-                    hide_index=True, 
-                    use_container_width=True
-                )
+                st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가", "단가(VAT포함)", "합계금액(VAT포함)"]], 
+                             hide_index=True, use_container_width=True)
                 
                 order_status = target_df.iloc[0]['상태']
                 
@@ -2698,11 +2657,28 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                             st.session_state.editing_order_id = target_id
                             st.rerun()
                     with c2:
-                        # ... (다운로드 버튼 로직은 동일) ...
-                        pass # 실제 코드에서는 이 pass를 지우고 기존 다운로드 버튼 코드를 유지하세요.
-
-                elif order_status not in [CONFIG['ORDER_STATUS']['MODIFIED']]:
-                    st.download_button("📄 품목거래내역서 다운로드", disabled=True, use_container_width=True)
+                        supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                        store_name = target_df.iloc[0]['지점명']
+                        customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
+                        if not supplier_info_df.empty and not customer_info_df.empty:
+                            supplier_info = supplier_info_df.iloc[0]
+                            customer_info = customer_info_df.iloc[0]
+                            buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                            st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
+                                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                              use_container_width=True, type="primary")
+                elif order_status in [CONFIG['ORDER_STATUS']['MODIFIED'], CONFIG['ORDER_STATUS']['REJECTED']]:
+                     # 변동/반려된 건도 거래내역서 다운로드 가능하도록 수정
+                     supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                     store_name = target_df.iloc[0]['지점명']
+                     customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
+                     if not supplier_info_df.empty and not customer_info_df.empty:
+                         supplier_info = supplier_info_df.iloc[0]
+                         customer_info = customer_info_df.iloc[0]
+                         buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                         st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
+                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                           use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
@@ -2712,13 +2688,17 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
 def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📋 발주요청 조회·수정")
 
+    if 'editing_order_id' in st.session_state and st.session_state.editing_order_id:
+        render_order_edit_modal(st.session_state.editing_order_id, df_all, master_df)
+        return
+        
     if handle_order_action_confirmation(df_all):
         return
 
     if df_all.empty:
-        st.info("발주 데이터가 없습니다.")
-        return
+        st.info("발주 데이터가 없습니다."); return
     
+    # ... (기존 필터링 로직은 그대로 유지) ...
     c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
     dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
@@ -2730,11 +2710,12 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     if order_id_search:
         df = df[df["발주번호"].str.contains(order_id_search, na=False)]
     else:
-        df['주문일시_dt'] = pd.to_datetime(df['주문일시'], errors='coerce').dt.date
-        df.dropna(subset=['주문일시_dt'], inplace=True)
-        df = df[(df['주문일시_dt'] >= dt_from) & (df['주문일시_dt'] <= dt_to)]
-        if store != "(전체)":
-            df = df[df["지점명"] == store]
+        if not df_all.empty and '주문일시' in df_all.columns:
+            df['주문일시_dt'] = pd.to_datetime(df['주문일시'], errors='coerce').dt.date
+            df.dropna(subset=['주문일시_dt'], inplace=True)
+            df = df[(df['주문일시_dt'] >= dt_from) & (df['주문일시_dt'] <= dt_to)]
+    if store != "(전체)":
+        df = df[df["지점명"] == store]
     
     orders = df.groupby("발주번호").agg(
         주문일시=("주문일시", "first"), 지점명=("지점명", "first"), 건수=("품목코드", "count"), 
@@ -2745,12 +2726,9 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     orders.rename(columns={"합계금액": "합계금액(원)"}, inplace=True)
     pending = orders[orders["상태"] == CONFIG['ORDER_STATUS']['PENDING']].copy()
     shipped = orders[orders["상태"].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])].copy()
-    
-    # ▼▼▼ [수정] '변동출고' 상태 필터링 추가 ▼▼▼
     modified = orders[orders["상태"] == CONFIG['ORDER_STATUS']['MODIFIED']].copy()
     rejected = orders[orders["상태"].isin([CONFIG['ORDER_STATUS']['REJECTED'], CONFIG['ORDER_STATUS']['CANCELED_STORE'], CONFIG['ORDER_STATUS']['CANCELED_ADMIN']])].copy()
     
-    # ▼▼▼ [수정] 탭을 4개로 확장 ▼▼▼
     tab1, tab2, tab3, tab4 = st.tabs([
         f"📦 발주 요청 ({len(pending)}건)", 
         f"✅ 승인/출고 ({len(shipped)}건)", 
@@ -2761,9 +2739,8 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     with tab1:
         render_pending_orders_tab(pending, df_all, master_df)
     with tab2:
-        render_shipped_orders_tab(shipped, df_all, store_info_df, master_df) # 인자 추가
+        render_shipped_orders_tab(shipped, df_all, store_info_df, master_df)
     with tab3:
-        # 새로운 함수 호출 (나중에 생성)
         render_modified_orders_tab(modified, df_all, store_info_df, master_df)
     with tab4:
         render_rejected_orders_tab(rejected)
