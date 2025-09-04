@@ -1504,6 +1504,7 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
 
+    # --- 발주 취소 로직 (사용자가 상세조회 영역의 버튼을 눌렀을 때 실행) ---
     if 'cancel_ids' in st.session_state and st.session_state.cancel_ids:
         with st.spinner("발주 취소 및 환불 처리 중..."):
             ids_to_process = st.session_state.pop('cancel_ids')
@@ -1548,18 +1549,14 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
                     "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
                 }
                 
-                # [안정성] 기록 -> 처리 -> 금액 변경 순서 적용
                 try:
-                    # 1. 발주 상태 먼저 '취소'로 변경
                     if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_STORE'], user["name"]):
                         raise Exception("발주 상태 변경 실패")
-                        
-                    # 2. 거래내역에 환불 기록 추가
+                    
                     if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
                         update_order_status([order_id], CONFIG['ORDER_STATUS']['PENDING'], "system_rollback") 
                         raise Exception("거래내역 기록 실패")
                         
-                    # 3. 모든 기록과 처리가 성공한 후, 최종적으로 실제 잔액(돈) 변경
                     if not update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit}):
                         st.session_state.error_message = f"CRITICAL ERROR: {order_id} 환불 금액이 기록되었으나 잔액 반영에 실패했습니다. 즉시 수동 조치가 필요합니다!"
                         fail_count += 1
@@ -1574,15 +1571,17 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             if success_count > 0:
                 st.session_state.success_message = f"{success_count}건의 발주가 취소되고 환불 처리되었습니다."
             if fail_count > 0:
-                 st.session_state.warning_message = f"{fail_count}건의 발주 취소에 실패했습니다."
+                st.session_state.warning_message = f"{fail_count}건의 발주 취소에 실패했습니다."
 
             st.session_state.store_orders_selection = {}
             clear_data_cache()
             st.rerun()
 
+    # --- 데이터 로딩 및 필터링 ---
     df_all_orders = get_orders_df()
     user = st.session_state.auth
     df_user = df_all_orders[df_all_orders["지점ID"] == user["user_id"]]
+    
     if df_user.empty:
         st.info("발주 데이터가 없습니다.")
         return
@@ -1609,108 +1608,134 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
     
     pending = orders[orders["상태"] == CONFIG['ORDER_STATUS']['PENDING']].copy()
     shipped = orders[orders["상태"].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])].copy()
-    # ✨ [기능 추가] '변동출고' 상태의 주문을 필터링합니다.
     modified = orders[orders["상태"] == CONFIG['ORDER_STATUS']['MODIFIED']].copy()
     rejected = orders[orders["상태"].isin([CONFIG['ORDER_STATUS']['REJECTED'], CONFIG['ORDER_STATUS']['CANCELED_STORE'], CONFIG['ORDER_STATUS']['CANCELED_ADMIN']])].copy()
 
-    # ✨ [기능 추가] '변동 출고' 탭을 새로 추가합니다.
-    tab1, tab2, tab3, tab4 = st.tabs([f"요청 ({len(pending)}건)", f"승인/출고 ({len(shipped)}건)", f"🔄 변동/출고 ({len(modified)}건)", f"반려/취소 ({len(rejected)}건)"])
+    # --- 탭 UI 구성 (아이콘 추가) ---
+    tab1, tab2, tab3, tab4 = st.tabs([
+        f"📦 요청 ({len(pending)}건)", 
+        f"✅ 승인/출고 ({len(shipped)}건)", 
+        f"🔄 변동/출고 ({len(modified)}건)", 
+        f"❌ 반려/취소 ({len(rejected)}건)"
+    ])
     
-    def handle_multiselect(key, source_df):
-        edits = st.session_state[key].get("edited_rows", {})
-        for row_index, changed_data in edits.items():
-            if "선택" in changed_data:
-                order_id = source_df.iloc[row_index]['발주번호']
-                st.session_state.store_orders_selection[order_id] = changed_data["선택"]
-
+    # --- 발주 목록 렌더링 ---
     with tab1:
-        pending_display = pending.copy()
-        pending_display.insert(0, '선택', pending['발주번호'].apply(lambda x: st.session_state.store_orders_selection.get(x, False)))
-        st.data_editor(
-            pending_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태']], 
-            hide_index=True, use_container_width=True, key="pending_editor", 
-            disabled=pending_display.columns.drop('선택'),
-            on_change=handle_multiselect, kwargs={"key": "pending_editor", "source_df": pending}
-        )
-        
-        selected_to_cancel = [oid for oid, selected in st.session_state.store_orders_selection.items() if selected and oid in pending['발주번호'].values]
-        
-        if st.button("선택한 발주 요청 취소하기", disabled=not selected_to_cancel, type="primary"):
-            st.session_state.cancel_ids = selected_to_cancel
-            st.rerun()
-    
+        render_store_order_list(pending, "pending_store")
     with tab2:
-        shipped_display = shipped.copy()
-        shipped_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in shipped['발주번호']])
-        st.data_editor(
-            shipped_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], 
-            hide_index=True, use_container_width=True, key="shipped_editor", 
-            disabled=shipped_display.columns.drop('선택'),
-            on_change=handle_multiselect, kwargs={"key": "shipped_editor", "source_df": shipped}
-        )
-
-    with tab3: # 변동/출고 탭
-        modified_display = modified.copy()
-        modified_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in modified['발주번호']])
-        st.data_editor(
-            modified_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '처리일시']], 
-            hide_index=True, use_container_width=True, key="modified_editor_store", 
-            disabled=modified_display.columns.drop('선택'),
-            on_change=handle_multiselect, kwargs={"key": "modified_editor_store", "source_df": modified}
-        )
-    
+        render_store_order_list(shipped, "shipped_store")
+    with tab3:
+        render_store_order_list(modified, "modified_store")
     with tab4:
-        rejected_display = rejected.copy()
-        rejected_display.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in rejected['발주번호']])
-        st.data_editor(
-            rejected_display[['선택', '주문일시', '발주번호', '건수', '합계금액', '상태', '반려사유']], 
-            hide_index=True, use_container_width=True, key="rejected_editor", 
-            disabled=rejected_display.columns.drop('선택'),
-            on_change=handle_multiselect, kwargs={"key": "rejected_editor", "source_df": rejected}
-        )
+        render_store_order_list(rejected, "rejected_store")
 
     v_spacer(16)
+
+    # --- 상세 조회 및 액션 버튼 렌더링 ---
+    render_store_order_details_section(df_user, store_info_df, master_df)
+
+
+def render_store_order_list(orders_df: pd.DataFrame, key_prefix: str):
+    """(신규 헬퍼 함수) 발주 목록을 표시하는 UI를 렌더링합니다."""
+    if orders_df.empty:
+        st.info("해당 상태의 발주 내역이 없습니다.")
+        return
+
+    display_df = orders_df.copy()
+    # 선택 상태 초기화 및 업데이트
+    if 'store_orders_selection' not in st.session_state:
+        st.session_state.store_orders_selection = {}
+    display_df.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in display_df['발주번호']])
     
+    page_size = 10
+    page_number = render_paginated_ui(len(display_df), page_size, key_prefix)
+    start_idx = (page_number - 1) * page_size
+    end_idx = start_idx + page_size
+    
+    edited_df = st.data_editor(
+        display_df.iloc[start_idx:end_idx],
+        hide_index=True, 
+        use_container_width=True, 
+        key=f"{key_prefix}_editor", 
+        disabled=display_df.columns.drop('선택')
+    )
+    
+    for _, row in edited_df.iterrows():
+        st.session_state.store_orders_selection[row['발주번호']] = row['선택']
+
+def render_store_order_details_section(df_all_user_orders: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
+    """(신규 헬퍼 함수) 선택된 발주의 상세 내역과 관련 액션 버튼을 렌더링합니다."""
+    
+    selected_ids = [k for k, v in st.session_state.get('store_orders_selection', {}).items() if v]
+
+    if 'store_order_detail_index' not in st.session_state:
+        st.session_state.store_order_detail_index = 0
+    
+    if not selected_ids:
+        st.session_state.store_order_detail_index = 0
+    elif st.session_state.store_order_detail_index >= len(selected_ids):
+        st.session_state.store_order_detail_index = 0
+
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
         
-        selected_ids = [k for k, v in st.session_state.store_orders_selection.items() if v]
-        
-        if len(selected_ids) == 1:
-            target_id = selected_ids[0]
-            target_df = df_user[df_user["발주번호"] == target_id]
-            
-            if not target_df.empty:
-                total_amount = target_df['합계금액'].sum()
-                memo = target_df['비고'].iloc[0] if '비고' in target_df.columns else ""
-
-                st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
-
-                if pd.notna(memo) and memo.strip():
-                    st.markdown("**비고 (변동사항 등):**")
-                    st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
-                
-                display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
-                display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
-                display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
-                
-                st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
-
-                # ✨ [기능 추가] 다운로드 버튼 활성화 조건에 '변동출고' 상태를 추가합니다.
-                if target_df.iloc[0]['상태'] in ["승인", "출고완료", CONFIG['ORDER_STATUS']['MODIFIED']]:
-                    supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
-                    customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
-                    if not supplier_info_df.empty and not customer_info_df.empty:
-                        supplier_info = supplier_info_df.iloc[0]
-                        customer_info = customer_info_df.iloc[0]
-                        buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                        
-                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
-
-        elif len(selected_ids) > 1:
-            st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
-        else:
+        if not selected_ids:
             st.info("상세 내용을 보려면 위 목록에서 발주를 선택하세요.")
+            return
+
+        idx = st.session_state.store_order_detail_index
+        
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c1:
+            if st.button("⬅️ 이전 발주", use_container_width=True, disabled=(idx <= 0)):
+                st.session_state.store_order_detail_index -= 1
+                st.rerun()
+        with c2:
+            st.markdown(f"<div style='text-align:center; margin-top: 8px;'><b>{idx + 1} / {len(selected_ids)}</b></div>", unsafe_allow_html=True)
+        with c3:
+            if st.button("다음 발주 ➡️", use_container_width=True, disabled=(idx >= len(selected_ids) - 1)):
+                st.session_state.store_order_detail_index += 1
+                st.rerun()
+
+        st.divider()
+
+        target_id = selected_ids[idx]
+        target_df = df_all_user_orders[df_all_user_orders["발주번호"] == target_id]
+        
+        if not target_df.empty:
+            total_amount = target_df['합계금액'].sum()
+            order_status = target_df.iloc[0]['상태']
+            memo = target_df.iloc[0].get('비고', '')
+
+            st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{total_amount:,.0f}원`")
+
+            if pd.notna(memo) and memo.strip():
+                st.markdown("**비고 (변동사항 등):**")
+                st.text_area("비고_상세", value=memo, height=80, disabled=True, label_visibility="collapsed", key=f"memo_display_{target_id}")
+
+            display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
+            display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
+            display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
+            
+            st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
+
+            st.divider()
+            
+            if order_status == CONFIG['ORDER_STATUS']['PENDING']:
+                if st.button("현재 발주 요청 취소하기", type="primary", use_container_width=True, key=f"cancel_btn_{target_id}"):
+                    st.session_state.cancel_ids = [target_id]
+                    st.rerun()
+            
+            if order_status in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED'], CONFIG['ORDER_STATUS']['MODIFIED']]:
+                user = st.session_state.auth
+                supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
+                customer_info_df = store_info_df[store_info_df['지점ID'] == user['user_id']]
+                if not supplier_info_df.empty and not customer_info_df.empty:
+                    supplier_info = supplier_info_df.iloc[0]
+                    customer_info = customer_info_df.iloc[0]
+                    buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                    
+                    st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
             
 def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
