@@ -2664,7 +2664,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
             st.rerun()
 
 def render_modified_orders_tab(modified_orders: pd.DataFrame, df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
-    st.info("여기에는 승인 후 수량 등이 변경된 발주 내역이 표시됩니다.")
+    st.info("여기에는 승인 후 수량 등이 변경된 발주 내역이 표시됩니다. 이 내역은 다시 수정하거나 승인 취소할 수 있습니다.")
     
     page_size = 10
     page_number = render_paginated_ui(len(modified_orders), page_size, "modified_orders")
@@ -2678,7 +2678,8 @@ def render_modified_orders_tab(modified_orders: pd.DataFrame, df_all: pd.DataFra
         modified_display, 
         key="admin_modified_editor", 
         hide_index=True, 
-        disabled=modified_display.columns.drop("선택")
+        disabled=modified_display.columns.drop("선택"),
+        column_order=("선택", "주문일시", "발주번호", "지점명", "건수", "합계금액(원)", "상태", "처리일시")
     )
 
     for _, row in edited_modified.iterrows():
@@ -2688,9 +2689,15 @@ def render_modified_orders_tab(modified_orders: pd.DataFrame, df_all: pd.DataFra
     
     v_spacer(16)
 
-    # ▼▼▼ [수정] 변수명과 context 값을 올바르게 수정합니다 ▼▼▼
     render_order_details_section(selected_ids, df_all, store_info_df, master_df, context="modified")
-    # ▲▲▲ 수정 완료 ▲▲▲
+    
+    v_spacer(16)
+    st.markdown("##### ↩️ 승인 취소")
+    with st.container(border=True):
+        if st.button("선택 건 요청 상태로 되돌리기", key="revert_modified", disabled=not selected_ids, use_container_width=True):
+            st.session_state.confirm_action = "revert_to_pending"
+            st.session_state.confirm_data = {'ids': selected_ids}
+            st.rerun()
 
 def render_rejected_orders_tab(rejected_orders: pd.DataFrame, df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.info("여기에는 관리자가 반려했거나 지점에서 취소한 발주 내역이 표시됩니다.")
@@ -2728,14 +2735,17 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
             
             if not target_df.empty:
                 total_amount = target_df['합계금액'].sum()
-                # ✨ [수정] memo(요청사항) 관련 로직 완전 삭제
                 rejection_reason = target_df['반려사유'].iloc[0] if '반려사유' in target_df.columns and pd.notna(target_df['반려사유'].iloc[0]) else ""
                 order_status = target_df.iloc[0]['상태']
 
                 st.markdown(f"**선택된 발주번호:** `{target_id}` / **총 합계금액(VAT포함):** `{int(total_amount):,.0f}원`")
 
-                # ✨ [수정] memo(요청사항)를 표시하던 UI 부분 완전 삭제
-                
+                memo = target_df['비고'].iloc[0] if '비고' in target_df.columns and pd.notna(target_df['비고'].iloc[0]) else ""
+                if memo.strip():
+                    st.markdown("**비고 (변동사항 등):**")
+                    st.text_area("비고_상세", value=memo, height=80, disabled=True,
+                                 label_visibility="collapsed", key=f"memo_display_{context}_{target_id}")
+
                 if rejection_reason.strip() and order_status == CONFIG['ORDER_STATUS']['REJECTED']:
                     st.error(f"**반려 사유:** {rejection_reason}")
                 
@@ -2749,14 +2759,13 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                     use_container_width=True
                 )
                 
-                if order_status in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]:
+                if order_status in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED'], CONFIG['ORDER_STATUS']['MODIFIED']]:
                     c1, c2 = st.columns(2)
                     with c1:
                         if st.button("✏️ 선택 발주 일부 수정하기", key=f"edit_{context}_{target_id}", use_container_width=True):
                             st.session_state.editing_order_id = target_id
                             st.rerun()
                     
-                    # ▼▼▼ [수정] 누락되었던 다운로드 버튼 로직을 복원합니다 ▼▼▼
                     with c2:
                         supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
                         store_name = target_df.iloc[0]['지점명']
@@ -2768,19 +2777,18 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                             st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
                                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
                                               use_container_width=True, type="primary")
-                    # ▲▲▲ 수정 완료 ▲▲▲
 
-                elif order_status in [CONFIG['ORDER_STATUS']['MODIFIED'], CONFIG['ORDER_STATUS']['REJECTED']]:
-                     supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                     store_name = target_df.iloc[0]['지점명']
-                     customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
-                     if not supplier_info_df.empty and not customer_info_df.empty:
-                         supplier_info = supplier_info_df.iloc[0]
-                         customer_info = customer_info_df.iloc[0]
-                         buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                         st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
-                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                                           use_container_width=True, type="primary")
+                elif order_status in [CONFIG['ORDER_STATUS']['REJECTED'], CONFIG['ORDER_STATUS']['CANCELED_STORE'], CONFIG['ORDER_STATUS']['CANCELED_ADMIN']]:
+                    supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                    store_name = target_df.iloc[0]['지점명']
+                    customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
+                    if not supplier_info_df.empty and not customer_info_df.empty:
+                        supplier_info = supplier_info_df.iloc[0]
+                        customer_info = customer_info_df.iloc[0]
+                        buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
+                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                          use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
