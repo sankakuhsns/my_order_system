@@ -1755,10 +1755,12 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
 
     elif doc_type == "품목거래내역서":
         orders_df = get_orders_df()
-        my_orders = orders_df[(orders_df['지점ID'] == user['user_id']) & (orders_df['상태'].isin(['승인', '출고완료']))]
+        # ✨ [핵심 수정] 다운로드 대상에 '변동출고' 상태를 추가합니다.
+        my_orders = orders_df[(orders_df['지점ID'] == user['user_id']) & (orders_df['상태'].isin(['승인', '출고완료', CONFIG['ORDER_STATUS']['MODIFIED']]))]
         
         if my_orders.empty:
-            st.warning("승인/출고된 발주 내역이 없습니다.")
+            # ✨ [핵심 수정] 경고 메시지를 업데이트합니다.
+            st.warning("승인/출고 또는 변동출고된 발주 내역이 없습니다.")
             return
 
         my_orders['주문일시_dt'] = pd.to_datetime(my_orders['주문일시'], errors='coerce').dt.date
@@ -1766,7 +1768,7 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
         filtered_orders = my_orders.loc[my_orders['주문일시_dt'].between(dt_from, dt_to)].copy()
         
         if filtered_orders.empty:
-            st.warning("선택한 기간 내에 승인/출고된 발주 내역이 없습니다.")
+            st.warning("선택한 기간 내에 해당하는 발주 내역이 없습니다.")
             return
 
         order_options = ["(기간 전체)"] + sorted(filtered_orders['발주번호'].unique().tolist())
@@ -1792,7 +1794,6 @@ def page_store_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
             buf = create_unified_item_statement(preview_df, supplier_info, customer_info)
             download_label = "기간 전체 내역서" if selected_order_id == "(기간 전체)" else f"'{selected_order_id}' 내역서"
             
-            # ✨✨✨ 수정된 부분: 닫는 괄호 ')'와 type="primary" 추가 ✨✨✨
             st.download_button(f"{download_label} 다운로드", data=buf, file_name=f"품목거래내역서_{user['name']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
 
 def page_store_master_view(master_df: pd.DataFrame):
@@ -2901,7 +2902,8 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
     
     df_orders = get_orders_df() 
     
-    df_sales_raw = df_orders[df_orders['상태'].isin(['승인', '출고완료'])].copy()
+    # ✨ [핵심 수정] 매출 집계 대상에 '변동출고' 상태를 추가합니다.
+    df_sales_raw = df_orders[df_orders['상태'].isin(['승인', '출고완료', '변동출고'])].copy()
     if df_sales_raw.empty: 
         st.info("매출 데이터가 없습니다.")
         return
@@ -2998,7 +3000,6 @@ def page_admin_sales_inquiry(master_df: pd.DataFrame):
 def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("📑 증빙서류 다운로드")
 
-    # 세션 상태 초기화 (안전장치)
     if 'report_df' not in st.session_state: st.session_state.report_df = pd.DataFrame()
     if 'excel_buffer' not in st.session_state: st.session_state.excel_buffer = None
     if 'report_filename' not in st.session_state: st.session_state.report_filename = ""
@@ -3026,9 +3027,7 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                     sub_doc_type = st.selectbox("서류 종류", ["금전거래내역서", "품목거래내역서"], key="admin_doc_type_store")
         
         c1, c2 = st.columns(2)
-        
         is_inventory_report = sub_doc_type == "현재고현황보고서"
-        
         dt_to_label = "조회 기준일" if is_inventory_report else "조회 종료일"
         dt_to = c2.date_input(dt_to_label, date.today(), key="admin_doc_to_individual")
         dt_from_value = dt_to if is_inventory_report else date.today() - timedelta(days=30)
@@ -3102,18 +3101,19 @@ def page_admin_documents(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
                                 excel_buffer = create_unified_financial_statement(report_df, get_transactions_df(), supplier_info, selected_info)
                                 file_name = f"금전거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
 
-                    elif sub_doc_type == "품목거래내역서":
-                        orders_df = get_orders_df()
-                        store_orders = orders_df[(orders_df['지점명'] == selected_entity_real_name) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]))]
-                        if not store_orders.empty:
-                            store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시'], errors='coerce').dt.date
-                            report_df = store_orders[(store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)]
-                        if not report_df.empty:
-                            supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                            if not supplier_info_df.empty:
-                                supplier_info = supplier_info_df.iloc[0]
-                                excel_buffer = create_unified_item_statement(report_df, supplier_info, selected_info)
-                                file_name = f"품목거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
+                if sub_doc_type == "품목거래내역서":
+                    orders_df = get_orders_df()
+                    # ✨ [핵심 수정] 다운로드 대상에 '변동출고' 상태를 추가합니다.
+                    store_orders = orders_df[(orders_df['지점명'] == selected_entity_real_name) & (orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED'], CONFIG['ORDER_STATUS']['MODIFIED']]))]
+                    if not store_orders.empty:
+                        store_orders['주문일시_dt'] = pd.to_datetime(store_orders['주문일시'], errors='coerce').dt.date
+                        report_df = store_orders[(store_orders['주문일시_dt'] >= dt_from) & (store_orders['주문일시_dt'] <= dt_to)]
+                    if not report_df.empty:
+                        supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                        if not supplier_info_df.empty:
+                            supplier_info = supplier_info_df.iloc[0]
+                            excel_buffer = create_unified_item_statement(report_df, supplier_info, selected_info)
+                            file_name = f"품목거래내역서_{selected_entity_real_name}_{dt_from}_to_{dt_to}.xlsx"
                 
                 if report_df.empty:
                     st.session_state.warning_message = "해당 조건으로 조회된 데이터가 없습니다."
