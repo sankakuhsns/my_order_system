@@ -481,19 +481,17 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
     if orders_df.empty:
         return output
 
-    # 1. 데이터 사전 처리
+    # --- [핵심 수정] ---
+    # 1. 데이터 사전 처리: 불안정한 Groupby 집계 로직을 제거하고, 원본 데이터를 정렬하여 사용합니다.
     df = orders_df.copy()
     df['거래일자'] = pd.to_datetime(df['주문일시']).dt.date
     if '세액' not in df.columns: df['세액'] = 0
-    aggregation_rules = {'수량': 'sum', '공급가액': 'sum', '세액': 'sum', '합계금액': 'sum'}
-    grouping_keys = ['거래일자', '품목코드', '품목명', '단위', '단가']
-    df_agg = df.groupby(grouping_keys).agg(aggregation_rules).reset_index()
-    df_agg = df_agg.sort_values(by=['거래일자', '품목명'])
+    # 날짜와 품목명으로 정렬하여 가독성을 높입니다.
+    df = df.sort_values(by=['거래일자', '품목명'])
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet("품목거래내역서")
-
         worksheet.fit_to_pages(1, 0)
 
         # (Excel 서식 및 헤더, 레이아웃 설정 부분은 이전과 동일합니다.)
@@ -556,11 +554,13 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         # 6. 본문 데이터 작성
         order_ids_by_date = df.groupby('거래일자')['발주번호'].unique().apply(lambda x: ', '.join(x)).to_dict()
 
-        for trade_date in df_agg['거래일자'].unique():
+        # --- [핵심 수정] ---
+        # df_agg 대신 원본 df를 사용하여 루프를 실행합니다.
+        for trade_date in df['거래일자'].unique():
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"■ 거래일자 : {trade_date.strftime('%Y년 %m월 %d일')}", fmt_date_header)
             current_row += 1
             related_orders = order_ids_by_date.get(trade_date, "")
-            worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
+            worksheet.merge_range(f'A{current_row}:I{current_row}', f"  관련 발주번호: {related_orders}", fmt_order_id_sub)
             current_row += 1
 
             headers = ['No', '품목코드', '품목명', '단위', '수량', '단가', '공급가액', '세액', '합계금액']
@@ -568,7 +568,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             current_row += 1
 
             row_idx = current_row - 1
-            date_df = df_agg[df_agg['거래일자'] == trade_date]
+            # --- [핵심 수정] ---
+            # df_agg 대신 원본 df를 필터링하여 그날의 모든 거래 내역을 사용합니다.
+            date_df = df[df['거래일자'] == trade_date]
             item_counter = 1
             for _, record in date_df.iterrows():
                 worksheet.write(row_idx, 0, item_counter, fmt_text_c)
@@ -584,25 +586,24 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
                 row_idx += 1
 
             current_row = row_idx
+            
+            # (변동사항 및 요청사항 기록 로직은 기존과 동일하게 유지)
+            memos_series = df[df['거래일자'] == trade_date]['비고'].dropna().unique()
+            change_logs = [memo for memo in memos_series if "변동사항" in str(memo)]
+            requests = [memo for memo in memos_series if "변동사항" not in str(memo) and str(memo).strip()]
+            
+            day_change_log = ", ".join(change_logs)
+            day_request = ", ".join(requests)
 
-            # ✨✨✨ [최종 수정] '변동사항'만 기록하고, '요청사항' 로직은 완전히 제거 ✨✨✨
-            all_memos = df[df['거래일자'] == trade_date]['비고'].dropna().unique()
-            change_logs = []
-
-            for memo in all_memos:
-                memo_str = str(memo).strip()
-                # "변동사항" 이라는 키워드가 포함된 '비고' 내용만 추출
-                if memo_str and "변동사항" in memo_str:
-                    change_logs.append(memo_str)
-
-            # 변동사항이 있을 경우에만 기록
-            if change_logs:
-                full_change_log = ", ".join(change_logs)
+            if day_change_log:
                 worksheet.merge_range(f'A{current_row}:B{current_row}', '변동사항', fmt_info_label)
-                worksheet.merge_range(f'C{current_row}:I{current_row}', full_change_log, fmt_info_data)
+                worksheet.merge_range(f'C{current_row}:I{current_row}', day_change_log, fmt_info_data)
                 current_row += 1
-            # ✨✨✨ 수정된 부분 끝 ✨✨✨
-
+            if day_request:
+                worksheet.merge_range(f'A{current_row}:B{current_row}', '요청사항', fmt_info_label)
+                worksheet.merge_range(f'C{current_row}:I{current_row}', day_request, fmt_info_data)
+                current_row += 1
+            
             # 일계
             worksheet.merge_range(f'A{current_row}:F{current_row}', '일 계', fmt_subtotal_label)
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
@@ -612,9 +613,9 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
 
         # 7. 최종 합계
         worksheet.merge_range(f'A{current_row}:F{current_row}', '총 계', fmt_subtotal_label)
-        worksheet.write(f'G{current_row}', df_agg['공급가액'].sum(), fmt_subtotal_money)
-        worksheet.write(f'H{current_row}', df_agg['세액'].sum(), fmt_subtotal_money)
-        worksheet.write(f'I{current_row}', df_agg['합계금액'].sum(), fmt_subtotal_money)
+        worksheet.write(f'G{current_row}', df['공급가액'].sum(), fmt_subtotal_money)
+        worksheet.write(f'H{current_row}', df['세액'].sum(), fmt_subtotal_money)
+        worksheet.write(f'I{current_row}', df['합계금액'].sum(), fmt_subtotal_money)
 
     output.seek(0)
     return output
