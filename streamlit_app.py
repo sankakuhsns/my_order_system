@@ -2535,9 +2535,10 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
 
 def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.DataFrame):
     """
-    [재설계된 발주 수정 로직 v3.1 - 변동사항 기록 강화]
+    [재설계된 발주 수정 로직 v3.2 - 변동사항 기록 최종판]
     - '삭제' 로직을 '상태 변경'으로 전환하여 데이터 유실을 원천적으로 방지.
-    - [기능 개선] 수정 시 품목과 금액 변동을 상세히 기록하여 '비고'란에 저장.
+    - [기능 개선] 수정 시 변경된 품목만 (이전수량→새수량) 형식으로 기록.
+    - [기능 개선] 금액 변동을 '추가결제' 또는 '부분환불'로 명확히 표기.
     """
     st.warning(f"**수정 모드**: 발주번호 `{order_id}`의 수량을 수정합니다. 수량을 0으로 만들면 해당 품목이 삭제되며, 모든 품목을 삭제하면 주문 전체가 취소됩니다.")
 
@@ -2562,45 +2563,85 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                 st.rerun()
 
             items_to_save = final_edited_items[pd.to_numeric(final_edited_items['수량'], errors='coerce') > 0]
-            
-            # (주문 취소 시나리오는 변경 없음)
+
+            # [시나리오 1] 모든 품목 수량이 0 -> '주문 취소'로 처리
             if items_to_save.empty:
-                # ... (이전과 동일한 주문 취소 로직) ...
-                pass
+                with st.spinner("주문 취소 및 전체 환불 처리 중..."):
+                    try:
+                        user, base_info = st.session_state.auth, original_items.iloc[0]
+                        store_name, store_id = base_info['지점명'], base_info['지점ID']
+                        
+                        items_to_restore = original_items.copy()
+                        items_to_restore.rename(columns={'수량': '수량변경'}, inplace=True)
+                        if not update_inventory(items_to_restore, CONFIG['INV_CHANGE_TYPE']['CANCEL_SHIPMENT'], user['name'], date.today(), ref_id=order_id, reason="수정에 의한 주문 취소"):
+                            raise Exception("재고 복원 실패")
+
+                        transactions_df = get_transactions_df()
+                        original_tx = transactions_df[transactions_df['관련발주번호'] == order_id]
+                        if not original_tx.empty:
+                            tx_info = original_tx.iloc[0]
+                            refund_amount = abs(int(tx_info['금액']))
+                            balance_df = get_balance_df()
+                            balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
+                            new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
+
+                            if tx_info['구분'] == '선충전결제': new_prepaid += refund_amount
+                            else: new_used_credit -= refund_amount
+                            
+                            refund_record = { "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name, "구분": "발주취소(수정)", "내용": f"발주 수정으로 인한 전체 취소 환불 ({order_id})", "금액": refund_amount, "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user['name'] }
+                            if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
+                                raise Exception("환불 거래내역 기록 실패")
+                            if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
+                                raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
+                        
+                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_ADMIN'], user['name'], reason="수정으로 인한 주문 취소"):
+                            raise Exception("기존 주문서 상태 변경 실패")
+
+                        add_audit_log(user['user_id'], user['name'], "발주 취소 (수정 중)", order_id, store_name, reason="모든 품목 수량 0으로 변경")
+                        st.session_state.success_message = f"발주번호 {order_id}의 모든 품목이 삭제되어 주문이 성공적으로 취소되었습니다."
+                        st.session_state.editing_order_id = None
+                        clear_data_cache()
+                        st.rerun()
+
+                    except Exception as e:
+                        st.session_state.error_message = f"주문 취소 중 오류 발생: {e}. 데이터가 불안정할 수 있으니 시스템 점검을 권장합니다."
+                        st.rerun()
             
+            # [시나리오 2] 남은 품목이 하나 이상 -> '주문 수정'으로 처리
             else:
                 with st.spinner("변경사항을 계산하고 재고 및 잔액을 업데이트하는 중..."):
                     try:
-                        # --- 1. 변동사항 상세 기록 생성 ---
                         original_indexed = original_items.set_index('품목코드')
                         edited_indexed = items_to_save.set_index('품목코드')
                         comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
                         
                         inventory_changes, price_diff = [], 0.0
-                        old_items_list, new_items_list = [], []
+                        change_details = []
 
                         for code, row in comparison.iterrows():
                             qty_orig = int(row['수량_orig'])
                             qty_edit = int(row['수량_edit'])
-                            item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
-
-                            if qty_orig > 0: old_items_list.append(f"{item_name}({qty_orig})")
-                            if qty_edit > 0: new_items_list.append(f"{item_name}({qty_edit})")
-                            
                             qty_diff = qty_edit - qty_orig
+
                             if qty_diff != 0:
+                                item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
+                                change_details.append(f"{item_name}({qty_orig}→{qty_edit})")
+                                
                                 price = int(row['단가_orig'] if qty_orig > 0 else row['단가_edit'])
                                 price_diff -= (qty_diff * price * 1.1)
                                 inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
                         
                         price_diff = int(round(price_diff, 0))
                         
-                        # ✨ [기능 개선] 변동사항 상세 내용 생성
-                        old_str = ", ".join(old_items_list)
-                        new_str = ", ".join(new_items_list)
-                        change_log_str = f"변동사항 : [{old_str}] → [{new_str}], 금액변동: {price_diff:+,}원"
+                        details_part = ", ".join(change_details)
+                        amount_part = ""
+                        if price_diff > 0:
+                            amount_part = f"{price_diff:,.0f}원 부분환불"
+                        elif price_diff < 0:
+                            amount_part = f"{abs(price_diff):,.0f}원 추가결제"
+                        
+                        change_log_str = f"변동사항: {details_part}, {amount_part}"
 
-                        # --- 2. 재고 및 잔액 업데이트 ---
                         user, base_info = st.session_state.auth, original_items.iloc[0]
                         store_name, store_id = base_info['지점명'], base_info['지점ID']
 
@@ -2628,7 +2669,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
                                 raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
                         
-                        # --- 3. 주문서 교체 ---
                         new_order_rows = []
                         new_order_id = make_order_id(store_id)
                         for _, row in items_to_save.iterrows():
@@ -2639,7 +2679,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                                 "주문일시": now_kst_str(), 
                                 "발주번호": new_order_id,
                                 "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": int(row['수량']), "단가": int(row['단가']), "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, 
-                                # ✨ [기능 개선] 비고란에 상세 변동사항 기록
                                 "비고": change_log_str, 
                                 "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
 
@@ -2649,7 +2688,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                         if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_ADMIN'], user['name'], reason=f"신규 수정본({new_order_id})으로 대체됨"):
                              raise Exception("수정된 주문서는 추가되었으나, 기존 주문서 상태 변경에 실패했습니다. 중복 데이터가 있을 수 있으니 확인이 필요합니다.")
                         
-                        add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason=f"금액변동:{price_diff}, 신규주문:{new_order_id}")
+                        add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason=f"신규주문:{new_order_id}, {change_log_str}")
                         st.session_state.success_message = f"발주번호 {order_id}가 새로운 주문({new_order_id})으로 성공적으로 수정되었습니다."
                         st.session_state.editing_order_id = None
                         clear_data_cache()
@@ -2746,8 +2785,8 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                     st.text_area("비고_상세", value=memo, height=80, disabled=True,
                                  label_visibility="collapsed", key=f"memo_display_{context}_{target_id}")
 
-                if rejection_reason.strip() and order_status == CONFIG['ORDER_STATUS']['REJECTED']:
-                    st.error(f"**반려 사유:** {rejection_reason}")
+                if rejection_reason.strip() and order_status in [CONFIG['ORDER_STATUS']['REJECTED'], CONFIG['ORDER_STATUS']['CANCELED_ADMIN']]:
+                    st.error(f"**반려/취소 사유:** {rejection_reason}")
                 
                 display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
                 display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
@@ -2777,18 +2816,6 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                             st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
                                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
                                               use_container_width=True, type="primary")
-
-                elif order_status in [CONFIG['ORDER_STATUS']['REJECTED'], CONFIG['ORDER_STATUS']['CANCELED_STORE'], CONFIG['ORDER_STATUS']['CANCELED_ADMIN']]:
-                    supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                    store_name = target_df.iloc[0]['지점명']
-                    customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
-                    if not supplier_info_df.empty and not customer_info_df.empty:
-                        supplier_info = supplier_info_df.iloc[0]
-                        customer_info = customer_info_df.iloc[0]
-                        buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                        st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
-                                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                                          use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
