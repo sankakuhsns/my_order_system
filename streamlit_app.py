@@ -2559,10 +2559,10 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
 
 def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.DataFrame):
     """
-    [재설계된 발주 수정 로직 v3.2 - 변동사항 기록 최종판]
+    [재설계된 발주 수정 로직 v3.3 - 방어 로직 구축 최종판]
+    - '수정사항 저장' 전, 재고/잔액/주문상태를 먼저 검사하는 방어 로직 추가.
     - '삭제' 로직을 '상태 변경'으로 전환하여 데이터 유실을 원천적으로 방지.
-    - [기능 개선] 수정 시 변경된 품목만 (이전수량→새수량) 형식으로 기록.
-    - [기능 개선] 금액 변동을 '추가결제' 또는 '부분환불'로 명확히 표기.
+    - 수정 시 변경된 품목과 금액을 상세히 기록하여 '비고'란에 저장.
     """
     st.warning(f"**수정 모드**: 발주번호 `{order_id}`의 수량을 수정합니다. 수량을 0으로 만들면 해당 품목이 삭제되며, 모든 품목을 삭제하면 주문 전체가 취소됩니다.")
 
@@ -2580,14 +2580,84 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
 
         c1, c2 = st.columns(2)
         if c1.form_submit_button("💾 수정사항 저장", type="primary", use_container_width=True):
-            final_edited_items = pd.DataFrame(edited_items_df)
+            with st.spinner("변경사항 유효성 검사 중..."):
+                final_edited_items = pd.DataFrame(edited_items_df)
+                user, base_info = st.session_state.auth, original_items.iloc[0]
+                store_name, store_id = base_info['지점명'], base_info['지점ID']
 
-            if (pd.to_numeric(final_edited_items['수량'], errors='coerce') < 0).any():
-                st.session_state.error_message = "수량은 음수가 될 수 없습니다."
-                st.rerun()
+                # --- [사전 검사 1] 주문 상태 동시성 체크 ---
+                latest_orders_df = get_orders_df()
+                current_order_info = latest_orders_df[latest_orders_df['발주번호'] == order_id]
+                original_status = base_info['상태']
 
+                if current_order_info.empty or current_order_info.iloc[0]['상태'] != original_status:
+                    st.session_state.error_message = "주문 상태 변경됨: 수정하는 동안 주문 상태가 변경되었습니다. 페이지를 새로고침하여 최신 상태를 확인해주세요."
+                    st.rerun()
+
+                # --- [사전 계산] 재고 및 금액 변동량 계산 ---
+                original_indexed = original_items.set_index('품목코드')
+                edited_indexed = final_edited_items.set_index('품목코드')
+                comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
+                
+                inventory_changes, price_diff = [], 0.0
+                change_details = []
+
+                for code, row in comparison.iterrows():
+                    qty_orig = int(row['수량_orig'])
+                    qty_edit = int(row['수량_edit'])
+                    qty_diff = qty_edit - qty_orig
+
+                    if qty_diff != 0:
+                        item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
+                        change_details.append(f"{item_name}({qty_orig}→{qty_edit})")
+                        price = int(row['단가_orig'] if qty_orig > 0 else row['단가_edit'])
+                        price_diff -= (qty_diff * price * 1.1)
+                        inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
+                
+                price_diff = int(round(price_diff, 0))
+
+                # --- [사전 검사 2] 재고 부족 체크 (수량이 늘어나는 품목만) ---
+                items_to_increase = [item for item in inventory_changes if item['수량변경'] < 0] # 수량변경 = -qty_diff
+                if items_to_increase:
+                    current_inv_df = get_inventory_from_log(master_df)
+                    all_pending_orders = get_orders_df().query(f"상태 == '{CONFIG['ORDER_STATUS']['PENDING']}'")
+                    other_pending_qty = all_pending_orders.groupby('품목코드')['수량'].sum().reset_index().rename(columns={'수량': '출고 대기 수량'})
+                    
+                    inventory_check = pd.merge(current_inv_df, other_pending_qty, on='품목코드', how='left').fillna(0)
+                    inventory_check['실질 가용 재고'] = inventory_check['현재고수량'] - inventory_check['출고 대기 수량']
+                    
+                    lacking_items_details = []
+                    for item in items_to_increase:
+                        qty_increase = abs(item['수량변경'])
+                        stock_info = inventory_check.query(f"품목코드 == '{item['품목코드']}'")
+                        available_stock = int(stock_info.iloc[0]['실질 가용 재고']) if not stock_info.empty else 0
+                        
+                        if qty_increase > available_stock:
+                            lacking_items_details.append(f"'{item['품목명']}' (요청: +{qty_increase}개, 가용재고: {available_stock}개)")
+                    
+                    if lacking_items_details:
+                        error_msg = "재고 부족으로 수정할 수 없습니다:\n- " + "\n- ".join(lacking_items_details)
+                        st.session_state.error_message = error_msg
+                        st.rerun()
+
+                # --- [사전 검사 3] 잔액 부족 체크 (추가 결제 발생 시) ---
+                additional_payment = abs(price_diff) if price_diff < 0 else 0
+                if additional_payment > 0:
+                    balance_df = get_balance_df()
+                    balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
+                    prepaid_balance = int(balance_info.get('선충전잔액', 0))
+                    available_credit = int(balance_info.get('여신한도', 0)) - int(balance_info.get('사용여신액', 0))
+                    available_funds = prepaid_balance + available_credit
+
+                    if additional_payment > available_funds:
+                        st.session_state.error_message = f"잔액 부족: 추가 결제액({additional_payment:,.0f}원)이 지점의 결제 가능 한도({available_funds:,.0f}원)를 초과합니다."
+                        st.rerun()
+            
+            # ----------------------------------------------------------------------
+            # [실행] 모든 사전 검사를 통과한 경우에만 아래 데이터 변경 로직 실행
+            # ----------------------------------------------------------------------
             items_to_save = final_edited_items[pd.to_numeric(final_edited_items['수량'], errors='coerce') > 0]
-
+            
             # [시나리오 1] 모든 품목 수량이 0 -> '주문 취소'로 처리
             if items_to_save.empty:
                 with st.spinner("주문 취소 및 전체 환불 처리 중..."):
@@ -2633,30 +2703,8 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
             
             # [시나리오 2] 남은 품목이 하나 이상 -> '주문 수정'으로 처리
             else:
-                with st.spinner("변경사항을 계산하고 재고 및 잔액을 업데이트하는 중..."):
+                with st.spinner("안전하게 데이터 업데이트 중..."):
                     try:
-                        original_indexed = original_items.set_index('품목코드')
-                        edited_indexed = items_to_save.set_index('품목코드')
-                        comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
-                        
-                        inventory_changes, price_diff = [], 0.0
-                        change_details = []
-
-                        for code, row in comparison.iterrows():
-                            qty_orig = int(row['수량_orig'])
-                            qty_edit = int(row['수량_edit'])
-                            qty_diff = qty_edit - qty_orig
-
-                            if qty_diff != 0:
-                                item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
-                                change_details.append(f"{item_name}({qty_orig}→{qty_edit})")
-                                
-                                price = int(row['단가_orig'] if qty_orig > 0 else row['단가_edit'])
-                                price_diff -= (qty_diff * price * 1.1)
-                                inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
-                        
-                        price_diff = int(round(price_diff, 0))
-                        
                         details_part = ", ".join(change_details)
                         amount_part = ""
                         if price_diff > 0:
@@ -2665,9 +2713,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             amount_part = f"{abs(price_diff):,.0f}원 추가결제"
                         
                         change_log_str = f"변동사항: {details_part}, {amount_part}"
-
-                        user, base_info = st.session_state.auth, original_items.iloc[0]
-                        store_name, store_id = base_info['지점명'], base_info['지점ID']
 
                         if inventory_changes and not update_inventory(pd.DataFrame(inventory_changes), '재고조정(출고변경)', user['name'], date.today(), ref_id=order_id):
                             raise Exception("재고 업데이트 실패")
