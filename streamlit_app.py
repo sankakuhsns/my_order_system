@@ -1925,51 +1925,43 @@ def audit_financial_data(balance_df, transactions_df, charge_req_df):
     for store_id in store_ids:
         store_balance_series = balance_df[balance_df['지점ID'] == store_id]
         if store_balance_series.empty:
-            continue # 잔액 정보가 없는 지점은 건너뜁니다.
+            continue
         
         store_balance = store_balance_series.iloc[0]
-        store_tx = transactions_df[transactions_df['지점ID'] == store_id]
+        store_tx_raw = transactions_df[transactions_df['지점ID'] == store_id]
         
-        # --- 선충전 잔액 감사 ---
-        # ✨ [핵심 수정] '부분환불', '추가 결제' 등 선충전 잔액에 영향을 주는 모든 거래 유형을 포함하도록 수정
-        prepaid_keywords = [
-            '선충전',       # 충전/승인
-            '발주취소',     # 환불
-            '발주반려',     # 환불
-            '부분환불',     # 주문 수정으로 인한 환불
-            '추가 결제',    # 주문 수정으로 인한 추가 결제 (금액이 음수)
-            '수동조정\(충전\)' # 관리자 수동 조정
-        ]
+        # --- 1. 선충전 잔액 감사 (기존 안정화 로직 유지) ---
+        prepaid_keywords = ['선충전', '발주취소', '발주반려', '부분환불', '추가 결제', r'수동조정\(충전\)']
         prepaid_pattern = '|'.join(prepaid_keywords)
-        
-        # '선충전 잔액'에 영향을 미치는 모든 거래를 필터링
-        processed_prepaid_tx = store_tx[store_tx['구분'].str.contains(prepaid_pattern, na=False)]
-        
-        # '금액' 컬럼을 합산 (입금은 양수, 출금은 음수이므로 그대로 더함)
+        processed_prepaid_tx = store_tx_raw[store_tx_raw['구분'].str.contains(prepaid_pattern, na=False)]
         calculated_prepaid = processed_prepaid_tx['금액'].sum()
-        
         master_prepaid = int(store_balance['선충전잔액'])
 
         if master_prepaid != calculated_prepaid:
             issues.append(f"- **{store_balance['지점명']}**: 선충전 잔액 불일치 (장부: {master_prepaid: ,}원 / 계산: {calculated_prepaid: ,}원)")
         
-        # --- 사용 여신액 감사 로직 (변경 없음) ---
-        credit_tx = store_tx[store_tx['구분'].str.contains('여신결제|여신상환|수동조정\(여신\)', na=False)]
-        # '여신결제'는 사용액 증가, '여신상환'은 사용액 감소
-        calculated_credit_usage = credit_tx[credit_tx['구분'] == '여신결제']['금액'].abs().sum()
-        calculated_credit_repayment = credit_tx[credit_tx['구분'].str.contains('여신상환', na=False)]['금액'].abs().sum()
-        
-        # 주문 수정으로 인한 '부분환불' 또는 '추가 결제' 시 여신 변동분도 계산에 포함
-        # (이 부분은 render_order_edit_modal에서 이미 정확한 잔액으로 기록하고 있으므로, 거래내역의 '처리후사용여신액'을 신뢰하는 것이 더 정확함)
-        # 따라서, 여기서는 기존 로직을 유지하여 큰 흐름만 검증합니다.
-        
-        calculated_credit = calculated_credit_usage - calculated_credit_repayment
+        # --- 2. 사용 여신액 감사 (로직 전면 재설계) ---
+        if store_tx_raw.empty:
+            calculated_credit = 0
+        else:
+            # 2-1. 모든 거래를 시간순으로 정렬
+            store_tx = store_tx_raw.sort_values(by='일시', ascending=True).copy()
+            
+            # 2-2. 각 거래마다 '처리후사용여신액'이 이전 거래 대비 얼마나 변했는지 차액(diff)을 계산
+            store_tx['여신액변동'] = store_tx['처리후사용여신액'].diff()
+            
+            # 2-3. 첫 번째 거래의 변동액은 '처리후사용여신액' 그 자체임 (0원에서 시작했으므로)
+            # .loc를 사용하여 안전하게 값을 할당
+            store_tx.loc[store_tx.index[0], '여신액변동'] = store_tx['처리후사용여신액'].iloc[0]
+            
+            # 2-4. 모든 '변동액'을 합산하여 최종 사용 여신액을 계산
+            calculated_credit = store_tx['여신액변동'].sum()
+
         master_credit = int(store_balance['사용여신액'])
 
+        # 2-5. 장부와 계산된 금액을 비교
         if master_credit != calculated_credit:
-             # 주문 수정으로 인한 복잡한 여신 변동이 있을 수 있으므로, 단순 합산 불일치는 경고로 처리
-             # st.warning(f"'{store_balance['지점명']}'의 사용 여신액에 차이가 있을 수 있습니다. (장부: {master_credit: ,}원 / 계산: {calculated_credit: ,}원). 주문 수정 내역이 많은 경우 발생할 수 있습니다.")
-             pass # 현재 로직에서는 복잡성을 줄이기 위해 여신 부분의 단순 합계 오류는 일단 무시
+            issues.append(f"- **{store_balance['지점명']}**: 사용 여신액 불일치 (장부: {master_credit: ,}원 / 계산: {calculated_credit: ,}원)")
 
     if issues:
         return "❌ 오류", issues
