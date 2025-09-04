@@ -2768,10 +2768,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     with tab4:
         render_rejected_orders_tab(rejected)
     
-    v_spacer(16)
-    selected_ids = [k for k, v in st.session_state.admin_orders_selection.items() if v]
-    render_order_details_section(selected_ids, df_all, store_info_df, master_df)
-    
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.subheader("📈 매출 조회")
     
