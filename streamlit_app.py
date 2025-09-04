@@ -2709,8 +2709,32 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                         if st.button("✏️ 선택 발주 일부 수정하기", key=f"edit_{context}_{target_id}", use_container_width=True):
                             st.session_state.editing_order_id = target_id
                             st.rerun()
+                    
+                    # ▼▼▼ [수정] 누락되었던 다운로드 버튼 로직을 복원합니다 ▼▼▼
                     with c2:
-                        # ... (다운로드 버튼 로직) ...
+                        supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                        store_name = target_df.iloc[0]['지점명']
+                        customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
+                        if not supplier_info_df.empty and not customer_info_df.empty:
+                            supplier_info = supplier_info_df.iloc[0]
+                            customer_info = customer_info_df.iloc[0]
+                            buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                            st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
+                                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                              use_container_width=True, type="primary")
+                    # ▲▲▲ 수정 완료 ▲▲▲
+
+                elif order_status in [CONFIG['ORDER_STATUS']['MODIFIED'], CONFIG['ORDER_STATUS']['REJECTED']]:
+                     supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
+                     store_name = target_df.iloc[0]['지점명']
+                     customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
+                     if not supplier_info_df.empty and not customer_info_df.empty:
+                         supplier_info = supplier_info_df.iloc[0]
+                         customer_info = customer_info_df.iloc[0]
+                         buf = create_unified_item_statement(target_df, supplier_info, customer_info)
+                         st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", 
+                                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                           use_container_width=True, type="primary")
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
