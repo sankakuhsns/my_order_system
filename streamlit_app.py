@@ -2604,7 +2604,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
 def render_modified_orders_tab(modified_orders: pd.DataFrame, df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.info("여기에는 승인 후 수량 등이 변경된 발주 내역이 표시됩니다.")
     
-    # ▼▼▼ [개선] 페이지네이션 기능 추가 ▼▼▼
     page_size = 10
     page_number = render_paginated_ui(len(modified_orders), page_size, "modified_orders")
     start_idx = (page_number - 1) * page_size
@@ -2622,11 +2621,14 @@ def render_modified_orders_tab(modified_orders: pd.DataFrame, df_all: pd.DataFra
 
     for _, row in edited_modified.iterrows():
         st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
-    # ▲▲▲ 페이지네이션 기능 추가 완료 ▲▲▲
 
     selected_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in modified_orders['발주번호'].values]
+    
     v_spacer(16)
-    render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df, context="pending")
+
+    # ▼▼▼ [수정] 변수명과 context 값을 올바르게 수정합니다 ▼▼▼
+    render_order_details_section(selected_ids, df_all, store_info_df, master_df, context="modified")
+    # ▲▲▲ 수정 완료 ▲▲▲
 
 def render_rejected_orders_tab(rejected_orders: pd.DataFrame):
     page_size = 10
