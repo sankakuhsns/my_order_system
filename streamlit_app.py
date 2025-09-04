@@ -293,7 +293,8 @@ def find_and_delete_rows(sheet_name, id_column, ids_to_delete):
     if not ids_to_delete:
         return True
     try:
-        spreadsheet = get_gspread_client().open_by_key(_get_sheet_key())
+        # [수정] open_spreadsheet()를 사용하도록 변경하여 오류 해결
+        spreadsheet = open_spreadsheet()
         worksheet = spreadsheet.worksheet(sheet_name)
         
         all_data = worksheet.get_all_values()
@@ -314,6 +315,9 @@ def find_and_delete_rows(sheet_name, id_column, ids_to_delete):
         if rows_to_delete_indices:
             for row_index in sorted(rows_to_delete_indices, reverse=True):
                 worksheet.delete_rows(row_index)
+                time.sleep(1) # API 요청 간 짧은 딜레이 추가
+        
+        st.cache_data.clear() # 삭제 후 캐시 클리어
         return True
     except Exception as e:
         st.error(f"'{sheet_name}' 시트에서 행 삭제 중 오류: {e}")
@@ -2537,11 +2541,14 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
             price_preview = 0.0
             
             for code, row in temp_comparison.iterrows():
-                qty_diff = int(row['수량_edit']) - int(row['수량_orig'])
+                qty_orig = int(row['수량_orig'])
+                qty_edit = int(row['수량_edit'])
+                qty_diff = qty_edit - qty_orig
+                
                 if qty_diff != 0:
-                    item_name = row['품목명_orig'] if qty_diff < 0 else row['품목명_edit']
-                    price = int(row['단가_orig']) if qty_diff < 0 else int(row['단가_edit'])
-                    preview_changes.append(f"{item_name}: {qty_orig}개 → {int(row['수량_edit'])}개 ({qty_diff: G})")
+                    item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
+                    price = int(row['단가_orig']) if qty_orig > 0 else int(row['단가_edit'])
+                    preview_changes.append(f"{item_name}: {qty_orig}개 → {qty_edit}개 ({qty_diff: G})")
                     price_preview -= (qty_diff * price * 1.1)
 
             if preview_changes:
@@ -2609,14 +2616,15 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                     if not find_and_delete_rows(CONFIG["ORDERS"]["name"], "발주번호", [order_id]):
                         raise Exception("기존 주문서 삭제 실패")
                     
-                    final_items_df = final_items_df[final_items_df['수량'] > 0]
+                    # [수정] final_items_df -> final_edited_items 변수명 오류 수정
+                    final_edited_items = final_edited_items[pd.to_numeric(final_edited_items['수량'], errors='coerce') > 0]
                     new_order_rows = []
-                    if not final_items_df.empty:
-                        for _, row in final_items_df.iterrows():
+                    if not final_edited_items.empty:
+                        for _, row in final_edited_items.iterrows():
                             master_item_info = master_df[master_df['품목코드'] == row['품목코드']].iloc[0]
-                            supply_price = row['단가'] * row['수량']
+                            supply_price = int(row['단가']) * int(row['수량'])
                             tax = math.ceil(supply_price * 0.1) if master_item_info['과세구분'] == '과세' else 0
-                            new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": row['수량'], "단가": row['단가'], "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
+                            new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": int(row['수량']), "단가": int(row['단가']), "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
                     
                     if new_order_rows:
                         if not append_rows_to_sheet(CONFIG["ORDERS"]["name"], new_order_rows, CONFIG['ORDERS']['cols']):
