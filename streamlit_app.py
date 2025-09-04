@@ -2517,11 +2517,11 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
 
 def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.DataFrame):
     """
-    [재설계된 발주 수정 로직 v2.1 - 최종 안정화 버전]
-    - '선 준비, 후 교체' 원칙으로 데이터 유실 위험 제거
-    - 모든 품목 수량을 0으로 만들 경우 '주문 취소'로 처리
-    - 재고, 잔액, 주문 데이터 변경을 보다 안전한 순서로 처리
-    - [버그 수정] 주문일시(Timestamp)를 문자열로 변환하여 API 오류 해결
+    [재설계된 발주 수정 로직 v3.0 - 데이터 보존 최종판]
+    - '삭제' 로직을 '상태 변경'으로 전환하여 데이터 유실을 원천적으로 방지.
+    - 모든 품목 수량을 0으로 만들 경우 '주문 취소'로 처리.
+    - 재고, 잔액, 주문 데이터 변경을 보다 안전한 순서로 처리.
+    - 주문일시(Timestamp)를 문자열로 변환하여 API 오류 해결.
     """
     st.warning(f"**수정 모드**: 발주번호 `{order_id}`의 수량을 수정합니다. 수량을 0으로 만들면 해당 품목이 삭제되며, 모든 품목을 삭제하면 주문 전체가 취소됩니다.")
 
@@ -2547,12 +2547,13 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
 
             items_to_save = final_edited_items[pd.to_numeric(final_edited_items['수량'], errors='coerce') > 0]
 
+            # [시나리오 1] 모든 품목 수량이 0 -> '주문 취소'로 처리 (기존 로직 유지)
             if items_to_save.empty:
                 with st.spinner("주문 취소 및 전체 환불 처리 중..."):
                     try:
                         user, base_info = st.session_state.auth, original_items.iloc[0]
                         store_name, store_id = base_info['지점명'], base_info['지점ID']
-
+                        
                         items_to_restore = original_items.copy()
                         items_to_restore.rename(columns={'수량': '수량변경'}, inplace=True)
                         if not update_inventory(items_to_restore, CONFIG['INV_CHANGE_TYPE']['CANCEL_SHIPMENT'], user['name'], date.today(), ref_id=order_id, reason="수정에 의한 주문 취소"):
@@ -2569,15 +2570,16 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
 
                             if tx_info['구분'] == '선충전결제': new_prepaid += refund_amount
                             else: new_used_credit -= refund_amount
-
+                            
                             refund_record = { "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name, "구분": "발주취소(수정)", "내용": f"발주 수정으로 인한 전체 취소 환불 ({order_id})", "금액": refund_amount, "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user['name'] }
                             if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
                                 raise Exception("환불 거래내역 기록 실패")
                             if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
                                 raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
-
-                        if not find_and_delete_rows(CONFIG["ORDERS"]["name"], "발주번호", [order_id]):
-                            raise Exception("기존 주문서 삭제 실패")
+                        
+                        # ✨ [핵심 변경] 삭제 대신 상태 변경으로 전환
+                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_ADMIN'], user['name'], reason="수정으로 인한 주문 취소"):
+                            raise Exception("기존 주문서 상태 변경 실패")
 
                         add_audit_log(user['user_id'], user['name'], "발주 취소 (수정 중)", order_id, store_name, reason="모든 품목 수량 0으로 변경")
                         st.session_state.success_message = f"발주번호 {order_id}의 모든 품목이 삭제되어 주문이 성공적으로 취소되었습니다."
@@ -2588,6 +2590,8 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                     except Exception as e:
                         st.session_state.error_message = f"주문 취소 중 오류 발생: {e}. 데이터가 불안정할 수 있으니 시스템 점검을 권장합니다."
                         st.rerun()
+            
+            # [시나리오 2] 남은 품목이 하나 이상 -> '주문 수정'으로 처리
             else:
                 with st.spinner("변경사항을 계산하고 재고 및 잔액을 업데이트하는 중..."):
                     try:
@@ -2633,23 +2637,27 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                                 raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
                         
                         new_order_rows = []
+                        new_order_id = make_order_id(store_id) # 수정 시 신규 발주번호 생성
                         for _, row in items_to_save.iterrows():
                             master_item_info = master_df[master_df['품목코드'] == row['품목코드']].iloc[0]
                             supply_price = int(row['단가']) * int(row['수량'])
                             tax = math.ceil(supply_price * 0.1) if master_item_info['과세구분'] == '과세' else 0
                             new_order_rows.append({ 
-                                # ✨ [수정] Timestamp 객체를 API가 인식 가능한 문자열로 변환
-                                "주문일시": base_info['주문일시'].strftime('%Y-%m-%d %H:%M:%S'), 
-                                "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": int(row['수량']), "단가": int(row['단가']), "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
+                                "주문일시": now_kst_str(), # 수정 시점의 시간으로 기록
+                                "발주번호": new_order_id, # 새로운 발주번호 부여
+                                "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": int(row['수량']), "단가": int(row['단가']), "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, 
+                                "비고": f"[수정됨] 원본: {order_id}", # 비고에 원본 발주번호 기록
+                                "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
 
                         if not append_rows_to_sheet(CONFIG["ORDERS"]["name"], new_order_rows, CONFIG['ORDERS']['cols']):
                             raise Exception("수정된 주문서 생성 실패. 원본 데이터는 보존되었습니다.")
                         
-                        if not find_and_delete_rows(CONFIG["ORDERS"]["name"], "발주번호", [order_id]):
-                            raise Exception("수정된 주문서는 추가되었으나, 기존 주문서 삭제에 실패했습니다. 중복 데이터가 있을 수 있으니 확인이 필요합니다.")
+                        # ✨ [핵심 변경] 삭제 대신 상태 변경으로 전환
+                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_ADMIN'], user['name'], reason=f"신규 수정본({new_order_id})으로 대체됨"):
+                             raise Exception("수정된 주문서는 추가되었으나, 기존 주문서 상태 변경에 실패했습니다. 중복 데이터가 있을 수 있으니 확인이 필요합니다.")
                         
-                        add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason=f"금액변동:{price_diff}")
-                        st.session_state.success_message = f"발주번호 {order_id}가 성공적으로 수정되었습니다."
+                        add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason=f"금액변동:{price_diff}, 신규주문:{new_order_id}")
+                        st.session_state.success_message = f"발주번호 {order_id}가 새로운 주문({new_order_id})으로 성공적으로 수정되었습니다."
                         st.session_state.editing_order_id = None
                         clear_data_cache()
                         st.rerun()
