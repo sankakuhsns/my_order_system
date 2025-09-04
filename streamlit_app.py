@@ -2517,15 +2517,16 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
 
 def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.DataFrame):
     """
-    [재설계된 발주 수정 로직 v2.0]
+    [재설계된 발주 수정 로직 v2.1 - 최종 안정화 버전]
     - '선 준비, 후 교체' 원칙으로 데이터 유실 위험 제거
-    - 모든 품목 수량을 0으로 만들 경우 '수정'이 아닌 '주문 취소'로 처리
+    - 모든 품목 수량을 0으로 만들 경우 '주문 취소'로 처리
     - 재고, 잔액, 주문 데이터 변경을 보다 안전한 순서로 처리
+    - [버그 수정] 주문일시(Timestamp)를 문자열로 변환하여 API 오류 해결
     """
     st.warning(f"**수정 모드**: 발주번호 `{order_id}`의 수량을 수정합니다. 수량을 0으로 만들면 해당 품목이 삭제되며, 모든 품목을 삭제하면 주문 전체가 취소됩니다.")
-    
+
     original_items = df_all[df_all['발주번호'] == order_id].copy()
-    
+
     with st.form(key="edit_order_form"):
         cols_to_edit = ['품목코드', '품목명', '단위', '수량', '단가']
         edited_items_df = st.data_editor(
@@ -2539,51 +2540,42 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
         c1, c2 = st.columns(2)
         if c1.form_submit_button("💾 수정사항 저장", type="primary", use_container_width=True):
             final_edited_items = pd.DataFrame(edited_items_df)
-            
-            # 유효성 검사: 음수 수량 입력 방지
+
             if (pd.to_numeric(final_edited_items['수량'], errors='coerce') < 0).any():
                 st.session_state.error_message = "수량은 음수가 될 수 없습니다."
                 st.rerun()
 
-            # --- 1. 사용자의 의도 파악: '수정' vs '취소' ---
             items_to_save = final_edited_items[pd.to_numeric(final_edited_items['수량'], errors='coerce') > 0]
-            
-            # ----------------------------------------------------------------------
-            # [시나리오 1] 모든 품목의 수량이 0 -> '주문 취소'로 처리
-            # ----------------------------------------------------------------------
+
             if items_to_save.empty:
                 with st.spinner("주문 취소 및 전체 환불 처리 중..."):
                     try:
                         user, base_info = st.session_state.auth, original_items.iloc[0]
                         store_name, store_id = base_info['지점명'], base_info['지점ID']
-                        
-                        # 1-1. 재고 복원
+
                         items_to_restore = original_items.copy()
                         items_to_restore.rename(columns={'수량': '수량변경'}, inplace=True)
                         if not update_inventory(items_to_restore, CONFIG['INV_CHANGE_TYPE']['CANCEL_SHIPMENT'], user['name'], date.today(), ref_id=order_id, reason="수정에 의한 주문 취소"):
                             raise Exception("재고 복원 실패")
 
-                        # 1-2. 전체 금액 환불
                         transactions_df = get_transactions_df()
                         original_tx = transactions_df[transactions_df['관련발주번호'] == order_id]
                         if not original_tx.empty:
                             tx_info = original_tx.iloc[0]
                             refund_amount = abs(int(tx_info['금액']))
-                            
                             balance_df = get_balance_df()
                             balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
                             new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
 
                             if tx_info['구분'] == '선충전결제': new_prepaid += refund_amount
                             else: new_used_credit -= refund_amount
-                            
+
                             refund_record = { "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name, "구분": "발주취소(수정)", "내용": f"발주 수정으로 인한 전체 취소 환불 ({order_id})", "금액": refund_amount, "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user['name'] }
                             if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
                                 raise Exception("환불 거래내역 기록 실패")
                             if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
                                 raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
-                        
-                        # 1-3. 기존 주문서 완전 삭제
+
                         if not find_and_delete_rows(CONFIG["ORDERS"]["name"], "발주번호", [order_id]):
                             raise Exception("기존 주문서 삭제 실패")
 
@@ -2596,14 +2588,9 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                     except Exception as e:
                         st.session_state.error_message = f"주문 취소 중 오류 발생: {e}. 데이터가 불안정할 수 있으니 시스템 점검을 권장합니다."
                         st.rerun()
-
-            # ----------------------------------------------------------------------
-            # [시나리오 2] 남은 품목이 하나 이상 -> '주문 수정'으로 처리
-            # ----------------------------------------------------------------------
             else:
                 with st.spinner("변경사항을 계산하고 재고 및 잔액을 업데이트하는 중..."):
                     try:
-                        # 2-1. 변경사항 최종 계산
                         original_indexed = original_items.set_index('품목코드')
                         edited_indexed = items_to_save.set_index('품목코드')
                         comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
@@ -2618,7 +2605,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                                 inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
                         price_diff = int(round(price_diff, 0))
 
-                        # 2-2. 재고 및 잔액 선(先) 업데이트
                         user, base_info = st.session_state.auth, original_items.iloc[0]
                         store_name, store_id = base_info['지점명'], base_info['지점ID']
 
@@ -2626,7 +2612,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             raise Exception("재고 업데이트 실패")
                         
                         if price_diff != 0:
-                            # (기존과 동일한 잔액 처리 로직)
                             balance_df = get_balance_df()
                             balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
                             new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
@@ -2647,15 +2632,16 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
                                 raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
                         
-                        # 2-3. 수정된 주문 데이터 준비
                         new_order_rows = []
                         for _, row in items_to_save.iterrows():
                             master_item_info = master_df[master_df['품목코드'] == row['품목코드']].iloc[0]
                             supply_price = int(row['단가']) * int(row['수량'])
                             tax = math.ceil(supply_price * 0.1) if master_item_info['과세구분'] == '과세' else 0
-                            new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": int(row['수량']), "단가": int(row['단가']), "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
+                            new_order_rows.append({ 
+                                # ✨ [수정] Timestamp 객체를 API가 인식 가능한 문자열로 변환
+                                "주문일시": base_info['주문일시'].strftime('%Y-%m-%d %H:%M:%S'), 
+                                "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": int(row['수량']), "단가": int(row['단가']), "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
 
-                        # 2-4. [안전한 교체] (1)새 주문 추가 -> (2)기존 주문 삭제
                         if not append_rows_to_sheet(CONFIG["ORDERS"]["name"], new_order_rows, CONFIG['ORDERS']['cols']):
                             raise Exception("수정된 주문서 생성 실패. 원본 데이터는 보존되었습니다.")
                         
