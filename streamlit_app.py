@@ -2442,30 +2442,38 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
     
     selected_pending_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in pending_orders['발주번호'].values]
     
-    # [수정] UI 순서 변경: 상세 조회를 먼저 표시
     v_spacer(16)
     render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df, context="pending")
     
     v_spacer(16)
     
-    # [수정] 처리 섹션을 상세 조회 아래로 이동
     st.markdown("##### 📦 선택한 발주 처리")
     with st.container(border=True):
+        # ▼▼▼ [수정] 버튼과 입력창의 레이아웃을 요청하신 구조로 수정합니다 ▼▼▼
+        
+        # 1행: 버튼 영역
         btn_cols = st.columns(2)
         with btn_cols[0]:
             if st.button("✅ 선택 발주 승인", disabled=not selected_pending_ids, use_container_width=True, type="primary"):
                 st.session_state.approve_ids = selected_pending_ids
                 st.rerun()
+        
         with btn_cols[1]:
-            rejection_reason = st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input", placeholder="예: 재고 부족")
-            if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
-                if not rejection_reason:
-                    st.session_state.warning_message = "반려 사유를 반드시 입력해야 합니다."
-                    st.rerun()
-                else:
-                    st.session_state.confirm_action = "reject_order"
-                    st.session_state.confirm_data = {'ids': selected_pending_ids, 'reason': rejection_reason}
-                    st.rerun()
+            # '선택 발주 반려' 버튼은 반려 사유 입력값과 함께 처리되므로 로직을 아래로 이동
+            pass
+
+        # 2행: 반려 사유 입력 영역
+        rejection_reason = st.text_input("반려 사유 (반려 시 필수)", key="rejection_reason_input_v2", placeholder="예: 재고 부족")
+
+        # 반려 버튼을 입력창 아래에 배치 (이제 btn_cols[1]을 사용하지 않음)
+        if st.button("❌ 선택 발주 반려", disabled=not selected_pending_ids, key="admin_reject_btn", use_container_width=True):
+            if not rejection_reason:
+                st.session_state.warning_message = "반려 사유를 반드시 입력해야 합니다."
+                st.rerun()
+            else:
+                st.session_state.confirm_action = "reject_order"
+                st.session_state.confirm_data = {'ids': selected_pending_ids, 'reason': rejection_reason}
+                st.rerun()
 
 def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     page_size = 10
