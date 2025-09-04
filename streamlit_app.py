@@ -485,15 +485,14 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
     df = orders_df.copy()
     df['거래일자'] = pd.to_datetime(df['주문일시']).dt.date
     if '세액' not in df.columns: df['세액'] = 0
-    df = df.sort_values(by=['거래일자', '품목명'])
+    # 데이터가 올바른 순서로 표시되도록 거래일자 > 주문일시 > 품목명 순으로 정렬
+    df = df.sort_values(by=['거래일자', '주문일시', '품목명'])
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         worksheet = workbook.add_worksheet("품목거래내역서")
         worksheet.fit_to_pages(1, 0)
 
-        # (Excel 서식 및 헤더, 레이아웃 설정 부분은 이전과 동일합니다.)
-        # ...
         # 2. Excel 서식 정의
         fmt_title = workbook.add_format({'bold': True, 'font_size': 22, 'align': 'center', 'valign': 'vcenter', 'border': 1, 'bg_color': '#4F81BD', 'font_color': 'white'})
         fmt_subtitle = workbook.add_format({'bold': True, 'font_size': 11, 'bg_color': '#DDEBF7', 'align': 'center', 'valign': 'vcenter', 'border': 1})
@@ -541,7 +540,6 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         # 5. 거래 요약 정보
         min_date, max_date = df['거래일자'].min(), df['거래일자'].max()
         date_range = max_date.strftime('%Y-%m-%d') if min_date == max_date else f"{min_date.strftime('%Y-%m-%d')} ~ {max_date.strftime('%Y-%m-%d')}"
-        # ✨ [핵심 수정] df_agg 대신 원본 데이터프레임 df를 사용합니다.
         grand_total = df['합계금액'].sum()
         worksheet.merge_range('A11:B11', '거래 기간', fmt_summary_header)
         worksheet.write('C11', date_range, fmt_summary_data)
@@ -553,7 +551,7 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
         # 6. 본문 데이터 작성
         order_ids_by_date = df.groupby('거래일자')['발주번호'].unique().apply(lambda x: ', '.join(x)).to_dict()
 
-        for trade_date in df['거래일자'].unique():
+        for trade_date in sorted(df['거래일자'].unique()):
             worksheet.merge_range(f'A{current_row}:I{current_row}', f"■ 거래일자 : {trade_date.strftime('%Y년 %m월 %d일')}", fmt_date_header)
             current_row += 1
             related_orders = order_ids_by_date.get(trade_date, "")
@@ -564,27 +562,26 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             worksheet.write_row(f'A{current_row}', headers, fmt_header)
             current_row += 1
 
-            row_idx = current_row - 1
             date_df = df[df['거래일자'] == trade_date]
             item_counter = 1
+            # ✨ [핵심 수정] 모든 품목을 먼저 기록하고, 그 다음에 current_row를 업데이트합니다.
             for _, record in date_df.iterrows():
-                worksheet.write(row_idx, 0, item_counter, fmt_text_c)
-                worksheet.write(row_idx, 1, record['품목코드'], fmt_text_c)
-                worksheet.write(row_idx, 2, record['품목명'], fmt_text_l)
-                worksheet.write(row_idx, 3, record['단위'], fmt_text_c)
-                worksheet.write(row_idx, 4, record['수량'], fmt_money)
-                worksheet.write(row_idx, 5, record['단가'], fmt_money)
-                worksheet.write(row_idx, 6, record['공급가액'], fmt_money)
-                worksheet.write(row_idx, 7, record['세액'], fmt_money)
-                worksheet.write(row_idx, 8, record['합계금액'], fmt_money)
+                # xlsxwriter의 write는 0-indexed row, col을 사용하므로 current_row - 1을 사용합니다.
+                worksheet.write(current_row - 1, 0, item_counter, fmt_text_c)
+                worksheet.write(current_row - 1, 1, record['품목코드'], fmt_text_c)
+                worksheet.write(current_row - 1, 2, record['품목명'], fmt_text_l)
+                worksheet.write(current_row - 1, 3, record['단위'], fmt_text_c)
+                worksheet.write(current_row - 1, 4, record['수량'], fmt_money)
+                worksheet.write(current_row - 1, 5, record['단가'], fmt_money)
+                worksheet.write(current_row - 1, 6, record['공급가액'], fmt_money)
+                worksheet.write(current_row - 1, 7, record['세액'], fmt_money)
+                worksheet.write(current_row - 1, 8, record['합계금액'], fmt_money)
                 item_counter += 1
-                row_idx += 1
+                current_row += 1 # 각 품목을 기록한 후, 다음 행으로 이동
 
-            current_row = row_idx
-            
-            memos_series = df[df['거래일자'] == trade_date]['비고'].dropna().unique()
+            # 모든 품목이 기록된 후, '변동사항' 등을 그 아랫줄에 기록합니다.
+            memos_series = date_df['비고'].dropna().unique()
             change_logs = [memo for memo in memos_series if "변동사항" in str(memo)]
-            
             day_change_log = ", ".join(change_logs)
 
             if day_change_log:
@@ -597,9 +594,10 @@ def create_unified_item_statement(orders_df: pd.DataFrame, supplier_info: pd.Ser
             worksheet.write(f'G{current_row}', date_df['공급가액'].sum(), fmt_subtotal_money)
             worksheet.write(f'H{current_row}', date_df['세액'].sum(), fmt_subtotal_money)
             worksheet.write(f'I{current_row}', date_df['합계금액'].sum(), fmt_subtotal_money)
-            current_row += 2
+            current_row += 2 # 일계 후에는 두 줄을 띄워 다음 날짜와 간격을 둡니다.
 
         # 7. 최종 합계
+        # 모든 날짜 루프가 끝난 후, 최종 위치에 총계를 기록합니다.
         worksheet.merge_range(f'A{current_row}:F{current_row}', '총 계', fmt_subtotal_label)
         worksheet.write(f'G{current_row}', df['공급가액'].sum(), fmt_subtotal_money)
         worksheet.write(f'H{current_row}', df['세액'].sum(), fmt_subtotal_money)
