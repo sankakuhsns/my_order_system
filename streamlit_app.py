@@ -1664,42 +1664,31 @@ def render_store_order_list(orders_df: pd.DataFrame, key_prefix: str):
         st.session_state.store_orders_selection[row['발주번호']] = row['선택']
 
 def render_store_order_details_section(df_all_user_orders: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
-    """선택된 발주의 상세 내역과 관련 액션 버튼을 렌더링합니다. (페이지네이션 없음)"""
+    """
+    [UX 개선] 선택된 발주의 상세 내역과 관련 액션 버튼을 렌더링합니다.
+    - '이전/다음' 조회 기능을 제거하여 UX를 단순화합니다.
+    - 오직 하나의 발주가 선택되었을 때만 상세 내용을 표시합니다.
+    """
     
     selected_ids = [k for k, v in st.session_state.get('store_orders_selection', {}).items() if v]
-
-    if 'store_order_detail_index' not in st.session_state:
-        st.session_state.store_order_detail_index = 0
-    
-    if not selected_ids:
-        st.session_state.store_order_detail_index = 0
-    elif st.session_state.store_order_detail_index >= len(selected_ids):
-        st.session_state.store_order_detail_index = 0
 
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
         
+        # --- [핵심 수정] 선택된 발주 건수에 따라 다른 UI를 표시 ---
+
+        # 시나리오 1: 아무것도 선택하지 않은 경우
         if not selected_ids:
             st.info("상세 내용을 보려면 위 목록에서 발주를 선택하세요.")
             return
 
-        idx = st.session_state.store_order_detail_index
+        # 시나리오 2: 2개 이상 선택한 경우
+        if len(selected_ids) > 1:
+            st.info(f"현재 {len(selected_ids)}건이 선택되었습니다. 상세 내용을 보려면 발주를 **하나만** 선택해주세요.")
+            return
         
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c1:
-            if st.button("⬅️ 이전 발주", use_container_width=True, disabled=(idx <= 0)):
-                st.session_state.store_order_detail_index -= 1
-                st.rerun()
-        with c2:
-            st.markdown(f"<div style='text-align:center; margin-top: 8px;'><b>{idx + 1} / {len(selected_ids)}</b></div>", unsafe_allow_html=True)
-        with c3:
-            if st.button("다음 발주 ➡️", use_container_width=True, disabled=(idx >= len(selected_ids) - 1)):
-                st.session_state.store_order_detail_index += 1
-                st.rerun()
-
-        st.divider()
-
-        target_id = selected_ids[idx]
+        # 시나리오 3: 정확히 1개만 선택한 경우 (상세 내용 표시)
+        target_id = selected_ids[0]
         target_df = df_all_user_orders[df_all_user_orders["발주번호"] == target_id]
         
         if not target_df.empty:
@@ -1722,11 +1711,13 @@ def render_store_order_details_section(df_all_user_orders: pd.DataFrame, store_i
 
             st.divider()
             
+            # '요청' 상태일 때만 '취소' 버튼 표시
             if order_status == CONFIG['ORDER_STATUS']['PENDING']:
                 if st.button("현재 발주 요청 취소하기", type="primary", use_container_width=True, key=f"cancel_btn_{target_id}"):
                     st.session_state.cancel_ids = [target_id]
                     st.rerun()
             
+            # '승인', '출고완료', '변동출고' 상태일 때 '다운로드' 버튼 표시
             if order_status in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED'], CONFIG['ORDER_STATUS']['MODIFIED']]:
                 user = st.session_state.auth
                 supplier_info_df = store_info_df[store_info_df['역할'] == 'admin']
