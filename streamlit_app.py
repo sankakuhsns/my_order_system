@@ -2458,18 +2458,19 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
         
     selected_shipped_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in shipped_orders['발주번호'].values]
     
-    # [수정] 상세 조회 섹션 호출 추가
     v_spacer(16)
-    render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df, context="pending")
     
-    # [수정] 승인 취소 버튼 UI 개선
+    # ▼▼▼ [수정] 변수명을 selected_pending_ids -> selected_shipped_ids 로 수정 ▼▼▼
+    render_order_details_section(selected_shipped_ids, df_all, store_info_df, master_df, context="shipped")
+    # ▲▲▲ 수정 완료 ▲▲▲
+    
     v_spacer(16)
     st.markdown("##### ↩️ 승인 취소")
     with st.container(border=True):
-        if st.button("선택 건 요청 상태로 되돌리기", key="revert_shipped", disabled=not selected_shipped_ids, use_container_width=True):
-            st.session_state.confirm_action = "revert_to_pending"
-            st.session_state.confirm_data = {'ids': selected_shipped_ids}
-            st.rerun()
+      if st.button("선택 건 요청 상태로 되돌리기", key="revert_shipped", disabled=not selected_shipped_ids, use_container_width=True):
+          st.session_state.confirm_action = "revert_to_pending"
+          st.session_state.confirm_data = {'ids': selected_shipped_ids}
+          st.rerun()
 
 def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.DataFrame):
     st.warning(f"**수정 모드**: 발주번호 `{order_id}`의 수량을 수정합니다. 수량을 0으로 만들면 해당 품목이 삭제됩니다.")
