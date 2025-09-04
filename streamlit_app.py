@@ -1633,28 +1633,25 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
 
     # --- 상세 조회 및 액션 버튼 렌더링 ---
     render_store_order_details_section(df_user, store_info_df, master_df)
-
-
+    
 def render_store_order_list(orders_df: pd.DataFrame, key_prefix: str):
-    """(신규 헬퍼 함수) 발주 목록을 표시하는 UI를 렌더링합니다."""
+    """발주 목록과 페이지네이션을 표시하는 UI를 렌더링합니다."""
     if orders_df.empty:
         st.info("해당 상태의 발주 내역이 없습니다.")
         return
 
     display_df = orders_df.copy()
     
-    # ✨ [핵심 수정] st.session_state가 없을 경우를 대비해 안전하게 초기화합니다.
     if 'store_orders_selection' not in st.session_state:
         st.session_state.store_orders_selection = {}
     display_df.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in display_df['발주번호']])
     
-    # 페이지네이션
+    # 페이지네이션 UI 렌더링 (발주 '목록'에만 적용)
     page_size = 10
     page_number = render_paginated_ui(len(display_df), page_size, key_prefix)
     start_idx = (page_number - 1) * page_size
     end_idx = start_idx + page_size
     
-    # data_editor가 반환하는 수정된 데이터프레임을 새로운 변수에 할당
     edited_df = st.data_editor(
         display_df.iloc[start_idx:end_idx],
         hide_index=True, 
@@ -1663,12 +1660,11 @@ def render_store_order_list(orders_df: pd.DataFrame, key_prefix: str):
         disabled=display_df.columns.drop('선택')
     )
     
-    # 수정된 데이터프레임(edited_df)을 기반으로 선택 상태를 업데이트
     for _, row in edited_df.iterrows():
         st.session_state.store_orders_selection[row['발주번호']] = row['선택']
 
 def render_store_order_details_section(df_all_user_orders: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
-    """(신규 헬퍼 함수) 선택된 발주의 상세 내역과 관련 액션 버튼을 렌더링합니다."""
+    """선택된 발주의 상세 내역과 관련 액션 버튼을 렌더링합니다. (페이지네이션 없음)"""
     
     selected_ids = [k for k, v in st.session_state.get('store_orders_selection', {}).items() if v]
 
@@ -1721,6 +1717,7 @@ def render_store_order_details_section(df_all_user_orders: pd.DataFrame, store_i
             display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
             display_df.rename(columns={'합계금액': '합계금액(VAT포함)'}, inplace=True)
             
+            # 상세 품목 리스트는 페이지네이션 없이 전체를 보여줍니다.
             st.dataframe(display_df[["품목코드", "품목명", "단위", "수량", "단가(VAT포함)", "합계금액(VAT포함)"]], hide_index=True, use_container_width=True)
 
             st.divider()
