@@ -1642,16 +1642,19 @@ def render_store_order_list(orders_df: pd.DataFrame, key_prefix: str):
         return
 
     display_df = orders_df.copy()
-    # 선택 상태 초기화 및 업데이트
+    
+    # ✨ [핵심 수정] st.session_state가 없을 경우를 대비해 안전하게 초기화합니다.
     if 'store_orders_selection' not in st.session_state:
         st.session_state.store_orders_selection = {}
     display_df.insert(0, '선택', [st.session_state.store_orders_selection.get(x, False) for x in display_df['발주번호']])
     
+    # 페이지네이션
     page_size = 10
     page_number = render_paginated_ui(len(display_df), page_size, key_prefix)
     start_idx = (page_number - 1) * page_size
     end_idx = start_idx + page_size
     
+    # data_editor가 반환하는 수정된 데이터프레임을 새로운 변수에 할당
     edited_df = st.data_editor(
         display_df.iloc[start_idx:end_idx],
         hide_index=True, 
@@ -1660,6 +1663,7 @@ def render_store_order_list(orders_df: pd.DataFrame, key_prefix: str):
         disabled=display_df.columns.drop('선택')
     )
     
+    # 수정된 데이터프레임(edited_df)을 기반으로 선택 상태를 업데이트
     for _, row in edited_df.iterrows():
         st.session_state.store_orders_selection[row['발주번호']] = row['선택']
 
