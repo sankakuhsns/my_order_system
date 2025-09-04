@@ -2414,7 +2414,7 @@ def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame
     
     # [수정] UI 순서 변경: 상세 조회를 먼저 표시
     v_spacer(16)
-    render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df)
+    render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df, context="pending")
     
     v_spacer(16)
     
@@ -2460,7 +2460,7 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
     
     # [수정] 상세 조회 섹션 호출 추가
     v_spacer(16)
-    render_order_details_section(selected_shipped_ids, df_all, store_info_df, master_df)
+    render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df, context="pending")
     
     # [수정] 승인 취소 버튼 UI 개선
     v_spacer(16)
@@ -2625,7 +2625,7 @@ def render_modified_orders_tab(modified_orders: pd.DataFrame, df_all: pd.DataFra
 
     selected_ids = [oid for oid, selected in st.session_state.admin_orders_selection.items() if selected and oid in modified_orders['발주번호'].values]
     v_spacer(16)
-    render_order_details_section(selected_ids, df_all, store_info_df, master_df)
+    render_order_details_section(selected_pending_ids, df_all, get_stores_df(), master_df, context="pending")
 
 def render_rejected_orders_tab(rejected_orders: pd.DataFrame):
     page_size = 10
@@ -2647,7 +2647,9 @@ def render_rejected_orders_tab(rejected_orders: pd.DataFrame):
     for _, row in edited_rejected.iterrows():
         st.session_state.admin_orders_selection[row['발주번호']] = row['선택']
 
-def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame):
+# 기존 render_order_details_section 함수를 아래 코드로 전체 교체하세요.
+
+def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, store_info_df: pd.DataFrame, master_df: pd.DataFrame, context: str):
     with st.container(border=True):
         st.markdown("##### 📄 발주 품목 상세 조회")
         
@@ -2663,14 +2665,14 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
 
                 if memo.strip():
                     st.markdown("**요청사항:**")
-                    # ▼▼▼ [수정] 고유 key를 할당하여 ID 중복 오류 해결 ▼▼▼
+                    # ▼▼▼ [수정] key에 context를 추가하여 고유성을 보장합니다 ▼▼▼
                     st.text_area(
                         "요청사항_상세", 
                         value=memo, 
                         height=80, 
                         disabled=True, 
                         label_visibility="collapsed",
-                        key=f"memo_display_{target_id}"
+                        key=f"memo_display_{context}_{target_id}" 
                     )
                     # ▲▲▲ 수정 완료 ▲▲▲
                 
@@ -2693,15 +2695,9 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                             st.session_state.editing_order_id = target_id
                             st.rerun()
                     with c2:
-                        supplier_info_df = store_info_df[store_info_df['역할'] == CONFIG['ROLES']['ADMIN']]
-                        store_name = target_df.iloc[0]['지점명']
-                        customer_info_df = store_info_df[store_info_df['지점명'] == store_name]
-                        if not supplier_info_df.empty and not customer_info_df.empty:
-                            supplier_info = supplier_info_df.iloc[0]
-                            customer_info = customer_info_df.iloc[0]
-                            buf = create_unified_item_statement(target_df, supplier_info, customer_info)
-                            st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
-                
+                        # ... (다운로드 버튼 로직은 동일) ...
+                        pass # 실제 코드에서는 이 pass를 지우고 기존 다운로드 버튼 코드를 유지하세요.
+
                 elif order_status not in [CONFIG['ORDER_STATUS']['MODIFIED']]:
                     st.download_button("📄 품목거래내역서 다운로드", disabled=True, use_container_width=True)
 
