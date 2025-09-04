@@ -288,6 +288,36 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
     except Exception as e:
         st.error(f"발주 상태 업데이트 중 오류가 발생했습니다: {e}")
         return False
+
+def find_and_delete_rows(sheet_name, id_column, ids_to_delete):
+    if not ids_to_delete:
+        return True
+    try:
+        spreadsheet = get_gspread_client().open_by_key(_get_sheet_key())
+        worksheet = spreadsheet.worksheet(sheet_name)
+        
+        all_data = worksheet.get_all_values()
+        header = all_data[0]
+        try:
+            id_col_index = header.index(id_column)
+        except ValueError:
+            st.error(f"'{sheet_name}' 시트에서 '{id_column}' 컬럼을 찾을 수 없습니다.")
+            return False
+
+        # 삭제할 행의 인덱스(1-based)를 찾아서 리스트에 저장
+        rows_to_delete_indices = [
+            i for i, row in enumerate(all_data[1:], start=2) 
+            if len(row) > id_col_index and row[id_col_index] in ids_to_delete
+        ]
+
+        # 행 인덱스가 섞이지 않도록 역순으로 정렬하여 삭제 실행
+        if rows_to_delete_indices:
+            for row_index in sorted(rows_to_delete_indices, reverse=True):
+                worksheet.delete_rows(row_index)
+        return True
+    except Exception as e:
+        st.error(f"'{sheet_name}' 시트에서 행 삭제 중 오류: {e}")
+        return False
         
 # =============================================================================
 # 3) 로그인, 인증 및 데이터 로더
