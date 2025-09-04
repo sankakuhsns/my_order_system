@@ -2525,56 +2525,81 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
             use_container_width=True,
             disabled=['품목코드', '품목명', '단위', '단가']
         )
-        
+
+        # --- [개선] 변경사항 미리보기 UI ---
+        try:
+            temp_edited_items = pd.DataFrame(edited_items_df)
+            temp_original_items = original_items.set_index('품목코드')
+            temp_edited_items = temp_edited_items.set_index('품목코드')
+            temp_comparison = temp_original_items.join(temp_edited_items, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
+            
+            preview_changes = []
+            price_preview = 0.0
+            
+            for code, row in temp_comparison.iterrows():
+                qty_diff = int(row['수량_edit']) - int(row['수량_orig'])
+                if qty_diff != 0:
+                    item_name = row['품목명_orig'] if qty_diff < 0 else row['품목명_edit']
+                    price = int(row['단가_orig']) if qty_diff < 0 else int(row['단가_edit'])
+                    preview_changes.append(f"{item_name}: {qty_orig}개 → {int(row['수량_edit'])}개 ({qty_diff: G})")
+                    price_preview -= (qty_diff * price * 1.1)
+
+            if preview_changes:
+                st.info("#### 변경사항 요약")
+                for change in preview_changes:
+                    st.markdown(f"- {change}")
+                price_preview = int(round(price_preview, 0))
+                preview_text = f"환불 예상 금액: **{price_preview: ,}원**" if price_preview > 0 else f"추가 결제 예상 금액: **{abs(price_preview): ,}원**"
+                st.markdown(preview_text)
+        except Exception:
+            pass # 미리보기 생성 중 오류는 무시
+
         c1, c2 = st.columns(2)
         if c1.form_submit_button("💾 수정사항 저장", type="primary", use_container_width=True):
             with st.spinner("변경사항을 계산하고 재고 및 잔액을 업데이트하는 중..."):
+                final_edited_items = pd.DataFrame(edited_items_df)
+                if (pd.to_numeric(final_edited_items['수량'], errors='coerce') < 0).any():
+                    st.session_state.error_message = "수량은 음수가 될 수 없습니다."
+                    st.rerun()
+
+                # --- 1. 변경사항 최종 계산 ---
                 original_indexed = original_items.set_index('품목코드')
-                edited_indexed = pd.DataFrame(edited_items_df).set_index('품목코드')
+                edited_indexed = final_edited_items.set_index('품목코드')
                 comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
                 
-                inventory_changes = []
-                price_diff = 0.0
-
+                inventory_changes, price_diff = [], 0.0
                 for code, row in comparison.iterrows():
-                    qty_orig = int(row['수량_orig'])
-                    qty_edit = int(row['수량_edit'])
-                    qty_diff = qty_edit - qty_orig
-                    
+                    qty_diff = int(row['수량_edit']) - int(row['수량_orig'])
                     if qty_diff != 0:
-                        price = int(row['단가_orig']) if qty_orig > 0 else int(row['단가_edit'])
-                        item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
+                        price = int(row['단가_orig'] if row['수량_orig'] > 0 else row['단가_edit'])
+                        item_name = row['품목명_orig'] if row['수량_orig'] > 0 else row['품목명_edit']
                         price_diff -= (qty_diff * price * 1.1)
                         inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
-                
                 price_diff = int(round(price_diff, 0))
 
+                # --- 2. 데이터 처리 (안전한 순서 적용) ---
                 try:
-                    user = st.session_state.auth
-                    base_info = original_items.iloc[0]
-                    store_name = base_info['지점명']
-                    store_id = base_info['지점ID']
+                    user, base_info = st.session_state.auth, original_items.iloc[0]
+                    store_name, store_id = base_info['지점명'], base_info['지점ID']
 
-                    if inventory_changes:
-                        if not update_inventory(pd.DataFrame(inventory_changes), '재고조정(출고변경)', user['name'], date.today(), ref_id=order_id):
-                            raise Exception("재고 업데이트 실패")
+                    if inventory_changes and not update_inventory(pd.DataFrame(inventory_changes), '재고조정(출고변경)', user['name'], date.today(), ref_id=order_id):
+                        raise Exception("재고 업데이트 실패")
                     
                     if price_diff != 0:
                         balance_df = get_balance_df()
                         balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
                         new_prepaid, new_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
                         trans_type = "부분환불" if price_diff > 0 else "추가 결제"
-                        
                         if price_diff > 0:
                             credit_refund = min(price_diff, new_used_credit)
                             new_used_credit -= credit_refund
                             new_prepaid += (price_diff - credit_refund)
                         else:
-                            payment_amount = abs(price_diff)
-                            prepaid_payment = min(payment_amount, new_prepaid)
-                            new_prepaid -= prepaid_payment
-                            new_used_credit += (payment_amount - prepaid_payment)
-
+                            payment = abs(price_diff)
+                            prepaid_pay = min(payment, new_prepaid)
+                            new_prepaid -= prepaid_pay
+                            new_used_credit += (payment - prepaid_pay)
+                        
                         trans_record = { "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name, "구분": trans_type, "내용": f"발주번호 {order_id} 변경", "금액": price_diff, "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user['name'] }
                         if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [trans_record], CONFIG['TRANSACTIONS']['cols']):
                             raise Exception("거래내역 기록 실패")
@@ -2584,23 +2609,20 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                     if not find_and_delete_rows(CONFIG["ORDERS"]["name"], "발주번호", [order_id]):
                         raise Exception("기존 주문서 삭제 실패")
                     
-                    final_items_df = pd.DataFrame(edited_items_df)
                     final_items_df = final_items_df[final_items_df['수량'] > 0]
-                    
                     new_order_rows = []
                     if not final_items_df.empty:
                         for _, row in final_items_df.iterrows():
                             master_item_info = master_df[master_df['품목코드'] == row['품목코드']].iloc[0]
                             supply_price = row['단가'] * row['수량']
                             tax = math.ceil(supply_price * 0.1) if master_item_info['과세구분'] == '과세' else 0
-                            total_price = supply_price + tax
-                            new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": row['수량'], "단가": row['단가'], "공급가액": supply_price, "세액": tax, "합계금액": total_price, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
+                            new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": row['수량'], "단가": row['단가'], "공급가액": supply_price, "세액": tax, "합계금액": supply_price + tax, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
                     
                     if new_order_rows:
                         if not append_rows_to_sheet(CONFIG["ORDERS"]["name"], new_order_rows, CONFIG['ORDERS']['cols']):
                             raise Exception("수정된 주문서 생성 실패")
                     
-                    add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason="관리자 수정")
+                    add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason=f"금액변동:{price_diff}")
                     st.session_state.success_message = f"발주번호 {order_id}가 성공적으로 수정되었습니다."
                     st.session_state.editing_order_id = None
                     clear_data_cache()
@@ -2754,7 +2776,6 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     if df_all.empty:
         st.info("발주 데이터가 없습니다."); return
     
-    # ... (기존 필터링 로직은 그대로 유지) ...
     c1, c2, c3, c4 = st.columns(4)
     dt_from = c1.date_input("시작일", date.today() - timedelta(days=7), key="admin_mng_from")
     dt_to = c2.date_input("종료일", date.today(), key="admin_mng_to")
@@ -2799,8 +2820,9 @@ def page_admin_unified_management(df_all: pd.DataFrame, store_info_df: pd.DataFr
     with tab3:
         render_modified_orders_tab(modified, df_all, store_info_df, master_df)
     with tab4:
-        render_rejected_orders_tab(rejected)
-    
+        # ▼▼▼ [수정] 누락된 인자를 모두 추가합니다 ▼▼▼
+        render_rejected_orders_tab(rejected, df_all, store_info_df, master_df)
+       
 def page_admin_sales_inquiry(master_df: pd.DataFrame):
     st.subheader("📈 매출 조회")
     
