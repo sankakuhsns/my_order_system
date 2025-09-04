@@ -2510,8 +2510,11 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
     with st.form(key="edit_order_form"):
         cols_to_edit = ['품목코드', '품목명', '단위', '수량', '단가']
         edited_items_df = st.data_editor(
-            original_items[cols_to_edit], key=f"editor_{order_id}", num_rows="dynamic",
-            use_container_width=True, disabled=['품목코드', '품목명', '단위', '단가']
+            original_items[cols_to_edit],
+            key=f"editor_{order_id}",
+            num_rows="dynamic",
+            use_container_width=True,
+            disabled=['품목코드', '품목명', '단위', '단가']
         )
         
         c1, c2 = st.columns(2)
@@ -2544,7 +2547,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
 
                     if inventory_changes:
                         if not update_inventory(pd.DataFrame(inventory_changes), '재고조정(출고변경)', user['name'], date.today(), ref_id=order_id):
-                            raise Exception("재고 업데이트 실패")
+                            raise Exception("재고 업데이트에 실패했습니다.")
                     
                     if price_diff != 0:
                         balance_df = get_balance_df()
@@ -2564,12 +2567,14 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
 
                         trans_record = { "일시": now_kst_str(), "지점ID": store_id, "지점명": store_name, "구분": trans_type, "내용": f"발주번호 {order_id} 변경", "금액": price_diff, "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user['name'] }
                         if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [trans_record], CONFIG['TRANSACTIONS']['cols']):
-                            raise Exception("거래내역 기록 실패")
+                            raise Exception("거래내역 기록에 실패했습니다.")
+                        
                         if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
-                            raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
+                            raise Exception("잔액 정보 업데이트에 실패했습니다. (치명적 오류, 수동 확인 필요)")
 
-                    if not find_and_delete_rows(SHEET_NAMES["ORDERS"], "발주번호", [order_id]):
-                        raise Exception("기존 주문서 삭제 실패")
+                    # ▼▼▼ [수정] SHEET_NAMES -> CONFIG 로 변경 ▼▼▼
+                    if not find_and_delete_rows(CONFIG["ORDERS"]["name"], "발주번호", [order_id]):
+                        raise Exception("기존 주문서 삭제에 실패했습니다.")
                     
                     final_items_df = pd.DataFrame(edited_items_df)
                     final_items_df = final_items_df[final_items_df['수량'] > 0]
@@ -2584,8 +2589,9 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             new_order_rows.append({ "주문일시": base_info['주문일시'], "발주번호": order_id, "지점ID": store_id, "지점명": store_name, "품목코드": row['품목코드'], "품목명": row['품목명'], "단위": row['단위'], "수량": row['수량'], "단가": row['단가'], "공급가액": supply_price, "세액": tax, "합계금액": total_price, "비고": base_info['비고'], "상태": CONFIG['ORDER_STATUS']['MODIFIED'], "처리일시": now_kst_str(), "처리자": user['name'], "반려사유": "" })
                     
                     if new_order_rows:
-                        if not append_rows_to_sheet(SHEET_NAMES["ORDERS"], new_order_rows, CONFIG['ORDERS']['cols']):
-                            raise Exception("수정된 주문서 생성 실패")
+                        # ▼▼▼ [수정] SHEET_NAMES -> CONFIG 로 변경 ▼▼▼
+                        if not append_rows_to_sheet(CONFIG["ORDERS"]["name"], new_order_rows, CONFIG['ORDERS']['cols']):
+                            raise Exception("수정된 주문서 생성에 실패했습니다.")
                     
                     add_audit_log(user['user_id'], user['name'], "발주 부분 수정", order_id, store_name, reason="관리자 수정")
                     st.session_state.success_message = f"발주번호 {order_id}가 성공적으로 수정되었습니다."
