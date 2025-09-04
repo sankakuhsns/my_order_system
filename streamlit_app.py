@@ -2663,7 +2663,16 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
 
                 if memo.strip():
                     st.markdown("**요청사항:**")
-                    st.text_area("", value=memo, height=80, disabled=True, label_visibility="collapsed")
+                    # ▼▼▼ [수정] 고유 key를 할당하여 ID 중복 오류 해결 ▼▼▼
+                    st.text_area(
+                        "요청사항_상세", 
+                        value=memo, 
+                        height=80, 
+                        disabled=True, 
+                        label_visibility="collapsed",
+                        key=f"memo_display_{target_id}"
+                    )
+                    # ▲▲▲ 수정 완료 ▲▲▲
                 
                 display_df = pd.merge(target_df, master_df[['품목코드', '과세구분']], on='품목코드', how='left')
                 display_df['단가(VAT포함)'] = display_df.apply(get_vat_inclusive_price, axis=1)
@@ -2675,10 +2684,8 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                     use_container_width=True
                 )
                 
-                # ▼▼▼ [수정] 버튼 추가 로직 시작 ▼▼▼
                 order_status = target_df.iloc[0]['상태']
                 
-                # '승인' 또는 '출고완료' 상태일 때만 버튼 표시
                 if order_status in [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]:
                     c1, c2 = st.columns(2)
                     with c1:
@@ -2694,12 +2701,9 @@ def render_order_details_section(selected_ids: List[str], df_all: pd.DataFrame, 
                             customer_info = customer_info_df.iloc[0]
                             buf = create_unified_item_statement(target_df, supplier_info, customer_info)
                             st.download_button("📄 품목거래내역서 다운로드", data=buf, file_name=f"품목거래내역서_{store_name}_{target_id}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
-
-                # '요청', '반려' 등 다른 상태일 때는 다운로드 버튼만 표시 (해당 시 거래내역서 없음)
+                
                 elif order_status not in [CONFIG['ORDER_STATUS']['MODIFIED']]:
                     st.download_button("📄 품목거래내역서 다운로드", disabled=True, use_container_width=True)
-
-                # ▲▲▲ 버튼 추가 로직 종료 ▲▲▲
 
         elif len(selected_ids) > 1:
             st.info("상세 내용을 보려면 발주를 **하나만** 선택하세요.")
