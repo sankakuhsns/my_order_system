@@ -2081,36 +2081,45 @@ def audit_transaction_links(transactions_df, orders_df):
 
 def audit_inventory_logs(inventory_log_df, orders_df):
     """
-    [재고 감사 로직 v2.0 - 최종 안정화 버전]
+    [재고 감사 로직 v2.1 - 최종 안정화 버전]
+    - '승인취소'된 주문의 반려사유를 분석하여, '변동출고'된 새 주문과 원본 주문을
+      연결하는 매핑 테이블을 생성합니다. 이를 통해 '거짓 경고'를 원천적으로 차단합니다.
     - 주문 건당 한 번만 검사하여 중복 경고 메시지 발생을 방지합니다.
-    - '변동출고' 상태의 주문은 '재고조정(출고변경)' 로그를 찾도록 수정하여,
-      '거짓 경고(False Alarm)'가 발생하는 문제를 해결합니다.
     """
     issues = []
     
     # --- 1. 감사 대상을 상태별로 명확히 분리 ---
-    
-    # '승인', '출고완료' 상태인 주문 (일반 출고)
     approved_statuses = [CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']]
     approved_orders = orders_df[orders_df['상태'].isin(approved_statuses)]
-    
-    # '변동출고' 상태인 주문 (수정 출고)
     modified_orders = orders_df[orders_df['상태'] == CONFIG['ORDER_STATUS']['MODIFIED']]
 
     # --- 2. 재고 로그에서 출고 기록을 종류별로 미리 추출 ---
-
-    # '발주출고' 로그가 있는 발주번호 세트
     shipment_logged_ids = set(inventory_log_df[
         inventory_log_df['구분'] == CONFIG['INV_CHANGE_TYPE']['SHIPMENT']
     ]['관련번호'].str.split(', ').explode())
     
-    # '재고조정(출고변경)' 로그가 있는 발주번호 세트
     adjustment_logged_ids = set(inventory_log_df[
         inventory_log_df['구분'] == '재고조정(출고변경)'
     ]['관련번호'].str.split(', ').explode())
 
-    # --- 3. [핵심 수정] 주문 건당 한 번씩만 검사 ---
+    # --- 3. [핵심 수정] 새 주문 ID와 원본 주문 ID를 연결하는 매핑 테이블 생성 ---
+    new_to_original_map = {}
+    canceled_for_modification_orders = orders_df[
+        (orders_df['상태'] == CONFIG['ORDER_STATUS']['CANCELED_ADMIN']) &
+        (orders_df['반려사유'].str.startswith('신규 수정본('))
+    ]
+    for _, row in canceled_for_modification_orders.iterrows():
+        original_id = row['발주번호']
+        reason = row['반려사유']
+        try:
+            # "신규 수정본(20250908...)으로 대체됨" 형식에서 새 ID를 파싱
+            new_id = reason.split('(')[1].split(')')[0]
+            new_to_original_map[new_id] = original_id
+        except IndexError:
+            # 형식에 맞지 않는 반려사유는 건너뜀
+            continue
 
+    # --- 4. 주문 건당 한 번씩만 검사 ---
     # 일반 출고 주문 검사
     for order_id, group in approved_orders.groupby('발주번호'):
         if order_id not in shipment_logged_ids:
@@ -2120,11 +2129,15 @@ def audit_inventory_logs(inventory_log_df, orders_df):
             
     # 변동 출고 주문 검사
     for order_id, group in modified_orders.groupby('발주번호'):
-        # '변동출고' 건은 '재고조정(출고변경)' 로그가 있는지 확인
-        if order_id not in adjustment_logged_ids:
+        # 매핑 테이블을 통해 새 주문(order_id)의 원본 주문 ID를 찾음
+        original_order_id = new_to_original_map.get(order_id)
+        
+        # 원본 주문 ID가 재고조정 로그에 있는지 확인
+        if not original_order_id or original_order_id not in adjustment_logged_ids:
             store_name = group['지점명'].iloc[0]
             status = group['상태'].iloc[0]
-            issues.append(f"- **재고 차감 누락:** 주문 `{order_id}`({store_name})는 '{status}' 상태이나, '재고조정' 기록이 없습니다.")
+            # 원본 ID를 찾지 못한 경우도 포함하여 경고
+            issues.append(f"- **재고 차감 누락:** 주문 `{order_id}`({store_name})는 '{status}' 상태이나, 연관된 '재고조정' 기록을 찾을 수 없습니다.")
             
     if issues:
         return "⚠️ 경고", issues
