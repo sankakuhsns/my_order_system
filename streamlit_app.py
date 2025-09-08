@@ -3640,31 +3640,60 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
     st.markdown("##### 🏷️ 품목 정보 설정")
 
-    # --- [핵심 수정] 1. 사용자 도움말 추가 ---
+    # --- [핵심 수정 1] 도움말 업데이트 ---
     st.info(
         """
         **가이드라인:**
-        * **수정:** 이 표에서는 기존 품목의 **단가, 품목명, 분류, 활성 상태** 등만 수정할 수 있습니다.
-        * **단종:** 품목을 단종시키려면 **`활성` 컬럼의 `TRUE`를 `FALSE`로 변경**하십시오. (데이터 보존을 위해 행 삭제 금지)
-        * **신규 등록:** 신규 품목은 반드시 하단의 **'➕ 신규 품목 생성'** 메뉴를 이용해 별도로 등록해야 합니다.
+        * **수정:** 이 표에서는 기존 품목의 **단가, 분류, 활성 상태** 등 정해진 속성만 수정할 수 있습니다.
+        * **수정 불가:** `품목코드`와 `품목명`은 시스템 기준값이므로 **수정이 원천 차단**됩니다. (오타 수정 등은 DB 원본에서 직접 처리)
+        * **단종:** 품목 단종 시 **`활성 상태`를 `TRUE`에서 `FALSE`로 변경**하십시오.
+        * **신규 등록:** 모든 신규 품목은 하단의 **'➕ 신규 품목 생성'** 메뉴를 이용해야 합니다.
         """
     )
-    st.warning("⚠️ **주의: `품목코드`는 시스템의 모든 주문/재고를 연결하는 기준값이므로 절대 수정할 수 없습니다.**")
     
     master_df_raw['단가'] = pd.to_numeric(master_df_raw['단가'], errors='coerce').fillna(0)
 
-    # --- [핵심 수정] 2. 강제성 부여 (data_editor 설정 변경) ---
+    # --- [핵심 수정 2] data_editor에 사용할 옵션 목록을 미리 추출 ---
+    # 기존에 입력된 값을 기반으로 선택 옵션을 동적으로 생성 (데이터 일관성 유지)
+    existing_categories = sorted(master_df_raw["분류"].dropna().unique().tolist())
+    if not existing_categories: existing_categories = ["미분류"] # 비어있을 경우 기본값
+
+    existing_units = sorted(master_df_raw["단위"].dropna().unique().tolist())
+    if not existing_units: existing_units = ["EA"] # 비어있을 경우 기본값
+
+
+    # --- [핵심 수정 3] column_config를 사용한 강력한 강제성 부여 ---
     edited_master_df = st.data_editor(
         master_df_raw, 
-        num_rows="fixed",  # '새 행 추가' 기능을 비활성화하여 신규 등록을 아래 폼으로 강제함
+        num_rows="fixed",
         use_container_width=True, 
-        key="master_editor_UPDATE_ONLY_SAFE", # 키 변경
-        disabled=["품목코드", "품목명"]
+        key="master_editor_LOCKED", # 키 변경
+        disabled=["품목코드", "품목명"], # 1. 정체성(코드, 이름) 수정 잠금
+        
+        # 2. 모든 핵심 속성을 Selectbox 또는 Number로 강제하여 입력 오류 원천 차단
+        column_config={
+            "단가": st.column_config.NumberColumn(
+                "단가(원)", min_value=0, step=1, required=True
+            ),
+            "활성": st.column_config.SelectboxColumn(
+                "활성 상태", options=["TRUE", "FALSE"], required=True
+            ),
+            "과세구분": st.column_config.SelectboxColumn(
+                "과세 구분", options=["과세", "면세"], required=True
+            ),
+            "분류": st.column_config.SelectboxColumn(
+                "분류", options=existing_categories, required=True
+            ),
+            "단위": st.column_config.SelectboxColumn(
+                "단위", options=existing_units, required=True
+            )
+        }
     )
     # --- 수정 완료 ---
     
     if st.button("품목 정보 저장", type="primary", key="save_master"):
         with st.spinner("변경 사항을 저장하고 이력을 기록하는 중입니다..."):
+            # (이하 저장 로직은 기존과 동일)
             edited_df = pd.DataFrame(edited_master_df)
             edited_df['단가'] = pd.to_numeric(edited_df['단가'], errors='coerce').fillna(0)
 
@@ -3704,22 +3733,23 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
 
     st.divider()
 
-    # --- [신규 추가] 3. '신규 품목 생성' 로직 분리 ---
+    # --- [신규 추가] '신규 품목 생성' 폼도 일관성을 위해 드롭다운으로 변경 ---
     with st.expander("➕ 신규 품목 생성 (신규 코드만 가능)"):
-        with st.form("new_item_form"):
+        with st.form("new_item_form_v2"): # 폼 키 변경
             st.markdown("###### 신규 품목 정보 입력")
             
-            # 신규 품목은 모든 필드를 직접 입력받음
             c1, c2, c3 = st.columns(3)
             new_item_code = c1.text_input("품목코드 (필수, P001 형식, 생성 후 수정 절대 불가)")
             new_item_name = c2.text_input("품목명 (필수)")
             new_spec = c3.text_input("품목규격 (예: 1kg)")
             
             c4, c5, c6, c7 = st.columns(4)
-            new_category = c4.text_input("분류 (예: 채소)")
-            new_unit = c5.text_input("단위 (예: EA, BOX)")
+            # '분류'와 '단위'를 Selectbox가 아닌 Text Input으로 유지하되, '기존 분류/단위 사용'을 권장
+            # (Selectbox로 강제하면 새로운 분류를 추가할 방법이 없어지므로, 자유 입력(free text)은 열어두어야 함)
+            new_category = c4.text_input("분류 (예: 채소)", help=f"기존 분류: {', '.join(existing_categories)}")
+            new_unit = c5.text_input("단위 (예: EA, BOX)", help=f"기존 단위: {', '.join(existing_units)}")
             new_price = c6.number_input("단가(원)", min_value=0, step=100)
-            new_tax_type = c7.selectbox("과세구분", ["과세", "면세"])
+            new_tax_type = c7.selectbox("과세구분", ["과세", "면세"]) # 여기는 Selectbox로 강제
             
             if st.form_submit_button("신규 품목 생성하기", type="primary"):
                 if not (new_item_code and new_item_name and new_unit and new_category):
@@ -3727,7 +3757,6 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
                 elif not master_df_raw[master_df_raw['품목코드'] == new_item_code].empty:
                     st.error(f"오류: 품목코드 '{new_item_code}'는 이미 존재합니다. 다른 코드를 사용하세요.")
                 else:
-                    # 모든 필수값이 있고 중복되지 않으면 신규 레코드 생성
                     new_item_data = {
                         "품목코드": new_item_code,
                         "품목명": new_item_name,
@@ -3736,19 +3765,20 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
                         "단위": new_unit,
                         "단가": new_price,
                         "과세구분": new_tax_type,
-                        "활성": "TRUE"  # 신규 등록 품목은 항상 '활성' 상태로 시작
+                        "활성": "TRUE"
                     }
                     
                     if append_rows_to_sheet(CONFIG['MASTER']['name'], [new_item_data], CONFIG['MASTER']['cols']):
                         user = st.session_state.auth
                         add_audit_log(user['user_id'], user['name'], "신규 품목 생성", new_item_code, new_item_name)
                         
-                        clear_data_cache()  # 마스터 데이터 캐시 삭제
+                        clear_data_cache()
                         st.session_state.success_message = f"신규 품목 '{new_item_name}'이(가) 성공적으로 생성되었습니다."
                         st.rerun()
                     else:
                         st.error("신규 품목 생성 중 오류가 발생했습니다.")
 
+    # --- 기존 가격 이력 조회 로직 (변경 없음) ---
     st.divider()
     st.markdown("##### 🧾 품목 가격 변경 이력")
     price_history_df = get_price_history_df()
