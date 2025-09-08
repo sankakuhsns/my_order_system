@@ -120,6 +120,39 @@ def add_audit_log(user_id: str, user_name: str, action_type: str, target_id: str
         # [방어 로직] 기타 예외 처리
         print(f"CRITICAL: 감사 로그 기록 실패! - {e}")
 
+# [신규 추가] AuditReport 시트의 특정 행(항목 기준)을 업데이트하는 헬퍼 함수
+def update_audit_report_status(item_name: str, status: str, details: str):
+    """
+    AuditReport 시트에서 '항목'(item_name)을 찾아 해당 행의 상태, 상세내역, 시각을 업데이트합니다.
+    (row_index: 시스템 감사=2, 재고 최적화=3)
+    """
+    try:
+        ws = open_spreadsheet().worksheet("AuditReport") # 1단계에서 생성한 시트
+        cell = ws.find(item_name, in_column=1) # A열(항목)에서 이름 검색
+        
+        if not cell:
+            print(f"CRITICAL: AuditReport 시트에서 항목 '{item_name}'을(를) 찾을 수 없습니다.")
+            return
+
+        row_index = cell.row
+        now_str = now_kst_str() # 현재 시각
+
+        # B, C, D열을 한 번에 업데이트
+        cells_to_update = [
+            gspread.Cell(row_index, 2, status),      # B열 (상태)
+            gspread.Cell(row_index, 3, details),     # C열 (상세내역)
+            gspread.Cell(row_index, 4, now_str)      # D열 (최종실행시각)
+        ]
+        ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+        
+        # AuditReport는 즉시 반영되어야 하므로 관련 캐시가 있다면 삭제 (하지만 별도 로더를 쓸 예정)
+        if 'system_health_report' in st.session_state:
+             del st.session_state['system_health_report'] # (5단계에서 만들 캐시 키)
+
+    except Exception as e:
+        print(f"CRITICAL: AuditReport 쓰기 실패: {e}")
+        # 이 기능이 실패해도 메인 작업은 중단되지 않도록 방어합니다.
+
 # =============================================================================
 # 2) Google Sheets 연결 및 I/O
 # =============================================================================
@@ -3995,36 +4028,63 @@ def create_inventory_snapshot() -> bool:
         st.session_state.error_message = f"스냅샷 생성 중 오류 발생: {e}"
         return False
 
+# [수정] 스냅샷 관리 UI 렌더링 (Plan B: 수동 실행 + 결과 기록)
 def render_snapshot_management():
-    """(신규) 재고 스냅샷 관리 UI를 렌더링합니다."""
+    """(수정됨) 수동 재고 스냅샷 생성 UI를 렌더링하고, 실행 결과를 'AuditReport' 시트에 기록합니다."""
+    
     st.markdown("---")
-    st.markdown("##### 💾 재고 스냅샷 관리 (성능 최적화)")
+    st.markdown("##### 📸 재고 최적화 (스냅샷)")
     with st.expander("도움말: 재고 스냅샷은 무엇인가요?", expanded=False):
         st.markdown("""
         재고 스냅샷은 특정 시점의 최종 재고를 '사진'처럼 저장하는 기능입니다. 
         이 기능을 사용하면, 매번 수만 건의 전체 재고 로그를 계산하는 대신, 
-        가장 최신 스냅샷 이후의 변동분만 계산하여 시스템 속도를 획기적으로 향상시킬 수 있습니다.
-        **하루 업무를 마감할 때 등 주기적으로 생성하는 것을 강력히 권장합니다.**
+        가장 최신 스냅샷 이후의 변동분만 계산하여 **시스템 속도를 획기적으로 향상시킬 수 있습니다.**
+        (대시보드 로딩, 발주 승인 시 재고 확인 속도에 직접적인 영향을 줍니다.)
         """)
     
-    snapshot_df = get_snapshot_df()
-    if snapshot_df.empty or '스냅샷일시' not in snapshot_df.columns or snapshot_df['스냅샷일시'].isnull().all():
-        st.info("생성된 재고 스냅샷이 없습니다. 시스템 성능 향상을 위해 하루에 한 번 생성을 권장합니다.")
-    else:
-        latest_snapshot_time = pd.to_datetime(snapshot_df['스냅샷일시']).max()
-        # latest_snapshot_time과 일치하는 행을 찾아 생성자를 가져옴
-        creator_series = snapshot_df.loc[pd.to_datetime(snapshot_df['스냅샷일시']) == latest_snapshot_time, '생성자']
-        creator = creator_series.iloc[0] if not creator_series.empty else "알 수 없음"
-        st.success(f"**최종 스냅샷:** {latest_snapshot_time.strftime('%Y년 %m월 %d일 %H:%M:%S')} (생성자: {creator})")
+    # 대시보드와 동일하게 최근 스냅샷 상태를 표시 (항상 최신 정보를 위해 캐시 없이 직접 로드 권장)
+    try:
+        ws = open_spreadsheet().worksheet("AuditReport")
+        cell = ws.find("재고 최적화", in_column=1) # A열에서 "재고 최적화" 찾기
+        if cell:
+            values = ws.row_values(cell.row) # 해당 행 전체 값 가져오기
+            opt_status = values[1] # 상태 (B열)
+            opt_time_str = values[3] # 최종실행시각 (D열)
+            
+            if opt_time_str:
+                 latest_snapshot_date = pd.to_datetime(opt_time_str).date()
+                 days_passed = (date.today() - latest_snapshot_date).days
+                 if days_passed <= 1:
+                     st.success(f"**최근 최적화:** {opt_time_str} (상태: {opt_status}, {days_passed}일 경과)")
+                 else:
+                     st.warning(f"**최적화 필요:** 마지막 실행 후 {days_passed}일 경과되었습니다. (최근 실행: {opt_time_str})")
+            else:
+                st.info("아직 최적화(스냅샷) 실행 기록이 없습니다. 성능 향상을 위해 생성이 필요합니다.")
+        else:
+            st.error("'AuditReport' 시트에서 '재고 최적화' 항목을 찾을 수 없습니다.")
+    except Exception:
+        st.info("최근 최적화 상태를 불러오는 중입니다...")
 
-    if st.button("📸 현재 재고로 스냅샷 생성/업데이트", use_container_width=True, type="primary"):
-        with st.spinner("현재 재고를 계산하여 스냅샷을 생성하는 중입니다..."):
+
+    # --- [수정] 스냅샷 생성 버튼 (결과 기록 로직 추가) ---
+    if st.button("📸 지금 현재 재고로 스냅샷 생성/업데이트", use_container_width=True, type="primary"):
+        with st.spinner("전체 재고 로그를 계산하여 스냅샷을 생성하는 중입니다..."):
+            
+            # 1. 기존 스냅샷 생성 함수 실행
             success = create_inventory_snapshot()
+            
             if success:
                 st.session_state.success_message = "재고 스냅샷이 성공적으로 업데이트되었습니다."
-            # 실패 메시지는 create_inventory_snapshot 함수 내부에서 처리
-            st.rerun()
+                # 2. [신규 추가] 헬퍼 함수 호출하여 AuditReport 시트에 "영구 기록"
+                update_audit_report_status("재고 최적화", "✅ 성공", "스냅샷 생성 완료")
+            else:
+                # 에러 메시지는 create_inventory_snapshot 내부에서 st.session_state.error_message로 처리됨
+                update_audit_report_status("재고 최적화", "❌ 오류", "스냅샷 생성 실패")
 
+        st.rerun()
+
+
+# [수정] 시스템 점검 탭 UI 렌더링 (Plan B: 최종 결합본)
 def render_system_audit_tab(
     store_info_df_raw,
     master_df_raw,
@@ -4032,50 +4092,61 @@ def render_system_audit_tab(
     balance_df,
     transactions_df,
     inventory_log_df,
-    charge_req_df  # ✅ 추가
+    charge_req_df
 ):
-    """시스템 점검 탭 UI를 렌더링합니다."""
-    st.markdown("##### 🩺 시스템 점검")
-    with st.expander("도움말: 각 점검 항목은 무엇을 의미하나요?"):
+    """(수정됨) 시스템 점검 및 최적화를 '수동'으로 실행하고 결과를 'AuditReport' 시트에 기록합니다."""
+    
+    # 탭 이름 변경은 page_admin_settings 함수에서 st.tabs(...) 부분을 수정해야 합니다.
+    st.markdown("##### ⚙️ 검사 및 최적화 (수동)")
+    
+    with st.expander("도움말: 이 도구는 무엇인가요?"):
         st.markdown("""
-        각 점검 항목은 우리 시스템의 데이터가 서로 잘 맞물려 정확하게 돌아가고 있는지 확인하는 **'시스템 건강 검진'** 과정입니다.
+        이 탭은 시스템의 무결성을 검사하고 데이터베이스(시트)를 최적화하는 관리자 전용 도구입니다.
+        모든 작업은 **수동 버튼**으로 실행되며, 실행 즉시 결과가 대시보드에 반영됩니다.
 
         ---
-        * **💰 재무 점검**
-            * **무엇을?** 각 지점의 최종 잔액(선충전, 여신)과 모든 입출금 거래내역의 합산 금액이 일치하는지 검사합니다.
-            * **왜?** 시스템의 장부와 실제 돈의 흐름이 정확히 일치하는지 확인하여 재무 데이터의 신뢰성을 보장합니다.
-
-        * **🔗 거래 점검**
-            * **무엇을?** 모든 결제/환불 거래 기록이 실제 '발주' 내역과 1:1로 연결되는지, 금액은 정확한지 검사합니다.
-            * **왜?** 주문 없는 '유령 거래'나 계산 오류를 찾아내어 모든 거래의 투명성을 보장합니다.
-
-        * **📦 재고 점검**
-            * **무엇을?** '승인' 또는 '출고완료'된 주문 건에 대해 재고가 빠짐없이 출고 처리되었는지 검사합니다.
-            * **왜?** 판매는 되었지만 재고가 차감되지 않는 실수를 막아, 시스템 재고 수량의 정확성을 유지합니다.
-
-        * **🏛️ 무결성 점검**
-            * **무엇을?** 모든 기록에 사용된 '지점 ID'나 '품목 코드'가 현재 시스템에 등록된 유효한 정보인지 검사합니다.
-            * **왜?** 삭제된 지점이나 단종된 상품 데이터가 일으킬 수 있는 혼란을 막고, 모든 데이터가 깨끗하고 유효한 상태임을 보장합니다.
+        * **🚀 전체 시스템 점검 시작:**
+            * 현재 DB에 있는 모든 로그(재무, 거래, 재고 등)를 스캔하여 데이터가 서로 맞지 않는 부분이 있는지 검사합니다.
+            * 이 작업은 모든 데이터를 읽으므로 시간이 다소 걸릴 수 있습니다.
+        
+        * **📸 현재 재고로 스냅샷 생성:**
+            * **(필수 최적화 작업)** 전체 재고 로그를 계산하여 현재고의 '스냅샷(요약본)'을 생성합니다.
+            * 이 작업은 대시보드와 발주 승인 시의 재고 계산 속도를 획기적으로 향상시킵니다.
+            * **최소 하루에 한 번, 업무 마감 시 실행하는 것을 강력히 권장합니다.**
         """)
 
+    # --- [수정] 1. 시스템 점검 실행 버튼 (결과 기록 로직 추가) ---
     if st.button("🚀 전체 시스템 점검 시작", use_container_width=True, type="primary"):
-        with st.spinner("시스템 전체 데이터를 분석 중입니다..."):
-            results = {}
-            # ✅ charge_req_df를 함께 전달 (변경 없음)
-            results['financial'] = audit_financial_data(balance_df, transactions_df, charge_req_df)
-            results['links'] = audit_transaction_links(transactions_df, orders_df)
-            results['inventory'] = audit_inventory_logs(inventory_log_df, orders_df)
-            results['integrity'] = audit_data_integrity(orders_df, transactions_df, store_info_df_raw, master_df_raw)
-            st.session_state['audit_results'] = results
-            st.rerun()
+        with st.spinner("시스템 전체 데이터를 분석 중입니다... (모든 로그 스캔 중)"):
+            
+            # 1. 기존 감사 함수 실행 (결과는 st.session_state에 저장됨)
+            perform_initial_audit() 
+            
+            # 2. 세션에서 결과 가져오기
+            results = st.session_state.get('audit_results', {})
+            
+            # 3. 결과 요약
+            has_errors = any(status != '✅ 정상' for status, issues in results.values())
+            status_str = "❌ 오류 발견" if has_errors else "✅ 전체 정상"
+            details_str = ", ".join([f"{key}: {len(issues)}건" for key, (status, issues) in results.items() if issues])
+            
+            # 4. AuditReport 시트에 "영구 기록" (헬퍼 함수 호출)
+            update_audit_report_status("시스템 감사", status_str, details_str or "특이사항 없음")
+            
+            st.success("시스템 전체 점검을 완료했습니다. 아래에서 결과를 확인하세요.")
+            st.rerun() # 페이지 새로고침하여 '점검 결과' 섹션에 즉시 표시
 
+    # --- [유지] 2. 점검 결과 표시 (세션 기준) ---
+    # (버튼을 누른 직후의 결과를 세션에서 바로 확인)
     if 'audit_results' in st.session_state:
         st.markdown(f"##### ✅ 점검 결과 ({now_kst_str('%Y-%m-%d %H:%M:%S')} 기준)")
         results = st.session_state['audit_results']
         cols = st.columns(4)
         status_map = {
-            "재무": results['financial'], "거래": results['links'],
-            "재고": results['inventory'], "무결성": results['integrity']
+            "재무": results.get('financial', ('-', [])),
+            "거래": results.get('links', ('-', [])),
+            "재고": results.get('inventory', ('-', [])),
+            "무결성": results.get('integrity', ('-', []))
         }
         
         for i, (key, (status, issues)) in enumerate(status_map.items()):
@@ -4088,17 +4159,17 @@ def render_system_audit_tab(
                 )
 
         display_map = {
-            "links": ("🔗 거래 점검", results['links']),
-            "inventory": ("📦 재고 점검", results['inventory']),
-            "financial": ("💰 재무 점검", results['financial']),
-            "integrity": ("🏛️ 무결성 점검", results['integrity'])
+            "links": ("🔗 거래 점검", results.get('links', ('-', []))),
+            "inventory": ("📦 재고 점검", results.get('inventory', ('-', []))),
+            "financial": ("💰 재무 점검", results.get('financial', ('-', []))),
+            "integrity": ("🏛️ 무결성 점검", results.get('integrity', ('-', [])))
         }
         for key, (title, (status, issues)) in display_map.items():
             if issues:
                 with st.expander(f"{title} 상세 내역 ({len(issues)}건)", expanded=True):
                     st.markdown("\n".join(issues))
 
-    # --- [추가] 스냅샷 관리 UI 렌더링 ---
+    # --- [수정] 3. 스냅샷 관리 UI 렌더링 (결과 기록 로직 추가) ---
     render_snapshot_management()
 
 def page_admin_settings(store_info_df_raw: pd.DataFrame, master_df_raw: pd.DataFrame, orders_df: pd.DataFrame, balance_df: pd.DataFrame, transactions_df: pd.DataFrame, inventory_log_df: pd.DataFrame, charge_req_df: pd.DataFrame):
@@ -4153,8 +4224,6 @@ if __name__ == "__main__":
     init_session_state()
     
     if require_login():
-        if st.session_state.auth['role'] == CONFIG['ROLES']['ADMIN'] and 'initial_audit_done' not in st.session_state:
-            perform_initial_audit()
             
         st.title("📦 식자재 발주 시스템")
         display_feedback()
