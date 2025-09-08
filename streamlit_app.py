@@ -2081,10 +2081,9 @@ def audit_transaction_links(transactions_df, orders_df):
 
 def audit_inventory_logs(inventory_log_df, orders_df):
     """
-    [재고 감사 로직 v2.2 - 최종 안정화 버전]
-    - '반려사유' 열의 NaN 값을 안전하게 처리(na=False)하여, '변동출고'된 새 주문과
-      원본 주문을 연결하는 매핑 테이블이 항상 정확하게 생성되도록 수정합니다.
-    - 주문 건당 한 번만 검사하여 중복 경고 메시지 발생을 방지합니다.
+    [재고 감사 로직 v2.3 - 최종 안정화 버전]
+    - '변동출고'된 주문의 '비고'란에 명시적으로 기록된 '원본주문ID'를 파싱하여
+      재고 기록을 추적합니다. 이를 통해 '거짓 경고'를 원천적으로 차단합니다.
     """
     issues = []
     
@@ -2102,26 +2101,7 @@ def audit_inventory_logs(inventory_log_df, orders_df):
         inventory_log_df['구분'] == '재고조정(출고변경)'
     ]['관련번호'].str.split(', ').explode())
 
-    # --- 3. [핵심 수정] 새 주문 ID와 원본 주문 ID를 연결하는 매핑 테이블 생성 ---
-    new_to_original_map = {}
-    
-    # [안전장치 추가] .str.startswith에 na=False를 추가하여 NaN 값이 있는 행을 무시하도록 함
-    canceled_for_modification_orders = orders_df[
-        (orders_df['상태'] == CONFIG['ORDER_STATUS']['CANCELED_ADMIN']) &
-        (orders_df['반려사유'].str.startswith('신규 수정본(', na=False))
-    ]
-    for _, row in canceled_for_modification_orders.iterrows():
-        original_id = row['발주번호']
-        reason = row['반려사유']
-        try:
-            # "신규 수정본(20250908...)으로 대체됨" 형식에서 새 ID를 파싱
-            new_id = reason.split('(')[1].split(')')[0]
-            new_to_original_map[new_id] = original_id
-        except IndexError:
-            # 형식에 맞지 않는 반려사유는 건너뜀
-            continue
-
-    # --- 4. 주문 건당 한 번씩만 검사 ---
+    # --- 3. 주문 건당 한 번씩만 검사 ---
     # 일반 출고 주문 검사
     for order_id, group in approved_orders.groupby('발주번호'):
         if order_id not in shipment_logged_ids:
@@ -2131,14 +2111,20 @@ def audit_inventory_logs(inventory_log_df, orders_df):
             
     # 변동 출고 주문 검사
     for order_id, group in modified_orders.groupby('발주번호'):
-        # 매핑 테이블을 통해 새 주문(order_id)의 원본 주문 ID를 찾음
-        original_order_id = new_to_original_map.get(order_id)
+        original_order_id = None
+        # ✨ [핵심 수정] '비고' 필드를 직접 분석하여 원본 주문 ID를 찾습니다.
+        remarks = group['비고'].iloc[0]
+        if pd.notna(remarks) and "원본주문:" in remarks:
+            try:
+                # "원본주문:ID, 변동사항:..." 형식에서 ID를 파싱
+                original_order_id = remarks.split(',')[0].split(':')[1].strip()
+            except IndexError:
+                pass # 형식에 맞지 않으면 무시
         
-        # 원본 주문 ID가 재고조정 로그에 있는지 확인
+        # 원본 주문 ID를 찾았고, 해당 ID가 재고조정 로그에 있는지 확인
         if not original_order_id or original_order_id not in adjustment_logged_ids:
             store_name = group['지점명'].iloc[0]
             status = group['상태'].iloc[0]
-            # 원본 ID를 찾지 못한 경우도 포함하여 경고
             issues.append(f"- **재고 차감 누락:** 주문 `{order_id}`({store_name})는 '{status}' 상태이나, 연관된 '재고조정' 기록을 찾을 수 없습니다.")
             
     if issues:
@@ -2705,10 +2691,11 @@ def render_shipped_orders_tab(shipped_orders: pd.DataFrame, df_all: pd.DataFrame
 
 def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.DataFrame):
     """
-    [재설계된 발주 수정 로직 v3.3 - 방어 로직 구축 최종판]
+    [재설계된 발주 수정 로직 v3.4 - 방어 로직 및 연결고리 최종판]
     - '수정사항 저장' 전, 재고/잔액/주문상태를 먼저 검사하는 방어 로직 추가.
     - '삭제' 로직을 '상태 변경'으로 전환하여 데이터 유실을 원천적으로 방지.
-    - 수정 시 변경된 품목과 금액을 상세히 기록하여 '비고'란에 저장.
+    - '변동출고'된 새 주문의 '비고'란에 원본 주문 ID를 명시적으로 기록하여,
+      감사 시스템이 재고 기록을 100% 정확하게 추적할 수 있도록 개선.
     """
     st.warning(f"**수정 모드**: 발주번호 `{order_id}`의 수량을 수정합니다. 수량을 0으로 만들면 해당 품목이 삭제되며, 모든 품목을 삭제하면 주문 전체가 취소됩니다.")
 
@@ -2731,8 +2718,8 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                 user, base_info = st.session_state.auth, original_items.iloc[0]
                 store_name, store_id = base_info['지점명'], base_info['지점ID']
 
-                # --- [사전 검사 1] 주문 상태 동시성 체크 ---
-                latest_orders_df = get_orders_df()
+                # --- [방어 로직 1] 주문 상태 동시성 체크 ---
+                latest_orders_df = get_orders_df() # DB에서 최신 주문 정보 다시 로드
                 current_order_info = latest_orders_df[latest_orders_df['발주번호'] == order_id]
                 original_status = base_info['상태']
 
@@ -2746,7 +2733,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                 comparison = original_indexed.join(edited_indexed, lsuffix='_orig', rsuffix='_edit', how='outer').fillna(0)
                 
                 inventory_changes, price_diff = [], 0.0
-                change_details = []
+                change_details = [] # 비고란에 기록할 변경 내역
 
                 for code, row in comparison.iterrows():
                     qty_orig = int(row['수량_orig'])
@@ -2757,13 +2744,13 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                         item_name = row['품목명_orig'] if qty_orig > 0 else row['품목명_edit']
                         change_details.append(f"{item_name}({qty_orig}→{qty_edit})")
                         price = int(row['단가_orig'] if qty_orig > 0 else row['단가_edit'])
-                        price_diff -= (qty_diff * price * 1.1)
-                        inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff})
+                        price_diff -= (qty_diff * price * 1.1) # 환불은 양수(+), 추가결제는 음수(-)
+                        inventory_changes.append({'품목코드': code, '품목명': item_name, '수량변경': -qty_diff}) # 재고에는 반대로 적용
                 
                 price_diff = int(round(price_diff, 0))
 
-                # --- [사전 검사 2] 재고 부족 체크 (수량이 늘어나는 품목만) ---
-                items_to_increase = [item for item in inventory_changes if item['수량변경'] < 0] # 수량변경 = -qty_diff
+                # --- [방어 로직 2] 재고 부족 체크 (수량이 늘어나는 품목만) ---
+                items_to_increase = [item for item in inventory_changes if item['수량변경'] < 0] # 재고가 차감되어야 하는 품목
                 if items_to_increase:
                     current_inv_df = get_inventory_from_log(master_df)
                     all_pending_orders = get_orders_df().query(f"상태 == '{CONFIG['ORDER_STATUS']['PENDING']}'")
@@ -2786,7 +2773,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                         st.session_state.error_message = error_msg
                         st.rerun()
 
-                # --- [사전 검사 3] 잔액 부족 체크 (추가 결제 발생 시) ---
+                # --- [방어 로직 3] 잔액 부족 체크 (추가 결제 발생 시) ---
                 additional_payment = abs(price_diff) if price_diff < 0 else 0
                 if additional_payment > 0:
                     balance_df = get_balance_df()
@@ -2798,7 +2785,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                     if additional_payment > available_funds:
                         st.session_state.error_message = f"잔액 부족: 추가 결제액({additional_payment:,.0f}원)이 지점의 결제 가능 한도({available_funds:,.0f}원)를 초과합니다."
                         st.rerun()
-            
+
             # ----------------------------------------------------------------------
             # [실행] 모든 사전 검사를 통과한 경우에만 아래 데이터 변경 로직 실행
             # ----------------------------------------------------------------------
@@ -2808,9 +2795,6 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
             if items_to_save.empty:
                 with st.spinner("주문 취소 및 전체 환불 처리 중..."):
                     try:
-                        user, base_info = st.session_state.auth, original_items.iloc[0]
-                        store_name, store_id = base_info['지점명'], base_info['지점ID']
-                        
                         items_to_restore = original_items.copy()
                         items_to_restore.rename(columns={'수량': '수량변경'}, inplace=True)
                         if not update_inventory(items_to_restore, CONFIG['INV_CHANGE_TYPE']['CANCEL_SHIPMENT'], user['name'], date.today(), ref_id=order_id, reason="수정에 의한 주문 취소"):
@@ -2834,7 +2818,7 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                             if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
                                 raise Exception("잔액 정보 업데이트 실패 (치명적 오류, 수동 확인 필요)")
                         
-                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_ADMIN'], user['name'], reason="수정으로 인한 주문 취소"):
+                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_ADMIN'], user['name'], reason="수정으로 인한 주문 취소 (모든 품목 삭제)"):
                             raise Exception("기존 주문서 상태 변경 실패")
 
                         add_audit_log(user['user_id'], user['name'], "발주 취소 (수정 중)", order_id, store_name, reason="모든 품목 수량 0으로 변경")
@@ -2858,7 +2842,8 @@ def render_order_edit_modal(order_id: str, df_all: pd.DataFrame, master_df: pd.D
                         elif price_diff < 0:
                             amount_part = f"{abs(price_diff):,.0f}원 추가결제"
                         
-                        change_log_str = f"변동사항: {details_part}, {amount_part}"
+                        # [핵심] 감사 추적을 위해 원본 주문 ID를 비고란에 명시적으로 기록
+                        change_log_str = f"원본주문:{order_id}, 변동사항: {details_part}, {amount_part}"
 
                         if inventory_changes and not update_inventory(pd.DataFrame(inventory_changes), '재고조정(출고변경)', user['name'], date.today(), ref_id=order_id):
                             raise Exception("재고 업데이트 실패")
