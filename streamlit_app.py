@@ -3639,15 +3639,29 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
     st.markdown("##### 🏷️ 품목 정보 설정")
+
+    # --- [핵심 수정] 1. 사용자 도움말 추가 ---
+    st.info(
+        """
+        **가이드라인:**
+        * **수정:** 이 표에서는 기존 품목의 **단가, 품목명, 분류, 활성 상태** 등만 수정할 수 있습니다.
+        * **단종:** 품목을 단종시키려면 **`활성` 컬럼의 `TRUE`를 `FALSE`로 변경**하십시오. (데이터 보존을 위해 행 삭제 금지)
+        * **신규 등록:** 신규 품목은 반드시 하단의 **'➕ 신규 품목 생성'** 메뉴를 이용해 별도로 등록해야 합니다.
+        """
+    )
+    st.warning("⚠️ **주의: `품목코드`는 시스템의 모든 주문/재고를 연결하는 기준값이므로 절대 수정할 수 없습니다.**")
     
     master_df_raw['단가'] = pd.to_numeric(master_df_raw['단가'], errors='coerce').fillna(0)
 
+    # --- [핵심 수정] 2. 강제성 부여 (data_editor 설정 변경) ---
     edited_master_df = st.data_editor(
         master_df_raw, 
-        num_rows="dynamic", 
+        num_rows="fixed",  # '새 행 추가' 기능을 비활성화하여 신규 등록을 아래 폼으로 강제함
         use_container_width=True, 
-        key="master_editor"
+        key="master_editor_UPDATE_ONLY", # 키 변경
+        disabled=["품목코드"]  # '품목코드' 컬럼을 비활성화(수정 불가능) 상태로 잠금
     )
+    # --- 수정 완료 ---
     
     if st.button("품목 정보 저장", type="primary", key="save_master"):
         with st.spinner("변경 사항을 저장하고 이력을 기록하는 중입니다..."):
@@ -3687,6 +3701,53 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
                 st.session_state.error_message = "품목 정보 저장에 실패했습니다. 잠시 후 다시 시도해주세요."
             
             st.rerun()
+
+    st.divider()
+
+    # --- [신규 추가] 3. '신규 품목 생성' 로직 분리 ---
+    with st.expander("➕ 신규 품목 생성 (신규 코드만 가능)"):
+        with st.form("new_item_form"):
+            st.markdown("###### 신규 품목 정보 입력")
+            
+            # 신규 품목은 모든 필드를 직접 입력받음
+            c1, c2, c3 = st.columns(3)
+            new_item_code = c1.text_input("품목코드 (필수, P001 형식, 생성 후 수정 절대 불가)")
+            new_item_name = c2.text_input("품목명 (필수)")
+            new_spec = c3.text_input("품목규격 (예: 1kg)")
+            
+            c4, c5, c6, c7 = st.columns(4)
+            new_category = c4.text_input("분류 (예: 채소)")
+            new_unit = c5.text_input("단위 (예: EA, BOX)")
+            new_price = c6.number_input("단가(원)", min_value=0, step=100)
+            new_tax_type = c7.selectbox("과세구분", ["과세", "면세"])
+            
+            if st.form_submit_button("신규 품목 생성하기", type="primary"):
+                if not (new_item_code and new_item_name and new_unit and new_category):
+                    st.warning("품목코드, 품목명, 분류, 단위는 필수 입력 항목입니다.")
+                elif not master_df_raw[master_df_raw['품목코드'] == new_item_code].empty:
+                    st.error(f"오류: 품목코드 '{new_item_code}'는 이미 존재합니다. 다른 코드를 사용하세요.")
+                else:
+                    # 모든 필수값이 있고 중복되지 않으면 신규 레코드 생성
+                    new_item_data = {
+                        "품목코드": new_item_code,
+                        "품목명": new_item_name,
+                        "품목규격": new_spec,
+                        "분류": new_category,
+                        "단위": new_unit,
+                        "단가": new_price,
+                        "과세구분": new_tax_type,
+                        "활성": "TRUE"  # 신규 등록 품목은 항상 '활성' 상태로 시작
+                    }
+                    
+                    if append_rows_to_sheet(CONFIG['MASTER']['name'], [new_item_data], CONFIG['MASTER']['cols']):
+                        user = st.session_state.auth
+                        add_audit_log(user['user_id'], user['name'], "신규 품목 생성", new_item_code, new_item_name)
+                        
+                        clear_data_cache()  # 마스터 데이터 캐시 삭제
+                        st.session_state.success_message = f"신규 품목 '{new_item_name}'이(가) 성공적으로 생성되었습니다."
+                        st.rerun()
+                    else:
+                        st.error("신규 품목 생성 중 오류가 발생했습니다.")
 
     st.divider()
     st.markdown("##### 🧾 품목 가격 변경 이력")
