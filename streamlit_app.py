@@ -2340,79 +2340,93 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
         st.warning(f"**확인 필요**: 선택한 {len(data['ids'])}건의 발주를 정말로 **반려**하시겠습니까?")
         c1, c2 = st.columns(2)
         if c1.button("예, 반려합니다.", key="confirm_yes_reject", type="primary", use_container_width=True):
-            with st.spinner("발주 반려 및 환불 처리 중..."):
-                success_count = 0
-                fail_count = 0
-                
-                # 최신 데이터로 작업하기 위해 한번 더 불러오기
+            with st.spinner(f"{len(data['ids'])}건의 발주 일괄 반려 및 환불 처리 중..."):
                 balance_df = get_balance_df()
                 transactions_df = get_transactions_df()
-                
+                user = st.session_state.auth
+
+                # --- [핵심 개선] 일괄 처리를 위한 리스트와 딕셔너리 초기화 ---
+                refund_records_to_add = []
+                balance_updates_map = {} # 지점별 최종 잔액을 저장하여 중복 계산 방지
+                success_ids = []
+                fail_ids = []
+
+                # 1. 루프 내에서는 API 호출 없이 모든 변경사항을 계산하고 메모리에 저장
                 for order_id in data['ids']:
                     order_items = df_all[df_all['발주번호'] == order_id]
                     if order_items.empty:
-                        fail_count += 1
+                        fail_ids.append(order_id)
                         continue
 
                     store_id = order_items.iloc[0]['지점ID']
                     original_tx = transactions_df[transactions_df['관련발주번호'] == order_id]
                     
+                    # 원본 거래가 없으면 환불 로직 없이 상태만 변경 대상으로 추가
                     if original_tx.empty:
                         st.session_state.warning_message = f"발주번호 {order_id}의 원본 거래내역이 없어 환불 처리를 건너뜁니다."
-                        fail_count += 1
-                        # 상태는 반려로 변경
-                        update_order_status([order_id], CONFIG['ORDER_STATUS']['REJECTED'], st.session_state.auth["name"], reason=data['reason'])
+                        success_ids.append(order_id) # 상태 변경은 성공해야 함
                         continue
 
-                    # 환불 및 잔액 계산
                     tx_info = original_tx.iloc[0]
                     refund_amount = abs(int(tx_info['금액']))
-                    balance_info = balance_df[balance_df['지점ID'] == store_id].iloc[0]
-                    new_prepaid = int(balance_info['선충전잔액'])
-                    new_used_credit = int(balance_info['사용여신액'])
                     
+                    # 지점별 현재 잔액을 맵에서 가져오거나, DB에서 새로 조회
+                    if store_id not in balance_updates_map:
+                        balance_info = balance_df[balance_df['지점ID'] == store_id]
+                        if balance_info.empty:
+                            fail_ids.append(order_id)
+                            continue
+                        current_prepaid = int(balance_info.iloc[0]['선충전잔액'])
+                        current_used_credit = int(balance_info.iloc[0]['사용여신액'])
+                    else:
+                        current_prepaid = balance_updates_map[store_id]['선충전잔액']
+                        current_used_credit = balance_updates_map[store_id]['사용여신액']
+
+                    # 환불 로직 계산
+                    new_prepaid, new_used_credit = current_prepaid, current_used_credit
                     if tx_info['구분'] == '선충전결제':
                         new_prepaid += refund_amount
-                    else: # 여신결제
+                    else:
                         new_used_credit -= refund_amount
                     
-                    refund_record = {
+                    # 환불 거래내역을 리스트에 추가
+                    refund_records_to_add.append({
                         "일시": now_kst_str(), "지점ID": store_id, "지점명": tx_info['지점명'],
                         "구분": "발주반려", "내용": f"발주 반려 환불 ({order_id})", "금액": refund_amount,
                         "처리후선충전잔액": new_prepaid, "처리후사용여신액": new_used_credit,
-                        "관련발주번호": order_id, "처리자": st.session_state.auth["name"]
-                    }
+                        "관련발주번호": order_id, "처리자": user["name"]
+                    })
                     
-                    # [안정성] 기록 -> 처리 -> 금액 변경 순서 적용
-                    try:
-                        # 1. 발주 상태 먼저 '반려'로 변경
-                        if not update_order_status([order_id], CONFIG['ORDER_STATUS']['REJECTED'], st.session_state.auth["name"], reason=data['reason']):
-                            raise Exception("발주 상태 변경 실패")
-                        
-                        # 2. 거래 내역에 환불 기록 추가
-                        if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
-                            # 롤백: 발주 상태를 다시 '요청'으로 되돌림
-                            update_order_status([order_id], CONFIG['ORDER_STATUS']['PENDING'], "system_rollback")
-                            raise Exception("거래내역 기록 실패")
-                        
-                        # 3. 모든 기록이 성공한 후, 최종적으로 잔액(돈) 변경
-                        if not update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
-                            # 이 경우 수동 조치가 필요함을 명확히 알림
-                            st.session_state.error_message = f"CRITICAL ERROR: {order_id}의 환불이 기록되었으나 잔액 반영에 실패했습니다. 즉시 수동 조치가 필요합니다!"
-                            fail_count += 1
-                            continue
-                        
-                        success_count += 1
+                    # 지점별 최종 잔액을 맵에 업데이트
+                    balance_updates_map[store_id] = {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}
+                    success_ids.append(order_id)
 
-                    except Exception as e:
-                        fail_count += 1
-                        st.session_state.error_message = f"발주번호 {order_id} 처리 중 오류 발생: {e}"
+                # --- 2. 루프 종료 후, 모든 변경사항을 API로 일괄 전송 ---
+                try:
+                    # 1. 환불 거래내역 일괄 추가 (API 호출 1회)
+                    if refund_records_to_add:
+                        if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], refund_records_to_add, CONFIG['TRANSACTIONS']['cols']):
+                            raise Exception("거래내역 일괄 기록 실패")
+                    
+                    # 2. 지점별 잔액 일괄 업데이트 (API 호출 N회 - N=영향받은 지점 수)
+                    for store_id, updates in balance_updates_map.items():
+                        if not update_balance_sheet(store_id, updates):
+                            raise Exception(f"{store_id} 지점의 잔액 업데이트 실패")
+                    
+                    # 3. 모든 작업 성공 시, 마지막으로 주문 상태 일괄 변경 (API 호출 1회)
+                    if success_ids:
+                        if not update_order_status(success_ids, CONFIG['ORDER_STATUS']['REJECTED'], user["name"], reason=data['reason']):
+                             raise Exception("발주 상태 일괄 변경 실패")
+                    
+                    if success_ids:
+                        st.session_state.success_message = f"{len(success_ids)}건이 성공적으로 반려 처리되었습니다."
+                    if fail_ids:
+                        st.session_state.warning_message = f"{len(fail_ids)}건 처리 중 문제가 발생했습니다."
 
-                if success_count > 0:
-                    st.session_state.success_message = f"{success_count}건이 성공적으로 반려 처리되었습니다."
-                if fail_count > 0:
-                    st.session_state.warning_message = f"{fail_count}건 처리 중 문제가 발생했습니다."
+                except Exception as e:
+                    st.session_state.error_message = f"일괄 처리 중 심각한 오류 발생: {e}. 데이터가 일부만 처리되었을 수 있으니 점검이 필요합니다."
                 
+                # --- 작업 완료 후 초기화 ---
                 st.session_state.confirm_action = None
                 st.session_state.confirm_data = None
                 st.session_state.admin_orders_selection.clear()
