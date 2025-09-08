@@ -3619,7 +3619,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
     st.markdown("##### 🏷️ 품목 정보 설정")
     
-    # 원본 데이터의 숫자형 변환 (비교를 위해)
     master_df_raw['단가'] = pd.to_numeric(master_df_raw['단가'], errors='coerce').fillna(0)
 
     edited_master_df = st.data_editor(
@@ -3634,15 +3633,18 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
             edited_df = pd.DataFrame(edited_master_df)
             edited_df['단가'] = pd.to_numeric(edited_df['단가'], errors='coerce').fillna(0)
 
-            # 1. [순서 변경] 가장 중요한 상품마스터를 먼저 저장합니다.
+            # --- [핵심 개선] ---
+            # 1. API에 먼저 쓰기
             if save_df_to_sheet(CONFIG['MASTER']['name'], edited_df):
                 
-                # 2. 저장이 성공했을 때만, 가격 변경 이력을 감지하고 기록합니다.
+                # 2. API 쓰기 성공 시, session_state의 DataFrame을 새 것으로 교체
+                st.session_state.master_df = edited_df.copy() # copy()로 안전하게 복사
+
+                # 3. 가격 변경 이력 감지 및 기록 (기존 로직 동일)
                 comparison_df = pd.merge(
                     master_df_raw.rename(columns={'단가': '단가_old', '품목명': '품목명_old'}),
                     edited_df.rename(columns={'단가': '단가_new', '품목명': '품목명_new'}),
-                    on="품목코드",
-                    how='inner'
+                    on="품목코드", how='inner'
                 )
                 price_changes = comparison_df[comparison_df['단가_old'] != comparison_df['단가_new']]
                 
@@ -3651,33 +3653,34 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
                     for _, row in price_changes.iterrows():
                         record = {
                             "변경일시": now_kst_str(),
-                            "품목코드": row['품목코드'],
-                            "품목명": row['품목명_new'],
-                            "이전단가": row['단가_old'],
-                            "새단가": row['단가_new'],
+                            "품목코드": row['품목코드'], "품목명": row['품목명_new'],
+                            "이전단가": row['단가_old'], "새단가": row['단가_new'],
                         }
                         new_history_records.append(record)
                 
                 if new_history_records:
-                    # 이력 기록에 실패하더라도 이미 원본 데이터는 저장되었으므로 치명적이지 않음
                     if not append_rows_to_sheet(CONFIG['PRICE_HISTORY']['name'], new_history_records, CONFIG['PRICE_HISTORY']['cols']):
-                         st.session_state.warning_message = "품목 정보는 저장되었으나, 가격 변경 이력 기록에 실패했습니다. 수동 확인이 필요합니다."
+                         st.session_state.warning_message = "품목 정보는 저장되었으나, 가격 변경 이력 기록에 실패했습니다."
+                    else:
+                         # 가격 이력 DF도 메모리에서 수동으로 업데이트 (캐시 클리어 방지)
+                         if 'price_history_df' in st.session_state:
+                             del st.session_state['price_history_df'] # 간단히 삭제 후 다음 조회 시 새로 로드
 
                 st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
                 if new_history_records:
                     st.session_state.success_message += f" ({len(new_history_records)}건의 가격 변경 이력이 기록되었습니다.)"
                 
-                clear_data_cache()
-                st.rerun()
+                # 4. [핵심] clear_data_cache() 호출 삭제.
+                
             else:
-                # 마스터 시트 저장 자체에 실패한 경우
                 st.session_state.error_message = "품목 정보 저장에 실패했습니다. 잠시 후 다시 시도해주세요."
-                st.rerun()
+            
+            st.rerun() # 성공/실패 메시지를 표시하기 위해 한번만 rerun
 
     st.divider()
 
     st.markdown("##### 🧾 품목 가격 변경 이력")
-    price_history_df = get_price_history_df()
+    price_history_df = get_price_history_df() # 필요시 새로 로드되거나 캐시 사용
 
     if price_history_df.empty:
         st.info("기록된 가격 변경 이력이 없습니다.")
@@ -3694,9 +3697,7 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
             filtered_history = price_history_df
 
         st.dataframe(
-            filtered_history,
-            use_container_width=True,
-            hide_index=True
+            filtered_history, use_container_width=True, hide_index=True
         )
 
 def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
@@ -3737,11 +3738,20 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
         except Exception as e:
             print(f"Error during audit logging for store data: {e}")
             
-        if save_df_to_sheet(CONFIG['STORES']['name'], edited_store_df):
-            clear_data_cache()
+        # --- [핵심 개선] ---
+        # 1. API에 먼저 쓰기
+        if save_df_to_sheet(CONFIG['STORES']['name'], pd.DataFrame(edited_store_df)):
+            
+            # 2. API 쓰기 성공 시, session_state의 DataFrame을 새 것으로 교체
+            if 'stores_df' in st.session_state:
+                st.session_state.stores_df = pd.DataFrame(edited_store_df).copy()
+            
             st.session_state.success_message = "지점 정보가 성공적으로 저장되었습니다."
-            st.rerun()
-    
+        else:
+            st.session_state.error_message = "지점 정보 저장에 실패했습니다."
+            
+        st.rerun() # 메시지 표시를 위해 rerun
+
     st.divider()
     with st.expander("➕ 신규 지점 생성"):
         with st.form("new_store_form"):
@@ -3768,11 +3778,13 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                         user = st.session_state.auth
                         add_audit_log(user['user_id'], user['name'], "신규 지점 생성", new_id, new_name)
 
+                        # [핵심] 캐시를 지우고 다시 로드
                         clear_data_cache()
                         st.session_state.success_message = f"'{new_name}' 지점이 성공적으로 생성되었습니다."
                         st.rerun()
                     else:
                         st.error("지점 생성 중 오류가 발생했습니다.")
+                        
     st.divider()
     st.markdown("##### 🔧 개별 지점 관리")
     all_stores = store_info_df_raw['지점명'].tolist()
@@ -3784,9 +3796,7 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
         is_active = str(selected_store_info.get('활성', 'FALSE')).upper() == 'TRUE'
         role = selected_store_info['역할']
 
-        # ▼▼▼ [수정] 역할(role)에 따라 다른 UI를 보여주도록 수정합니다 ▼▼▼
         if role == CONFIG['ROLES']['ADMIN']:
-            # --- 관리자 계정일 경우: 비밀번호 변경 ---
             with st.form("admin_change_password_form"):
                 st.markdown("###### 🔑 관리자 비밀번호 변경")
                 new_password = st.text_input("새 비밀번호", type="password")
@@ -3811,7 +3821,7 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                             st.session_state.error_message = f"비밀번호 변경 중 오류 발생: {e}"
                             st.rerun()
 
-        else: # --- 일반 지점 계정일 경우: 기존 로직 유지 ---
+        else: # 일반 지점 계정
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("🔑 비밀번호 초기화", key=f"reset_pw_{store_id}", use_container_width=True):
