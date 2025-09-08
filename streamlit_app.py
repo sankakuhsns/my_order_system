@@ -1,13 +1,3 @@
-# -*- coding: utf-8 -*-
-# =============================================================================
-# 📦 Streamlit 식자재 발주 시스템 (v20.0 - 최종 안정화 버전)
-#
-# - 주요 변경 사항 (v20.0):
-#   - (버그 수정) 전역적으로 발생하던 Excel 생성 오류(AttributeError, KeyError) 최종 해결
-#   - (기능 복원) 관리자 페이지의 재고 관련 서류 다운로드 기능 복원
-#   - (기능 개선) 지점 페이지의 다운로드 기능 또한 새로운 통합 양식으로 모두 교체 완료
-# =============================================================================
-
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from typing import Dict, Any, List
@@ -2467,13 +2457,12 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
                 transactions_df = get_transactions_df()
                 user = st.session_state.auth
 
-                # --- [핵심 개선] 일괄 처리를 위한 리스트와 딕셔너리 초기화 ---
                 refund_records_to_add = []
-                balance_updates_map = {} # 지점별 최종 잔액을 저장하여 중복 계산 방지
+                balance_updates_map = {} 
                 success_ids = []
                 fail_ids = []
 
-                # 1. 루프 내에서는 API 호출 없이 모든 변경사항을 계산하고 메모리에 저장
+                # 1. 루프 내에서는 API 호출 없이 모든 변경사항을 계산하고 메모리에 저장 (기존과 동일)
                 for order_id in data['ids']:
                     order_items = df_all[df_all['발주번호'] == order_id]
                     if order_items.empty:
@@ -2483,16 +2472,14 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
                     store_id = order_items.iloc[0]['지점ID']
                     original_tx = transactions_df[transactions_df['관련발주번호'] == order_id]
                     
-                    # 원본 거래가 없으면 환불 로직 없이 상태만 변경 대상으로 추가
                     if original_tx.empty:
                         st.session_state.warning_message = f"발주번호 {order_id}의 원본 거래내역이 없어 환불 처리를 건너뜁니다."
-                        success_ids.append(order_id) # 상태 변경은 성공해야 함
+                        success_ids.append(order_id)
                         continue
 
                     tx_info = original_tx.iloc[0]
                     refund_amount = abs(int(tx_info['금액']))
                     
-                    # 지점별 현재 잔액을 맵에서 가져오거나, DB에서 새로 조회
                     if store_id not in balance_updates_map:
                         balance_info = balance_df[balance_df['지점ID'] == store_id]
                         if balance_info.empty:
@@ -2504,14 +2491,12 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
                         current_prepaid = balance_updates_map[store_id]['선충전잔액']
                         current_used_credit = balance_updates_map[store_id]['사용여신액']
 
-                    # 환불 로직 계산
                     new_prepaid, new_used_credit = current_prepaid, current_used_credit
                     if tx_info['구분'] == '선충전결제':
                         new_prepaid += refund_amount
                     else:
                         new_used_credit -= refund_amount
                     
-                    # 환불 거래내역을 리스트에 추가
                     refund_records_to_add.append({
                         "일시": now_kst_str(), "지점ID": store_id, "지점명": tx_info['지점명'],
                         "구분": "발주반려", "내용": f"발주 반려 환불 ({order_id})", "금액": refund_amount,
@@ -2519,26 +2504,48 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
                         "관련발주번호": order_id, "처리자": user["name"]
                     })
                     
-                    # 지점별 최종 잔액을 맵에 업데이트
                     balance_updates_map[store_id] = {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}
                     success_ids.append(order_id)
 
-                # --- 2. 루프 종료 후, 모든 변경사항을 API로 일괄 전송 ---
+                # --- 2. 루프 종료 후, 모든 변경사항을 API로 일괄 전송 (핵심 수정 영역) ---
                 try:
-                    # 1. 환불 거래내역 일괄 추가 (API 호출 1회)
+                    # 1. 환불 거래내역 일괄 추가 (API 호출 1회 - 기존과 동일)
                     if refund_records_to_add:
                         if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], refund_records_to_add, CONFIG['TRANSACTIONS']['cols']):
                             raise Exception("거래내역 일괄 기록 실패")
                     
-                    # 2. 지점별 잔액 일괄 업데이트 (API 호출 N회 - N=영향받은 지점 수)
-                    for store_id, updates in balance_updates_map.items():
-                        if not update_balance_sheet(store_id, updates):
-                            raise Exception(f"{store_id} 지점의 잔액 업데이트 실패")
+                    # ▼▼▼ [핵심 수정] 지점별 개별 업데이트(N회 호출) 로직을 전체 시트 덮어쓰기(2회 호출)로 변경 ▼▼▼
                     
-                    # 3. 모든 작업 성공 시, 마지막으로 주문 상태 일괄 변경 (API 호출 1회)
+                    # 2. (신규) 변경 대상이 있는 경우에만 잔액 마스터 시트를 통째로 업데이트
+                    if balance_updates_map:
+                        # 2-1. (API Read 1회) 잔액 마스터 시트 전체를 DataFrame으로 읽어옵니다.
+                        current_balance_df_all = get_balance_df().copy()
+                        if current_balance_df_all.empty:
+                            raise Exception("잔액 마스터 시트를 불러오는 데 실패했습니다.")
+                        
+                        # 2-2. (로컬 연산) DataFrame을 지점ID로 색인하여 빠르게 접근
+                        current_balance_df_all.set_index('지점ID', inplace=True)
+                        
+                        # 2-3. (로컬 연산) 메모리(DataFrame) 상에서만 모든 지점의 잔액을 변경 (API 호출 없음)
+                        for store_id, updates in balance_updates_map.items():
+                            if store_id in current_balance_df_all.index:
+                                current_balance_df_all.loc[store_id, '선충전잔액'] = updates['선충전잔액']
+                                current_balance_df_all.loc[store_id, '사용여신액'] = updates['사용여신액']
+                            else:
+                                # (방어 로직) 잔액 마스터에 없는 지점이 감지되면 로그 기록 (이론상 발생 안 함)
+                                print(f"CRITICAL: 잔액 마스터에 없는 지점({store_id})의 업데이트가 시도되었습니다.")
+                        
+                        # 2-4. (API Write 1회) 변경된 DataFrame 전체를 시트에 다시 덮어쓰기
+                        final_df_to_save = current_balance_df_all.reset_index()
+                        if not save_df_to_sheet(CONFIG['BALANCE']['name'], final_df_to_save):
+                            raise Exception(f"잔액 마스터 시트 일괄 저장(덮어쓰기) 실패")
+
+                    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
+
+                    # 3. 모든 작업 성공 시, 마지막으로 주문 상태 일괄 변경 (API 호출 1회 - 기존과 동일)
                     if success_ids:
                         if not update_order_status(success_ids, CONFIG['ORDER_STATUS']['REJECTED'], user["name"], reason=data['reason']):
-                             raise Exception("발주 상태 일괄 변경 실패")
+                                raise Exception("발주 상태 일괄 변경 실패")
                     
                     if success_ids:
                         st.session_state.success_message = f"{len(success_ids)}건이 성공적으로 반려 처리되었습니다."
@@ -2548,7 +2555,7 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
                 except Exception as e:
                     st.session_state.error_message = f"일괄 처리 중 심각한 오류 발생: {e}. 데이터가 일부만 처리되었을 수 있으니 점검이 필요합니다."
                 
-                # --- 작업 완료 후 초기화 ---
+                # --- 작업 완료 후 초기화 (기존과 동일) ---
                 st.session_state.confirm_action = None
                 st.session_state.confirm_data = None
                 st.session_state.admin_orders_selection.clear()
@@ -2562,6 +2569,7 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
         return True
 
     elif action == "revert_to_pending":
+        # ... (이하 로직은 기존 v20.0 코드와 동일) ...
         st.warning(f"**확인 필요**: 선택한 {len(data['ids'])}건의 발주를 **'요청' 상태로 되돌리시겠습니까?** 승인 시 차감되었던 재고가 다시 복원됩니다.")
         c1, c2 = st.columns(2)
         if c1.button("예, 되돌립니다.", key="confirm_yes_revert", type="primary", use_container_width=True):
@@ -2590,7 +2598,7 @@ def handle_order_action_confirmation(df_all: pd.DataFrame):
         return True
 
     return False
-
+    
 def render_pending_orders_tab(pending_orders: pd.DataFrame, df_all: pd.DataFrame, master_df: pd.DataFrame):
     # '승인' 버튼 클릭 시 실행되는 로직 (페이지 상단에 위치)
     if st.session_state.get('approve_ids'):
