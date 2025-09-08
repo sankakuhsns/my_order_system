@@ -53,7 +53,8 @@ CONFIG = {
     'CART': { 'cols': ["품목코드", "분류", "품목명", "단위", "단가", "단가(VAT포함)", "수량", "합계금액(VAT포함)"] },
     'ROLES': { 'ADMIN': 'admin', 'STORE': 'store' },
     'ORDER_STATUS': { 'PENDING': '요청', 'APPROVED': '승인', 'SHIPPED': '출고완료', 'REJECTED': '반려', 'CANCELED_STORE': '취소', 'CANCELED_ADMIN': '승인취소', 'MODIFIED': '변동출고' },
-    'INV_CHANGE_TYPE': { 'PRODUCE': '생산입고', 'SHIPMENT': '발주출고', 'ADJUSTMENT': '재고조정', 'CANCEL_SHIPMENT': '승인취소' }
+    'INV_CHANGE_TYPE': { 'PRODUCE': '생산입고', 'SHIPMENT': '발주출고', 'ADJUSTMENT': '재고조정', 'CANCEL_SHIPMENT': '승인취소' },
+    'INVENTORY_SNAPSHOT': { 'name': "재고스냅샷", 'cols': ["스냅샷일시", "생성자", "품목코드", "품목명", "분류", "스냅샷재고"] }
 }
 
 # =============================================================================
@@ -1242,38 +1243,73 @@ def add_to_cart(rows_df: pd.DataFrame, master_df: pd.DataFrame):
 
 @st.cache_data(ttl=60)
 def get_inventory_from_log(master_df: pd.DataFrame, target_date: date = None) -> pd.DataFrame:
-    if target_date is None:
-        target_date = date.today()
-
+    """
+    [성능 개선 v2.0]
+    - 현재 재고 조회 시: '재고 스냅샷'을 기반으로 계산하여 속도를 최적화합니다.
+    - 과거 재고 조회 시: 정확성을 위해 전체 재고 로그를 계산합니다.
+    """
     log_df = get_inventory_log_df()
-    
-    if log_df.empty:
-        inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
-        inventory_df['현재고수량'] = 0
-        return inventory_df
 
-    if not pd.api.types.is_datetime64_any_dtype(log_df['작업일자']):
+    # --- 시나리오 1: 보고서 등 과거 특정 날짜의 재고 조회 시 (정확성을 위해 전체 스캔) ---
+    if target_date is not None and target_date != date.today():
+        if log_df.empty:
+            inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
+            inventory_df['현재고수량'] = 0
+            return inventory_df
+
         log_df['작업일자'] = pd.to_datetime(log_df['작업일자'], errors='coerce')
+        log_df.dropna(subset=['작업일자'], inplace=True)
+        filtered_log = log_df[log_df['작업일자'].dt.date <= target_date]
 
-    log_df.dropna(subset=['작업일자'], inplace=True)
-    filtered_log = log_df[log_df['작업일자'].dt.date <= target_date]
+        if filtered_log.empty:
+            inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
+            inventory_df['현재고수량'] = 0
+            return inventory_df
+        
+        calculated_stock = filtered_log.groupby('품목코드')['수량변경'].sum().reset_index()
+        calculated_stock.rename(columns={'수량변경': '현재고수량'}, inplace=True)
+        
+        final_inventory = pd.merge(
+            master_df[['품목코드', '분류', '품목명']],
+            calculated_stock, on='품목코드', how='left'
+        )
+        final_inventory['현재고수량'] = final_inventory['현재고수량'].fillna(0).astype(int)
+        return final_inventory
 
-    if filtered_log.empty:
-        inventory_df = master_df[['품목코드', '분류', '품목명']].copy()
-        inventory_df['현재고수량'] = 0
-        return inventory_df
+    # --- 시나리오 2: 현재(오늘) 재고 조회 시 (스냅샷을 사용하여 성능 최적화) ---
+    snapshot_df = get_snapshot_df()
+    base_inventory = pd.DataFrame()
+    latest_snapshot_time = None
 
-    calculated_stock = filtered_log.groupby('품목코드')['수량변경'].sum().reset_index()
-    calculated_stock.rename(columns={'수량변경': '현재고수량'}, inplace=True)
+    if not snapshot_df.empty:
+        snapshot_df['스냅샷일시'] = pd.to_datetime(snapshot_df['스냅샷일시'], errors='coerce')
+        if not snapshot_df['스냅샷일시'].isnull().all():
+            latest_snapshot_time = snapshot_df['스냅샷일시'].max()
+            base_inventory = snapshot_df[['품목코드', '스냅샷재고']].copy()
+            base_inventory.rename(columns={'스냅샷재고': '현재고수량'}, inplace=True)
 
-    final_inventory = pd.merge(
-        master_df[['품목코드', '분류', '품목명']],
-        calculated_stock,
-        on='품목코드',
-        how='left'
-    )
-    final_inventory['현재고수량'] = final_inventory['현재고수량'].fillna(0).astype(int)
-    return final_inventory
+    relevant_log_df = log_df.copy()
+    if not relevant_log_df.empty:
+        relevant_log_df['로그일시'] = pd.to_datetime(relevant_log_df['로그일시'], errors='coerce')
+        if latest_snapshot_time:
+            relevant_log_df = relevant_log_df[relevant_log_df['로그일시'] > latest_snapshot_time].copy()
+    
+    if not relevant_log_df.empty:
+        stock_changes = relevant_log_df.groupby('품목코드')['수량변경'].sum().reset_index()
+        
+        if not base_inventory.empty:
+            final_stock = pd.merge(base_inventory, stock_changes, on='품목코드', how='outer').fillna(0)
+            final_stock['현재고수량'] = final_stock['현재고수량'] + final_stock['수량변경']
+        else:
+            final_stock = stock_changes.rename(columns={'수량변경': '현재고수량'})
+        
+        final_stock = final_stock[['품목코드', '현재고수량']]
+    else:
+        final_stock = base_inventory
+
+    final_inventory_df = pd.merge(master_df[['품목코드', '분류', '품목명']], final_stock, on='품목코드', how='left')
+    final_inventory_df['현재고수량'] = final_inventory_df['현재고수량'].fillna(0).astype(int)
+    return final_inventory_df
 
 def update_inventory(items_to_update: pd.DataFrame, change_type: str, handler: str, working_date: date, ref_id: str = "", reason: str = ""):
     if items_to_update.empty:
@@ -3420,7 +3456,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
         
         if not req_options:
             st.info("처리 대기 중인 요청이 없습니다.")
-            if st.button("새로고침"): st.rerun()
             return
 
         selected_req_str = c1.selectbox("처리할 요청 선택", list(req_options.keys()))
@@ -3433,7 +3468,6 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                 st.stop()
 
             selected_req_data = req_options[selected_req_str]
-            
             user = st.session_state.auth
             add_audit_log(
                 user_id=user['user_id'], user_name=user['name'],
@@ -3488,9 +3522,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                                 new_prepaid += abs(new_used_credit)
                                 new_used_credit = 0
                         
-                        # [API 최적화] DB 쓰기 -> 메모리(세션) 수정 순서로 진행
                         if update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
-                            # 메모리에 로드된 balance_df도 직접 수정 (캐시 클리어 방지)
                             if 'balance_df' in st.session_state:
                                 idx = st.session_state.balance_df.index[st.session_state.balance_df['지점ID'] == store_id]
                                 if not idx.empty:
@@ -3516,18 +3548,17 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     if cells_to_update:
                         ws_charge_req.update_cells(cells_to_update, value_input_option='USER_ENTERED')
 
-                    # [API 최적화] clear_data_cache() 호출 제거
-                    # charge_requests_df만 직접 새로고침
-                    if 'charge_requests_df' in st.session_state:
-                        del st.session_state['charge_requests_df']
+                    # [API 최적화] 일부 캐시만 선택적으로 삭제
+                    for df_key in ['charge_requests_df', 'transactions_df']:
+                        if df_key in st.session_state:
+                            del st.session_state[df_key]
                     st.rerun()
             except Exception as e:
                 st.error(f"처리 중 오류가 발생했습니다: {e}")
 
     st.markdown("---")
     st.markdown("##### 🏢 지점별 잔액 현황")
-    # get_balance_df()가 session_state에 캐시된 balance_df를 반환하므로 UI가 즉시 업데이트됨
-    st.dataframe(get_balance_df(), hide_index=True, use_container_width=True) 
+    st.dataframe(get_balance_df(), hide_index=True, use_container_width=True)
     
     with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
@@ -3547,9 +3578,9 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     if not (selected_store and adj_reason and adj_amount != 0):
                         st.warning("모든 필드를 올바르게 입력해주세요.")
                     else:
-                        balance_df = get_balance_df() # 최신 잔액 정보(메모리 또는 DB) 가져오기
+                        current_balance_df = get_balance_df()
                         store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
-                        current_balance_query = balance_df[balance_df['지점ID'] == store_id]
+                        current_balance_query = current_balance_df[current_balance_df['지점ID'] == store_id]
                         
                         if current_balance_query.empty:
                             st.error(f"'{selected_store}'의 잔액 정보가 '잔액마스터' 시트에 없습니다.")
@@ -3559,61 +3590,43 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             old_value = int(current_balance[adj_type])
                             new_value = old_value + adj_amount
 
-                            if new_value < 0 and adj_type != "선충전잔액": # 선충전잔액은 음수일 수 없음 (여신 사용액은 0 이상)
+                            if new_value < 0 and adj_type != "선충전잔액":
                                 st.session_state.error_message = f"조정 후 {adj_type}이(가) 0보다 작아질 수 없습니다."
                                 st.rerun()
 
-                            # --- [핵심 개선] 데이터 처리 순서 변경 ---
-                            # 1. API에 먼저 쓰기 (여신한도는 거래내역 불필요)
-                            if adj_type == "여신한도":
-                                update_successful = update_balance_sheet(store_id, {adj_type: new_value})
-                            else:
-                                # 선충전/사용여신 변경은 잔액 변경과 거래내역 기록이 함께 가야 함
-                                current_prepaid = int(current_balance['선충전잔액'])
-                                current_used_credit = int(current_balance['사용여신액'])
-                                trans_record = {}
-
-                                if adj_type == "선충전잔액":
-                                    current_prepaid = new_value # 새 값으로 업데이트
-                                    trans_record = {"구분": "수동조정(충전)", "처리후선충전잔액": new_value, "처리후사용여신액": current_used_credit}
-                                elif adj_type == "사용여신액":
-                                    current_used_credit = new_value # 새 값으로 업데이트
-                                    trans_record = {"구분": "수동조정(여신)", "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_value}
-
-                                update_successful = update_balance_sheet(store_id, {adj_type: new_value})
-                                if update_successful:
-                                    full_trans_record = {
-                                        "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_store,
-                                        "금액": adj_amount, "내용": adj_reason, "처리자": user['name'],
-                                        **trans_record
-                                    }
-                                    # 거래내역 추가 API 호출
-                                    append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [full_trans_record], CONFIG['TRANSACTIONS']['cols'])
-                                    # 거래내역 캐시도 삭제
-                                    if 'transactions_df' in st.session_state:
-                                        del st.session_state['transactions_df']
-
+                            update_successful = update_balance_sheet(store_id, {adj_type: new_value})
 
                             if update_successful:
-                                # 2. API 쓰기 성공 시, 메모리의 데이터(session_state)도 직접 수정
                                 if 'balance_df' in st.session_state:
                                     idx = st.session_state.balance_df.index[st.session_state.balance_df['지점ID'] == store_id]
                                     if not idx.empty:
                                         st.session_state.balance_df.loc[idx, adj_type] = new_value
 
-                                add_audit_log(
-                                    user_id=user['user_id'], user_name=user['name'],
-                                    action_type="잔액 수동 조정", target_id=store_id,
-                                    target_name=selected_store, changed_item=adj_type,
-                                    before_value=old_value, after_value=new_value,
-                                    reason=adj_reason
-                                )
+                                add_audit_log(user_id=user['user_id'], user_name=user['name'],
+                                    action_type="잔액 수동 조정", target_id=store_id, target_name=selected_store, 
+                                    changed_item=adj_type, before_value=old_value, after_value=new_value, reason=adj_reason)
+
+                                if adj_type != "여신한도":
+                                    current_prepaid = int(st.session_state.balance_df.loc[idx, '선충전잔액'])
+                                    current_used_credit = int(st.session_state.balance_df.loc[idx, '사용여신액'])
+                                    
+                                    trans_record = {
+                                        "구분": f"수동조정({adj_type.replace('잔액', '').replace('액', '')})",
+                                        "처리후선충전잔액": current_prepaid, "처리후사용여신액": current_used_credit
+                                    }
+                                    
+                                    full_trans_record = {
+                                        "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_store,
+                                        "금액": adj_amount, "내용": adj_reason, "처리자": user['name'], **trans_record
+                                    }
+                                    append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [full_trans_record], CONFIG['TRANSACTIONS']['cols'])
+                                    if 'transactions_df' in st.session_state:
+                                        del st.session_state['transactions_df']
                                 
                                 st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 성공적으로 조정되었습니다."
                             else:
                                 st.session_state.error_message = "데이터베이스 업데이트에 실패했습니다."
                             
-                            # 3. [API 최적화] clear_data_cache() 호출 제거. 폼 제출 후 자동으로 rerun되며 변경된 세션 상태를 반영함.
                             st.rerun()
                             
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
@@ -3633,14 +3646,9 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
             edited_df = pd.DataFrame(edited_master_df)
             edited_df['단가'] = pd.to_numeric(edited_df['단가'], errors='coerce').fillna(0)
 
-            # --- [핵심 개선] ---
-            # 1. API에 먼저 쓰기
             if save_df_to_sheet(CONFIG['MASTER']['name'], edited_df):
-                
-                # 2. API 쓰기 성공 시, session_state의 DataFrame을 새 것으로 교체
-                st.session_state.master_df = edited_df.copy() # copy()로 안전하게 복사
+                st.session_state.master_df = edited_df.copy()
 
-                # 3. 가격 변경 이력 감지 및 기록 (기존 로직 동일)
                 comparison_df = pd.merge(
                     master_df_raw.rename(columns={'단가': '단가_old', '품목명': '품목명_old'}),
                     edited_df.rename(columns={'단가': '단가_new', '품목명': '품목명_new'}),
@@ -3652,35 +3660,29 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
                 if not price_changes.empty:
                     for _, row in price_changes.iterrows():
                         record = {
-                            "변경일시": now_kst_str(),
-                            "품목코드": row['품목코드'], "품목명": row['품목명_new'],
+                            "변경일시": now_kst_str(), "품목코드": row['품목코드'], "품목명": row['품목명_new'],
                             "이전단가": row['단가_old'], "새단가": row['단가_new'],
                         }
                         new_history_records.append(record)
                 
                 if new_history_records:
                     if not append_rows_to_sheet(CONFIG['PRICE_HISTORY']['name'], new_history_records, CONFIG['PRICE_HISTORY']['cols']):
-                         st.session_state.warning_message = "품목 정보는 저장되었으나, 가격 변경 이력 기록에 실패했습니다."
+                        st.session_state.warning_message = "품목 정보는 저장되었으나, 가격 변경 이력 기록에 실패했습니다."
                     else:
-                         # 가격 이력 DF도 메모리에서 수동으로 업데이트 (캐시 클리어 방지)
-                         if 'price_history_df' in st.session_state:
-                             del st.session_state['price_history_df'] # 간단히 삭제 후 다음 조회 시 새로 로드
+                        if 'price_history_df' in st.session_state:
+                            del st.session_state['price_history_df']
 
                 st.session_state.success_message = "품목 정보가 성공적으로 저장되었습니다."
                 if new_history_records:
                     st.session_state.success_message += f" ({len(new_history_records)}건의 가격 변경 이력이 기록되었습니다.)"
-                
-                # 4. [핵심] clear_data_cache() 호출 삭제.
-                
             else:
                 st.session_state.error_message = "품목 정보 저장에 실패했습니다. 잠시 후 다시 시도해주세요."
             
-            st.rerun() # 성공/실패 메시지를 표시하기 위해 한번만 rerun
+            st.rerun()
 
     st.divider()
-
     st.markdown("##### 🧾 품목 가격 변경 이력")
-    price_history_df = get_price_history_df() # 필요시 새로 로드되거나 캐시 사용
+    price_history_df = get_price_history_df()
 
     if price_history_df.empty:
         st.info("기록된 가격 변경 이력이 없습니다.")
@@ -3847,6 +3849,82 @@ def render_store_settings_tab(store_info_df_raw: pd.DataFrame):
                     st.session_state.confirm_action = "toggle_activation"
                     st.session_state.confirm_data = {'store_id': store_id, 'is_active': is_active, 'name': selected_store_name}
                     st.rerun()
+
+def get_snapshot_df():
+    """(신규) 재고 스냅샷 데이터를 로드하고 캐시합니다."""
+    if 'snapshot_df' not in st.session_state:
+        st.session_state.snapshot_df = load_data(CONFIG['INVENTORY_SNAPSHOT']['name'], CONFIG['INVENTORY_SNAPSHOT']['cols'])
+    return st.session_state.snapshot_df
+
+def create_inventory_snapshot() -> bool:
+    """(신규) 현재 시점의 재고를 계산하여 '재고스냅샷' 시트에 덮어씁니다."""
+    try:
+        master_df = get_master_df()
+        user = st.session_state.auth
+        
+        # 정확한 스냅샷을 위해 '오늘' 날짜를 기준으로 전체 로그를 다시 계산합니다.
+        current_inventory = get_inventory_from_log(master_df, target_date=date.today())
+        
+        if current_inventory.empty:
+            st.warning("계산할 재고 데이터가 없습니다.")
+            return False
+            
+        snapshot_data = current_inventory[['품목코드', '품목명', '분류', '현재고수량']].copy()
+        snapshot_data.rename(columns={'현재고수량': '스냅샷재고'}, inplace=True)
+        snapshot_data['스냅샷일시'] = now_kst_str()
+        snapshot_data['생성자'] = user['name']
+        
+        # 시트 존재 여부 확인 및 생성
+        sh = open_spreadsheet()
+        try:
+            ws = sh.worksheet(CONFIG['INVENTORY_SNAPSHOT']['name'])
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title=CONFIG['INVENTORY_SNAPSHOT']['name'], rows="1", cols=len(CONFIG['INVENTORY_SNAPSHOT']['cols']))
+            ws.append_row(CONFIG['INVENTORY_SNAPSHOT']['cols'], value_input_option='USER_ENTERED')
+        
+        # 기존 save_df_to_sheet의 덮어쓰기 로직을 직접 실행
+        ws.clear()
+        # 헤더를 포함하여 업데이트
+        df_to_save = snapshot_data[CONFIG['INVENTORY_SNAPSHOT']['cols']].fillna('')
+        ws.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist(), value_input_option='USER_ENTERED')
+
+        # 스냅샷 DF 캐시를 지워서 다음번 조회 시 새로 불러오도록 함
+        if 'snapshot_df' in st.session_state:
+            del st.session_state['snapshot_df']
+        return True
+    except Exception as e:
+        st.session_state.error_message = f"스냅샷 생성 중 오류 발생: {e}"
+        return False
+
+def render_snapshot_management():
+    """(신규) 재고 스냅샷 관리 UI를 렌더링합니다."""
+    st.markdown("---")
+    st.markdown("##### 💾 재고 스냅샷 관리 (성능 최적화)")
+    with st.expander("도움말: 재고 스냅샷은 무엇인가요?", expanded=False):
+        st.markdown("""
+        재고 스냅샷은 특정 시점의 최종 재고를 '사진'처럼 저장하는 기능입니다. 
+        이 기능을 사용하면, 매번 수만 건의 전체 재고 로그를 계산하는 대신, 
+        가장 최신 스냅샷 이후의 변동분만 계산하여 시스템 속도를 획기적으로 향상시킬 수 있습니다.
+        **하루 업무를 마감할 때 등 주기적으로 생성하는 것을 강력히 권장합니다.**
+        """)
+    
+    snapshot_df = get_snapshot_df()
+    if snapshot_df.empty or '스냅샷일시' not in snapshot_df.columns or snapshot_df['스냅샷일시'].isnull().all():
+        st.info("생성된 재고 스냅샷이 없습니다. 시스템 성능 향상을 위해 하루에 한 번 생성을 권장합니다.")
+    else:
+        latest_snapshot_time = pd.to_datetime(snapshot_df['스냅샷일시']).max()
+        # latest_snapshot_time과 일치하는 행을 찾아 생성자를 가져옴
+        creator_series = snapshot_df.loc[pd.to_datetime(snapshot_df['스냅샷일시']) == latest_snapshot_time, '생성자']
+        creator = creator_series.iloc[0] if not creator_series.empty else "알 수 없음"
+        st.success(f"**최종 스냅샷:** {latest_snapshot_time.strftime('%Y년 %m월 %d일 %H:%M:%S')} (생성자: {creator})")
+
+    if st.button("📸 현재 재고로 스냅샷 생성/업데이트", use_container_width=True, type="primary"):
+        with st.spinner("현재 재고를 계산하여 스냅샷을 생성하는 중입니다..."):
+            success = create_inventory_snapshot()
+            if success:
+                st.session_state.success_message = "재고 스냅샷이 성공적으로 업데이트되었습니다."
+            # 실패 메시지는 create_inventory_snapshot 함수 내부에서 처리
+            st.rerun()
 
 def render_system_audit_tab(
     store_info_df_raw,
