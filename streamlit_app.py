@@ -1504,7 +1504,7 @@ def page_store_balance(charge_requests_df: pd.DataFrame, balance_info: pd.Series
 def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFrame):
     st.subheader("🧾 발주 조회")
 
-    # --- 발주 취소 로직 (사용자가 상세조회 영역의 버튼을 눌렀을 때 실행) ---
+    # --- [핵심 개선] 발주 취소 로직을 일괄 처리 방식으로 변경 ---
     if 'cancel_ids' in st.session_state and st.session_state.cancel_ids:
         with st.spinner("발주 취소 및 환불 처리 중..."):
             ids_to_process = st.session_state.pop('cancel_ids')
@@ -1513,65 +1513,62 @@ def page_store_orders_change(store_info_df: pd.DataFrame, master_df: pd.DataFram
             df_balance = get_balance_df()
             user = st.session_state.auth
             
-            success_count = 0
+            refund_records_to_add = []
+            success_ids = []
             fail_count = 0
 
+            # 1. 루프 전, 현재 잔액을 한 번만 조회
+            balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
+            if balance_info_df.empty:
+                st.session_state.error_message = f"'{user['name']}'님의 잔액 정보를 찾을 수 없습니다."
+                st.rerun()
+            
+            current_prepaid = int(balance_info_df.iloc[0]['선충전잔액'])
+            current_used_credit = int(balance_info_df.iloc[0]['사용여신액'])
+
+            # 2. 루프 내에서는 API 호출 없이 모든 변경사항을 계산하고 메모리에 저장
             for order_id in ids_to_process:
                 original_transaction = df_all_transactions[df_all_transactions['관련발주번호'] == order_id]
                 if original_transaction.empty:
-                    st.session_state.warning_message = f"발주번호 {order_id}의 원본 거래내역이 없어 환불 처리를 건너뜁니다."
                     fail_count += 1
                     continue
 
                 trans_info = original_transaction.iloc[0]
-                balance_info_df = df_balance[df_balance['지점ID'] == user['user_id']]
-                
-                if balance_info_df.empty:
-                    st.session_state.error_message = f"'{user['name']}'님의 잔액 정보를 찾을 수 없습니다."
-                    fail_count += 1
-                    continue
-
-                balance_info = balance_info_df.iloc[0]
-                current_prepaid, current_used_credit = int(balance_info['선충전잔액']), int(balance_info['사용여신액'])
-                
                 refund_amount = abs(int(trans_info['금액']))
                 
-                new_prepaid, new_used_credit = current_prepaid, current_used_credit
                 if trans_info['구분'] == '선충전결제':
-                    new_prepaid += refund_amount
+                    current_prepaid += refund_amount
                 else: # 여신결제
-                    new_used_credit -= refund_amount
+                    current_used_credit -= refund_amount
 
-                refund_record = {
+                refund_records_to_add.append({
                     "일시": now_kst_str(), "지점ID": user["user_id"], "지점명": user["name"],
                     "구분": "발주취소", "내용": f"발주번호 {order_id} 취소 환불",
-                    "금액": refund_amount, "처리후선충전잔액": new_prepaid,
-                    "처리후사용여신액": new_used_credit, "관련발주번호": order_id, "처리자": user["name"]
-                }
+                    "금액": refund_amount, "처리후선충전잔액": current_prepaid,
+                    "처리후사용여신액": current_used_credit, "관련발주번호": order_id, "처리자": user["name"]
+                })
+                success_ids.append(order_id)
+
+            # 3. 루프 종료 후, 모든 변경사항을 API로 일괄 전송
+            try:
+                if refund_records_to_add:
+                    if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], refund_records_to_add, CONFIG['TRANSACTIONS']['cols']):
+                        raise Exception("거래내역 일괄 기록 실패")
                 
-                try:
-                    if not update_order_status([order_id], CONFIG['ORDER_STATUS']['CANCELED_STORE'], user["name"]):
-                        raise Exception("발주 상태 변경 실패")
-                    
-                    if not append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [refund_record], CONFIG['TRANSACTIONS']['cols']):
-                        update_order_status([order_id], CONFIG['ORDER_STATUS']['PENDING'], "system_rollback") 
-                        raise Exception("거래내역 기록 실패")
-                        
-                    if not update_balance_sheet(user["user_id"], {"선충전잔액": new_prepaid, "사용여신액": new_used_credit}):
-                        st.session_state.error_message = f"CRITICAL ERROR: {order_id} 환불 금액이 기록되었으나 잔액 반영에 실패했습니다. 즉시 수동 조치가 필요합니다!"
-                        fail_count += 1
-                        continue
-                    
-                    success_count += 1
+                if not update_balance_sheet(user["user_id"], {"선충전잔액": current_prepaid, "사용여신액": current_used_credit}):
+                    raise Exception("최종 잔액 업데이트 실패. 수동 확인이 필요합니다.")
+                
+                if success_ids:
+                    if not update_order_status(success_ids, CONFIG['ORDER_STATUS']['CANCELED_STORE'], user["name"]):
+                        raise Exception("발주 상태 일괄 변경 실패")
+                
+                if success_ids:
+                    st.session_state.success_message = f"{len(success_ids)}건의 발주가 취소되고 환불 처리되었습니다."
+                if fail_count > 0:
+                    st.session_state.warning_message = f"{fail_count}건의 발주 취소에 실패했습니다."
 
-                except Exception as e:
-                    fail_count += 1
-                    st.session_state.error_message = f"발주번호 {order_id} 처리 중 오류 발생: {e}. 데이터가 원상 복구되었을 수 있습니다."
-
-            if success_count > 0:
-                st.session_state.success_message = f"{success_count}건의 발주가 취소되고 환불 처리되었습니다."
-            if fail_count > 0:
-                st.session_state.warning_message = f"{fail_count}건의 발주 취소에 실패했습니다."
+            except Exception as e:
+                 st.session_state.error_message = f"일괄 처리 중 심각한 오류 발생: {e}. 데이터가 일부만 처리되었을 수 있으니 점검이 필요합니다."
 
             st.session_state.store_orders_selection = {}
             clear_data_cache()
@@ -1992,33 +1989,69 @@ def audit_financial_data(balance_df, transactions_df, charge_req_df):
 
 def audit_transaction_links(transactions_df, orders_df):
     issues = []
-    order_related_tx = transactions_df[transactions_df['구분'].str.contains('발주|여신결제', na=False)]
+    
+    # '관련발주번호'가 있는 모든 거래를 가져옵니다. (최초결제, 환불, 추가결제 등 모두 포함)
+    order_related_tx = transactions_df[transactions_df['관련발주번호'].str.strip() != '']
+    
+    # 검증을 위해 '발주' 시트의 모든 유효한 발주번호 세트를 만듭니다. (검색 속도 향상)
     valid_order_ids = set(orders_df['발주번호'])
+    
+    # '발주' 시트의 주문별 총액을 미리 계산해둡니다.
+    order_amounts = orders_df.groupby('발주번호')['합계금액'].sum()
+
     for _, tx in order_related_tx.iterrows():
         order_id = tx['관련발주번호']
-        if not order_id: continue
+        tx_type = tx['구분']
+        
+        # --- 검사 1: 유령 거래 검사 (모든 거래 유형 공통) ---
         if order_id not in valid_order_ids:
             issues.append(f"- **유령 거래:** `거래내역`에 발주번호 `{order_id}`가 있으나, `발주` 시트에는 해당 주문이 없습니다.")
-        else:
-            order_amount = int(orders_df[orders_df['발주번호'] == order_id]['합계금액'].sum())
-            tx_amount = int(abs(tx['금액']))
-            if order_amount != tx_amount:
-                issues.append(f"- **금액 불일치:** 발주번호 `{order_id}`의 금액이 다릅니다 (발주: {order_amount:,}원 / 거래: {tx_amount:,}원).")
+            continue # 주문서가 없으므로 다음 검사(금액 비교)는 불가능
+            
+        # --- [핵심 수정] 검사 2: 금액 일치 검사 (최초 결제 거래에만 적용) ---
+        # '선충전결제' 또는 '여신결제' 일 경우에만 주문서 총액과 비교합니다.
+        if tx_type in ['선충전결제', '여신결제']:
+            try:
+                order_amount = int(order_amounts.get(order_id, 0))
+                tx_amount = int(abs(tx['금액']))
+                
+                if order_amount != tx_amount:
+                    issues.append(f"- **금액 불일치:** 발주번호 `{order_id}`의 금액이 다릅니다 (발주 총액: {order_amount:,}원 / 거래액: {tx_amount:,}원).")
+            except Exception:
+                issues.append(f"- **금액 비교 오류:** 발주번호 `{order_id}`의 금액 비교 중 오류 발생.")
+        
+        # '부분환불', '추가 결제', '발주취소' 등의 거래는 '차액'만 기록되므로, 
+        # 주문서 총액과 비교하는 것이 무의미하므로 검사를 건너뜁니다. (거짓 경고 방지)
+        
     if issues:
         return "❌ 오류", issues
     return "✅ 정상", []
 
 def audit_inventory_logs(inventory_log_df, orders_df):
     issues = []
-    approved_orders = orders_df[orders_df['상태'].isin([CONFIG['ORDER_STATUS']['APPROVED'], CONFIG['ORDER_STATUS']['SHIPPED']])]
+    
+    # ✨ [핵심 수정] 정상 출고(매출)로 간주해야 할 상태 목록에 '변동출고'를 추가합니다.
+    valid_shipped_statuses = [
+        CONFIG['ORDER_STATUS']['APPROVED'], 
+        CONFIG['ORDER_STATUS']['SHIPPED'],
+        CONFIG['ORDER_STATUS']['MODIFIED']  # 변동출고된 주문도 재고가 차감된 정상이므로 추가
+    ]
+    
+    # '승인', '출고완료', '변동출고' 상태인 모든 주문을 가져옵니다.
+    approved_orders = orders_df[orders_df['상태'].isin(valid_shipped_statuses)]
+
+    # 재고 로그에서 '발주출고'로 기록된 모든 발주번호를 가져옵니다.
     shipped_order_ids = set(inventory_log_df[inventory_log_df['구분'] == CONFIG['INV_CHANGE_TYPE']['SHIPMENT']]['관련번호'].str.split(', ').explode())
+    
     for _, order in approved_orders.iterrows():
+        # 정상 출고(매출) 주문이 '발주출고' 로그에 없으면 경고를 보냅니다.
         if order['발주번호'] not in shipped_order_ids:
-            issues.append(f"- **재고 차감 누락:** 주문 `{order['발주번호']}`({order['지점명']})는 '승인' 상태이나, 재고 출고 기록이 없습니다.")
+            issues.append(f"- **재고 차감 누락:** 주문 `{order['발주번호']}`({order['지점명']})는 '{order['상태']}' 상태이나, 재고 출고 기록이 없습니다.")
+            
     if issues:
         return "⚠️ 경고", issues
     return "✅ 정상", []
-
+    
 def audit_data_integrity(orders_df, transactions_df, store_info_df, master_df):
     issues = []
     valid_store_ids = set(store_info_df['지점ID'])
