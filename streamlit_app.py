@@ -114,11 +114,19 @@ def add_audit_log(user_id: str, user_name: str, action_type: str, target_id: str
         values_to_append = [[new_log_entry.get(col, "") for col in log_columns]]
         ws.append_rows(values_to_append, value_input_option='USER_ENTERED')
     except gspread.WorksheetNotFound:
+        # 시트가 없으면 새로 생성 (이 로직은 그대로 유지)
         sh = open_spreadsheet()
         ws = sh.add_worksheet(title=log_sheet_name, rows="1", cols=len(log_columns))
         ws.append_row(log_columns, value_input_option='USER_ENTERED')
         ws.append_rows(values_to_append, value_input_option='USER_ENTERED')
+    except gspread.exceptions.APIError as e:
+        # [방어 로직] API 오류 감지
+        if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+            st.error("API 사용량이 많습니다. (로그 기록 실패) 잠시 후 다시 시도해주세요.")
+        else:
+            st.error(f"감사 로그 기록 중 구글 API 오류 발생: {e}")
     except Exception as e:
+        # [방어 로직] 기타 예외 처리
         print(f"CRITICAL: 감사 로그 기록 실패! - {e}")
 
 # =============================================================================
@@ -194,8 +202,15 @@ def save_df_to_sheet(sheet_name: str, df: pd.DataFrame):
         ws.update([df_filled.columns.values.tolist()] + df_filled.values.tolist(), value_input_option='USER_ENTERED')
         st.cache_data.clear()
         return True
+    except gspread.exceptions.APIError as e:
+        # [방어 로직] API 오류 감지
+        if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+            st.error("API 사용량이 많습니다. 잠시 후 다시 시도해주세요. (코드: 429)")
+        else:
+            st.error(f"'{sheet_name}' 시트 저장 중 구글 API 오류 발생: {e}")
+        return False
     except Exception as e:
-        st.error(f"'{sheet_name}' 시트에 데이터를 저장하는 중 오류 발생: {e}")
+        st.error(f"'{sheet_name}' 시트에 데이터를 저장하는 중 예상치 못한 오류 발생: {e}")
         return False
         
 def append_rows_to_sheet(sheet_name: str, rows_data: List[Dict], columns_order: List[str]):
@@ -205,23 +220,28 @@ def append_rows_to_sheet(sheet_name: str, rows_data: List[Dict], columns_order: 
         ws.append_rows(values_to_append, value_input_option='USER_ENTERED')
         st.cache_data.clear()
         return True
+    except gspread.exceptions.APIError as e:
+        # [방어 로직] API 오류 감지
+        if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+            st.error("API 사용량이 많습니다. 잠시 후 다시 시도해주세요. (코드: 429)")
+        else:
+            st.error(f"'{sheet_name}' 시트 추가 중 구글 API 오류 발생: {e}")
+        return False
     except Exception as e:
-        st.error(f"'{sheet_name}' 시트에 데이터를 추가하는 중 오류 발생: {e}")
+        st.error(f"'{sheet_name}' 시트에 데이터를 추가하는 중 예상치 못한 오류 발생: {e}")
         return False
 
 def update_balance_sheet(store_id: str, updates: Dict):
     try:
-        balance_df = get_balance_df() # 캐시된 DataFrame 로드
+        balance_df = get_balance_df() 
         ws = open_spreadsheet().worksheet(CONFIG['BALANCE']['name'])
         header = ws.row_values(1)
 
-        # DataFrame에서 해당 지점의 인덱스를 찾음
         target_indices = balance_df.index[balance_df['지점ID'] == store_id].tolist()
         if not target_indices:
             st.error(f"'{CONFIG['BALANCE']['name']}' 시트에서 지점ID '{store_id}'를 찾을 수 없습니다.")
             return False
         
-        # gspread는 1-based index, pandas는 0-based. 헤더 행(+1)과 인덱스(+1) 고려
         sheet_row_index = target_indices[0] + 2 
 
         cells_to_update = []
@@ -235,8 +255,15 @@ def update_balance_sheet(store_id: str, updates: Dict):
 
         st.cache_data.clear()
         return True
+    except gspread.exceptions.APIError as e:
+        # [방어 로직] API 오류 감지
+        if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+            st.error("API 사용량이 많습니다. 잠시 후 다시 시도해주세요. (코드: 429)")
+        else:
+            st.error(f"잔액/여신 정보 업데이트 중 구글 API 오류 발생: {e}")
+        return False
     except Exception as e:
-        st.error(f"잔액/여신 정보 업데이트 중 오류 발생: {e}")
+        st.error(f"잔액/여신 정보 업데이트 중 예상치 못한 오류 발생: {e}")
         return False
 
 def update_order_status(selected_ids: List[str], new_status: str, handler: str, reason: str = "") -> bool:
@@ -249,6 +276,7 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
             order_info = orders_df[orders_df['발주번호'] == order_id]
             if not order_info.empty:
                 old_status = order_info['상태'].iloc[0]
+                # 감사 로그 기록 (API 호출이 아님, 위에서 수정한 add_audit_log 함수 사용)
                 add_audit_log(
                     user_id=user['user_id'], user_name=user['name'],
                     action_type="주문 상태 변경", target_id=order_id,
@@ -280,20 +308,26 @@ def update_order_status(selected_ids: List[str], new_status: str, handler: str, 
 
         if cells_to_update:
             ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
-            time.sleep(2)
+            time.sleep(1) # API 안정화를 위한 짧은 대기
         
         st.cache_data.clear()
         return True
         
-    except Exception as e:
-        st.error(f"발주 상태 업데이트 중 오류가 발생했습니다: {e}")
+    except gspread.exceptions.APIError as e:
+        # [방어 로직] API 오류 감지
+        if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+            st.error("API 사용량이 많습니다. 잠시 후 다시 시도해주세요. (코드: 429)")
+        else:
+            st.error(f"발주 상태 업데이트 중 구글 API 오류 발생: {e}")
         return False
-
+    except Exception as e:
+        st.error(f"발주 상태 업데이트 중 예상치 못한 오류가 발생했습니다: {e}")
+        return False
+        
 def find_and_delete_rows(sheet_name, id_column, ids_to_delete):
     if not ids_to_delete:
         return True
     try:
-        # [수정] open_spreadsheet()를 사용하도록 변경하여 오류 해결
         spreadsheet = open_spreadsheet()
         worksheet = spreadsheet.worksheet(sheet_name)
         
@@ -305,20 +339,25 @@ def find_and_delete_rows(sheet_name, id_column, ids_to_delete):
             st.error(f"'{sheet_name}' 시트에서 '{id_column}' 컬럼을 찾을 수 없습니다.")
             return False
 
-        # 삭제할 행의 인덱스(1-based)를 찾아서 리스트에 저장
         rows_to_delete_indices = [
             i for i, row in enumerate(all_data[1:], start=2) 
             if len(row) > id_col_index and row[id_col_index] in ids_to_delete
         ]
 
-        # 행 인덱스가 섞이지 않도록 역순으로 정렬하여 삭제 실행
         if rows_to_delete_indices:
             for row_index in sorted(rows_to_delete_indices, reverse=True):
                 worksheet.delete_rows(row_index)
-                time.sleep(1) # API 요청 간 짧은 딜레이 추가
+                time.sleep(1) 
         
-        st.cache_data.clear() # 삭제 후 캐시 클리어
+        st.cache_data.clear()
         return True
+    except gspread.exceptions.APIError as e:
+        # [방어 로직] API 오류 감지
+        if 'RESOURCE_EXHAUSTED' in str(e) or '429' in str(e):
+            st.error("API 사용량이 많습니다. 잠시 후 다시 시도해주세요. (코드: 429)")
+        else:
+            st.error(f"'{sheet_name}' 시트 행 삭제 중 구글 API 오류 발생: {e}")
+        return False
     except Exception as e:
         st.error(f"'{sheet_name}' 시트에서 행 삭제 중 오류: {e}")
         return False
@@ -400,8 +439,21 @@ def require_login():
     if st.session_state.get("auth", {}).get("login"):
         user = st.session_state.auth
         st.sidebar.markdown(f"### 로그인 정보")
-        st.sidebar.markdown(f"**{user['name']}** ({user['role']})님 환영합니다.")
-        if st.sidebar.button("로그아웃"):
+        
+        # --- [핵심 수정] 환영 메시지를 두 줄로 나누어 가독성을 높입니다. ---
+        st.sidebar.markdown(f"**{user['name']}** ({user['role']})님")
+        st.sidebar.markdown("환영합니다.")
+        st.sidebar.divider()
+
+        # --- [핵심 수정] 수동으로 데이터를 새로고침하는 버튼을 추가합니다. ---
+        if st.sidebar.button("🔄 새로고침", use_container_width=True):
+            # 모든 데이터 캐시를 지우고 앱을 다시 실행하여 최신 정보를 가져옵니다.
+            clear_data_cache()
+            st.success("데이터를 성공적으로 새로고침했습니다.")
+            time.sleep(1) # 사용자가 메시지를 인지할 시간을 줍니다.
+            st.rerun()
+
+        if st.sidebar.button("로그아웃", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -3403,7 +3455,14 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                                 new_prepaid += abs(new_used_credit)
                                 new_used_credit = 0
                         
+                        # [API 최적화] DB 쓰기 -> 메모리(세션) 수정 순서로 진행
                         if update_balance_sheet(store_id, {'선충전잔액': new_prepaid, '사용여신액': new_used_credit}):
+                            # 메모리에 로드된 balance_df도 직접 수정 (캐시 클리어 방지)
+                            if 'balance_df' in st.session_state:
+                                idx = st.session_state.balance_df.index[st.session_state.balance_df['지점ID'] == store_id]
+                                if not idx.empty:
+                                    st.session_state.balance_df.loc[idx, ['선충전잔액', '사용여신액']] = [new_prepaid, new_used_credit]
+
                             full_trans_record = {
                                 "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_req_data['지점명'],
                                 "금액": amount, "처리후선충전잔액": new_prepaid,
@@ -3424,14 +3483,18 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     if cells_to_update:
                         ws_charge_req.update_cells(cells_to_update, value_input_option='USER_ENTERED')
 
-                    clear_data_cache()
+                    # [API 최적화] clear_data_cache() 호출 제거
+                    # charge_requests_df만 직접 새로고침
+                    if 'charge_requests_df' in st.session_state:
+                        del st.session_state['charge_requests_df']
                     st.rerun()
             except Exception as e:
                 st.error(f"처리 중 오류가 발생했습니다: {e}")
 
     st.markdown("---")
     st.markdown("##### 🏢 지점별 잔액 현황")
-    st.dataframe(balance_df, hide_index=True, use_container_width=True)
+    # get_balance_df()가 session_state에 캐시된 balance_df를 반환하므로 UI가 즉시 업데이트됨
+    st.dataframe(get_balance_df(), hide_index=True, use_container_width=True) 
     
     with st.expander("✍️ 잔액/여신 수동 조정"):
         with st.form("manual_adjustment_form"):
@@ -3451,6 +3514,7 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                     if not (selected_store and adj_reason and adj_amount != 0):
                         st.warning("모든 필드를 올바르게 입력해주세요.")
                     else:
+                        balance_df = get_balance_df() # 최신 잔액 정보(메모리 또는 DB) 가져오기
                         store_id = store_info_df[store_info_df['지점명'] == selected_store]['지점ID'].iloc[0]
                         current_balance_query = balance_df[balance_df['지점ID'] == store_id]
                         
@@ -3462,45 +3526,63 @@ def page_admin_balance_management(store_info_df: pd.DataFrame):
                             old_value = int(current_balance[adj_type])
                             new_value = old_value + adj_amount
 
-                            # ✨ 수정된 부분: st.error 대신 st.session_state.error_message 사용
-                            if new_value < 0:
-                                st.session_state.error_message = f"조정 후 {adj_type}이(가) 0보다 작아질 수 없습니다. (현재값: {old_value}, 조정액: {adj_amount})"
+                            if new_value < 0 and adj_type != "선충전잔액": # 선충전잔액은 음수일 수 없음 (여신 사용액은 0 이상)
+                                st.session_state.error_message = f"조정 후 {adj_type}이(가) 0보다 작아질 수 없습니다."
                                 st.rerun()
-                            # ✨ 수정 끝
 
-                            add_audit_log(
-                                user_id=user['user_id'], user_name=user['name'],
-                                action_type="잔액 수동 조정", target_id=store_id,
-                                target_name=selected_store, changed_item=adj_type,
-                                before_value=old_value, after_value=new_value,
-                                reason=adj_reason
-                            )
-
+                            # --- [핵심 개선] 데이터 처리 순서 변경 ---
+                            # 1. API에 먼저 쓰기 (여신한도는 거래내역 불필요)
                             if adj_type == "여신한도":
-                                update_balance_sheet(store_id, {adj_type: new_value})
-                                st.session_state.success_message = f"'{selected_store}'의 여신한도가 조정되었습니다. (거래내역에 기록되지 않음)"
+                                update_successful = update_balance_sheet(store_id, {adj_type: new_value})
                             else:
+                                # 선충전/사용여신 변경은 잔액 변경과 거래내역 기록이 함께 가야 함
                                 current_prepaid = int(current_balance['선충전잔액'])
                                 current_used_credit = int(current_balance['사용여신액'])
-                                
+                                trans_record = {}
+
                                 if adj_type == "선충전잔액":
-                                    update_balance_sheet(store_id, {adj_type: new_value})
+                                    current_prepaid = new_value # 새 값으로 업데이트
                                     trans_record = {"구분": "수동조정(충전)", "처리후선충전잔액": new_value, "처리후사용여신액": current_used_credit}
                                 elif adj_type == "사용여신액":
-                                    update_balance_sheet(store_id, {adj_type: new_value})
+                                    current_used_credit = new_value # 새 값으로 업데이트
                                     trans_record = {"구분": "수동조정(여신)", "처리후선충전잔액": current_prepaid, "처리후사용여신액": new_value}
 
-                                full_trans_record = {
-                                    "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_store,
-                                    "금액": adj_amount, "내용": adj_reason, "처리자": user['name'],
-                                    **trans_record
-                                }
-                                append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [full_trans_record], CONFIG['TRANSACTIONS']['cols'])
-                                st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 조정되고 거래내역에 기록되었습니다."
-                            
-                            clear_data_cache()
-                            st.rerun()
+                                update_successful = update_balance_sheet(store_id, {adj_type: new_value})
+                                if update_successful:
+                                    full_trans_record = {
+                                        "일시": now_kst_str(), "지점ID": store_id, "지점명": selected_store,
+                                        "금액": adj_amount, "내용": adj_reason, "처리자": user['name'],
+                                        **trans_record
+                                    }
+                                    # 거래내역 추가 API 호출
+                                    append_rows_to_sheet(CONFIG['TRANSACTIONS']['name'], [full_trans_record], CONFIG['TRANSACTIONS']['cols'])
+                                    # 거래내역 캐시도 삭제
+                                    if 'transactions_df' in st.session_state:
+                                        del st.session_state['transactions_df']
 
+
+                            if update_successful:
+                                # 2. API 쓰기 성공 시, 메모리의 데이터(session_state)도 직접 수정
+                                if 'balance_df' in st.session_state:
+                                    idx = st.session_state.balance_df.index[st.session_state.balance_df['지점ID'] == store_id]
+                                    if not idx.empty:
+                                        st.session_state.balance_df.loc[idx, adj_type] = new_value
+
+                                add_audit_log(
+                                    user_id=user['user_id'], user_name=user['name'],
+                                    action_type="잔액 수동 조정", target_id=store_id,
+                                    target_name=selected_store, changed_item=adj_type,
+                                    before_value=old_value, after_value=new_value,
+                                    reason=adj_reason
+                                )
+                                
+                                st.session_state.success_message = f"'{selected_store}'의 {adj_type}이(가) 성공적으로 조정되었습니다."
+                            else:
+                                st.session_state.error_message = "데이터베이스 업데이트에 실패했습니다."
+                            
+                            # 3. [API 최적화] clear_data_cache() 호출 제거. 폼 제출 후 자동으로 rerun되며 변경된 세션 상태를 반영함.
+                            st.rerun()
+                            
 def render_master_settings_tab(master_df_raw: pd.DataFrame):
     st.markdown("##### 🏷️ 품목 정보 설정")
     
