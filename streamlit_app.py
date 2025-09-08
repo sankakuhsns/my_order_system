@@ -2081,9 +2081,9 @@ def audit_transaction_links(transactions_df, orders_df):
 
 def audit_inventory_logs(inventory_log_df, orders_df):
     """
-    [재고 감사 로직 v2.1 - 최종 안정화 버전]
-    - '승인취소'된 주문의 반려사유를 분석하여, '변동출고'된 새 주문과 원본 주문을
-      연결하는 매핑 테이블을 생성합니다. 이를 통해 '거짓 경고'를 원천적으로 차단합니다.
+    [재고 감사 로직 v2.2 - 최종 안정화 버전]
+    - '반려사유' 열의 NaN 값을 안전하게 처리(na=False)하여, '변동출고'된 새 주문과
+      원본 주문을 연결하는 매핑 테이블이 항상 정확하게 생성되도록 수정합니다.
     - 주문 건당 한 번만 검사하여 중복 경고 메시지 발생을 방지합니다.
     """
     issues = []
@@ -2104,9 +2104,11 @@ def audit_inventory_logs(inventory_log_df, orders_df):
 
     # --- 3. [핵심 수정] 새 주문 ID와 원본 주문 ID를 연결하는 매핑 테이블 생성 ---
     new_to_original_map = {}
+    
+    # [안전장치 추가] .str.startswith에 na=False를 추가하여 NaN 값이 있는 행을 무시하도록 함
     canceled_for_modification_orders = orders_df[
         (orders_df['상태'] == CONFIG['ORDER_STATUS']['CANCELED_ADMIN']) &
-        (orders_df['반려사유'].str.startswith('신규 수정본('))
+        (orders_df['반려사유'].str.startswith('신규 수정본(', na=False))
     ]
     for _, row in canceled_for_modification_orders.iterrows():
         original_id = row['발주번호']
