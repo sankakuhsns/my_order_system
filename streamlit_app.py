@@ -3658,8 +3658,8 @@ def render_master_settings_tab(master_df_raw: pd.DataFrame):
         master_df_raw, 
         num_rows="fixed",  # '새 행 추가' 기능을 비활성화하여 신규 등록을 아래 폼으로 강제함
         use_container_width=True, 
-        key="master_editor_UPDATE_ONLY", # 키 변경
-        disabled=["품목코드"]  # '품목코드' 컬럼을 비활성화(수정 불가능) 상태로 잠금
+        key="master_editor_UPDATE_ONLY_SAFE", # 키 변경
+        disabled=["품목코드", "품목명"]
     )
     # --- 수정 완료 ---
     
